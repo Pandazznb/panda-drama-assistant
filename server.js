@@ -9,7 +9,10 @@ import {
 } from "./src/constants.js";
 import { ReminderService } from "./src/monitor.js";
 import { ScreenshotImportService } from "./src/screenshot-import.js";
-import { JsonStateStore } from "./src/store.js";
+import {
+  SqliteStateStore,
+  databaseFileForStateFile,
+} from "./src/store.js";
 
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
@@ -635,11 +638,27 @@ export function createRequestHandler(service, screenshotImport, eventLog) {
 }
 
 export async function createApplication({
-  stateFile = process.env.HONGUO_STATE_FILE ||
-    path.join(ROOT_DIR, "data", "state.json"),
+  stateFile,
+  databaseFile,
   screenshotImport = new ScreenshotImportService(),
 } = {}) {
-  const store = new JsonStateStore(stateFile);
+  const legacyStateFile = path.resolve(
+    stateFile ||
+      process.env.HONGUO_STATE_FILE ||
+      path.join(ROOT_DIR, "data", "state.json"),
+  );
+  const sqliteDatabaseFile = path.resolve(
+    databaseFile ||
+      process.env.HONGUO_DATABASE_FILE ||
+      databaseFileForStateFile(legacyStateFile),
+  );
+  if (legacyStateFile === sqliteDatabaseFile) {
+    throw new Error("旧版 state.json 与 SQLite 数据库不能使用同一路径。");
+  }
+
+  const store = new SqliteStateStore(sqliteDatabaseFile, {
+    legacyStateFile,
+  });
   await store.init();
   const service = new ReminderService({ store });
   const server = http.createServer(
@@ -651,13 +670,16 @@ export async function createApplication({
     screenshotImport,
     eventLog: store.eventLog,
     server,
+    stateFile: legacyStateFile,
+    databaseFile: sqliteDatabaseFile,
   };
 }
 
 async function main() {
   const host = process.env.HOST || DEFAULT_HOST;
   const port = Number(process.env.PORT || DEFAULT_PORT);
-  const { service, screenshotImport, server } = await createApplication();
+  const { store, service, screenshotImport, server, databaseFile } =
+    await createApplication();
 
   server.on("error", (error) => {
     console.error(`服务启动失败：${error.message}`);
@@ -666,7 +688,9 @@ async function main() {
 
   server.listen(port, host, async () => {
     await service.start();
-    console.log(`${APP_NAME}已启动：http://${host}:${port}`);
+    console.log(
+      `${APP_NAME}已启动：http://${host}:${port}（SQLite：${databaseFile}）`,
+    );
   });
 
   let shuttingDown = false;
@@ -677,7 +701,10 @@ async function main() {
     shuttingDown = true;
     service.stop();
     await screenshotImport.stop();
-    server.close(() => process.exit(0));
+    server.close(async () => {
+      await store.close();
+      process.exit(0);
+    });
     setTimeout(() => process.exit(1), 5_000).unref();
   };
   process.once("SIGINT", () => void shutdown());

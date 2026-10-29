@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   DEFAULT_CHECK_CRON,
   DEFAULT_DISCOVERY_REMINDER_CRON,
@@ -678,77 +679,308 @@ export function appendEvent(state, event) {
   return normalized;
 }
 
-async function atomicWriteJson(filePath, value) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  const payload = `${JSON.stringify(value, null, 2)}\n`;
-  await fs.writeFile(temporaryPath, payload, { encoding: "utf8", mode: 0o600 });
-  await fs.rename(temporaryPath, filePath);
+const SQLITE_SCHEMA_VERSION = 1;
+const SQLITE_BUSY_ERROR_CODE = 5;
+const SQLITE_LOCKED_ERROR_CODE = 6;
+const SQLITE_RETRY_BASE_MS = 25;
+const SQLITE_RETRY_MAX_MS = 500;
+
+const SQLITE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS subscriptions (
+    id TEXT PRIMARY KEY,
+    position INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS seasons (
+    subscription_id TEXT NOT NULL,
+    series_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (subscription_id, series_id),
+    FOREIGN KEY (subscription_id)
+      REFERENCES subscriptions(id)
+      ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS seasons_updated_at_idx
+    ON seasons(updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS events (
+    id TEXT PRIMARY KEY,
+    position INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS events_created_at_idx
+    ON events(created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS pending_notifications (
+    id TEXT PRIMARY KEY,
+    subscription_id TEXT NOT NULL,
+    season_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    due_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    FOREIGN KEY (subscription_id, season_id)
+      REFERENCES seasons(subscription_id, series_id)
+      ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS pending_notifications_due_at_idx
+    ON pending_notifications(due_at);
+
+  CREATE TABLE IF NOT EXISTS discovery_reminders (
+    id TEXT PRIMARY KEY,
+    subscription_id TEXT NOT NULL,
+    season_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    next_reminder_at TEXT,
+    payload TEXT NOT NULL,
+    FOREIGN KEY (subscription_id, season_id)
+      REFERENCES seasons(subscription_id, series_id)
+      ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS discovery_reminders_next_at_idx
+    ON discovery_reminders(next_reminder_at);
+`;
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-export class JsonStateStore {
+function isSqliteBusy(error) {
+  return (
+    error?.errcode === SQLITE_BUSY_ERROR_CODE ||
+    error?.errcode === SQLITE_LOCKED_ERROR_CODE ||
+    /database is (?:busy|locked)/i.test(error?.message || "")
+  );
+}
+
+function parseStoredPayload(payload, label) {
+  try {
+    return JSON.parse(payload);
+  } catch (error) {
+    const wrapped = new Error(`SQLite 中的${label}数据损坏。`, {
+      cause: error,
+    });
+    wrapped.code = "SQLITE_STATE_INVALID";
+    throw wrapped;
+  }
+}
+
+export function databaseFileForStateFile(stateFile) {
+  const parsed = path.parse(path.resolve(stateFile));
+  return path.join(parsed.dir, `${parsed.name}.sqlite3`);
+}
+
+export class SqliteStateStore {
   constructor(
-    filePath,
+    databaseFile,
     {
-      eventLogDirectory = path.join(path.dirname(filePath), "logs"),
+      legacyStateFile = path.join(
+        path.dirname(path.resolve(databaseFile)),
+        "state.json",
+      ),
+      eventLogDirectory = path.join(
+        path.dirname(path.resolve(databaseFile)),
+        "logs",
+      ),
       maxEventLogFileBytes,
+      busyTimeoutMs = 0,
+      maxWriteRetries = 8,
     } = {},
   ) {
-    this.filePath = filePath;
+    this.databaseFile = path.resolve(databaseFile);
+    this.filePath = this.databaseFile;
+    this.legacyStateFile = path.resolve(legacyStateFile);
     this.eventLog = new EventLogStore(eventLogDirectory, {
       maxFileBytes: maxEventLogFileBytes,
     });
+    this.busyTimeoutMs = Math.max(0, Number(busyTimeoutMs) || 0);
+    this.maxWriteRetries = Math.max(
+      0,
+      Math.trunc(Number(maxWriteRetries) || 0),
+    );
     this.state = createDefaultState();
     this.initialized = false;
+    this.initializing = null;
     this.queue = Promise.resolve();
+    this.db = null;
+    this.closed = false;
   }
 
   async init() {
+    if (this.closed) {
+      throw new Error("状态存储已经关闭。");
+    }
     if (this.initialized) {
-      return this.read();
+      return deepClone(this.state);
+    }
+    if (!this.initializing) {
+      this.initializing = this.initialize().finally(() => {
+        this.initializing = null;
+      });
+    }
+    return this.initializing;
+  }
+
+  async initialize() {
+    if (this.closed) {
+      throw new Error("状态存储已经关闭。");
+    }
+    await fs.mkdir(path.dirname(this.databaseFile), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await this.secureLegacyFile();
+    const databaseHandle = await fs.open(
+      this.databaseFile,
+      "a",
+      0o600,
+    );
+    await databaseHandle.close();
+    await fs.chmod(this.databaseFile, 0o600);
+
+    try {
+      this.db = new DatabaseSync(this.databaseFile);
+
+      this.db.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
+      this.db.exec("PRAGMA foreign_keys = ON");
+      this.db.exec("PRAGMA synchronous = FULL");
+      this.db.exec("PRAGMA secure_delete = ON");
+      this.db.exec("PRAGMA temp_store = MEMORY");
+      this.db.exec("PRAGMA wal_autocheckpoint = 1000");
+      this.db.exec("PRAGMA journal_size_limit = 67108864");
+      const journalMode = this.db
+        .prepare("PRAGMA journal_mode = WAL")
+        .get()?.journal_mode;
+      if (String(journalMode).toLowerCase() !== "wal") {
+        throw new Error("无法启用 SQLite WAL 模式。");
+      }
+
+      const schemaVersion = Number(
+        this.db.prepare("PRAGMA user_version").get()?.user_version || 0,
+      );
+      if (schemaVersion > SQLITE_SCHEMA_VERSION) {
+        throw new Error(
+          `SQLite 数据库版本 ${schemaVersion} 高于当前程序支持的版本。`,
+        );
+      }
+      this.db.exec(SQLITE_SCHEMA);
+      this.db.exec(`PRAGMA user_version = ${SQLITE_SCHEMA_VERSION}`);
+
+      const state = await this.initializePersistedState();
+      await this.eventLog.init();
+      await this.eventLog.appendEvents([...state.events].reverse());
+      await this.secureDatabaseFiles();
+      this.state = state;
+      this.initialized = true;
+      return deepClone(state);
+    } catch (error) {
+      if (this.db) {
+        this.db.close();
+        this.db = null;
+      }
+      throw error;
+    }
+  }
+
+  async initializePersistedState() {
+    const existing = this.db
+      .prepare("SELECT payload FROM settings WHERE id = 1")
+      .get();
+    if (existing) {
+      return this.readStateDirect();
     }
 
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    let state = createDefaultState();
+    let importedFrom = null;
     try {
-      const raw = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      this.state = normalizeState(parsed);
-      if (Number(parsed?.version) !== STATE_VERSION) {
-        await this.persist();
-      }
+      const raw = await fs.readFile(this.legacyStateFile, "utf8");
+      state = normalizeState(JSON.parse(raw));
+      importedFrom = this.legacyStateFile;
     } catch (error) {
       if (error?.code !== "ENOENT") {
         await this.backupInvalidFile();
       }
-      this.state = createDefaultState();
-      await this.persist();
     }
 
-    await this.eventLog.init();
-    await this.eventLog.appendEvents([...this.state.events].reverse());
-    this.initialized = true;
-    return this.read();
+    return this.withImmediateTransaction(() => {
+      // Another process may have completed the import while this one read
+      // the legacy file. Recheck after acquiring the write lock.
+      const existingAfterLock = this.db
+        .prepare("SELECT payload FROM settings WHERE id = 1")
+        .get();
+      if (existingAfterLock) {
+        return this.readStateDirect();
+      }
+      this.writeState(state, { importedFrom });
+      return state;
+    });
   }
 
   async backupInvalidFile() {
     const stamp = new Date().toISOString().replaceAll(":", "-");
-    const backupPath = `${this.filePath}.corrupt-${stamp}`;
+    const backupPath = `${this.legacyStateFile}.corrupt-${stamp}`;
     try {
-      await fs.rename(this.filePath, backupPath);
+      await fs.copyFile(this.legacyStateFile, backupPath);
+      await fs.chmod(backupPath, 0o600);
     } catch {
-      // A concurrent read must not prevent the app from starting with fresh state.
+      // Keep startup available even if the legacy file cannot be backed up.
     }
   }
 
-  async persist() {
-    await atomicWriteJson(this.filePath, this.state);
+  async secureDatabaseFiles() {
+    for (const filePath of [
+      this.databaseFile,
+      `${this.databaseFile}-wal`,
+      `${this.databaseFile}-shm`,
+    ]) {
+      try {
+        await fs.chmod(filePath, 0o600);
+      } catch (error) {
+        if (error?.code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+  }
+
+  async secureLegacyFile() {
+    try {
+      await fs.chmod(this.legacyStateFile, 0o600);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
   }
 
   async read() {
     if (!this.initialized) {
       await this.init();
     }
-    return deepClone(this.state);
+    return this.enqueue(async () => {
+      const state = await this.readSnapshot();
+      this.state = state;
+      return deepClone(state);
+    });
   }
 
   async replace(nextState) {
@@ -763,22 +995,32 @@ export class JsonStateStore {
   }
 
   async mutate(mutator) {
-    const operation = this.queue.then(async () => {
+    return this.enqueue(async () => {
       if (!this.initialized) {
         await this.init();
       }
 
-      const draft = deepClone(this.state);
-      const previousEventIds = new Set(
-        this.state.events.map((event) => event.id),
-      );
-      const result = await mutator(draft);
-      const normalized = normalizeState(draft);
-      const newEvents = normalized.events
-        .filter((event) => !previousEventIds.has(event.id))
-        .reverse();
-      this.state = normalized;
-      await this.persist();
+      const outcome = await this.withImmediateTransaction(() => {
+        const current = this.readStateDirect();
+        const draft = deepClone(current);
+        const previousEventIds = new Set(
+          current.events.map((event) => event.id),
+        );
+        const result = mutator(draft);
+        if (result && typeof result.then === "function") {
+          throw new TypeError("SQLite 状态修改回调必须同步完成。");
+        }
+        const normalized = normalizeState(draft);
+        const newEvents = normalized.events
+          .filter((event) => !previousEventIds.has(event.id))
+          .reverse();
+        this.writeState(normalized);
+        return { normalized, newEvents, result };
+      });
+
+      await this.secureDatabaseFiles();
+      this.state = outcome.normalized;
+      const { newEvents } = outcome;
       if (newEvents.length) {
         try {
           await this.eventLog.appendEvents(newEvents);
@@ -788,10 +1030,285 @@ export class JsonStateStore {
           );
         }
       }
+      return outcome.result;
+    });
+  }
+
+  async persist() {
+    return this.mutate(() => undefined);
+  }
+
+  async close() {
+    await this.queue.catch(() => {});
+    if (this.initializing) {
+      await this.initializing.catch(() => {});
+    }
+    if (this.db) {
+      try {
+        this.db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+      } catch {
+        // SQLite still closes safely when another connection owns the WAL.
+      }
+      this.db.close();
+      this.db = null;
+    }
+    this.closed = true;
+  }
+
+  enqueue(operation) {
+    const queued = this.queue.then(operation);
+    this.queue = queued.catch(() => {});
+    return queued;
+  }
+
+  async beginWithRetry(statement) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        this.db.exec(statement);
+        return;
+      } catch (error) {
+        if (attempt >= this.maxWriteRetries || !isSqliteBusy(error)) {
+          throw error;
+        }
+        const wait = Math.min(
+          SQLITE_RETRY_MAX_MS,
+          SQLITE_RETRY_BASE_MS * 2 ** attempt,
+        );
+        await delay(wait);
+      }
+    }
+  }
+
+  async withImmediateTransaction(operation) {
+    await this.beginWithRetry("BEGIN IMMEDIATE");
+    try {
+      const result = operation();
+      if (result && typeof result.then === "function") {
+        throw new TypeError("SQLite 事务回调必须同步完成。");
+      }
+      this.db.exec("COMMIT");
       return result;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // The original failure is more useful than a rollback failure.
+      }
+      throw error;
+    }
+  }
+
+  async readSnapshot() {
+    await this.beginWithRetry("BEGIN");
+    try {
+      const state = this.readStateDirect();
+      this.db.exec("COMMIT");
+      return state;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // The original failure is more useful than a rollback failure.
+      }
+      throw error;
+    }
+  }
+
+  readStateDirect() {
+    const settingsRow = this.db
+      .prepare("SELECT payload FROM settings WHERE id = 1")
+      .get();
+    if (!settingsRow) {
+      throw new Error("SQLite 状态库尚未初始化。");
+    }
+
+    const subscriptions = this.db
+      .prepare(
+        "SELECT id, payload FROM subscriptions ORDER BY position, id",
+      )
+      .all()
+      .map((row) => ({
+        ...parseStoredPayload(row.payload, `订阅 ${row.id} `),
+        seasons: this.db
+          .prepare(
+            `SELECT series_id, payload
+             FROM seasons
+             WHERE subscription_id = ?
+             ORDER BY position, series_id`,
+          )
+          .all(row.id)
+          .map((season) =>
+            parseStoredPayload(
+              season.payload,
+              `季度 ${row.id}/${season.series_id} `,
+            ),
+          ),
+      }));
+
+    const state = {
+      version:
+        Number(this.readMetadata("state_version")) || STATE_VERSION,
+      settings: parseStoredPayload(settingsRow.payload, "设置"),
+      subscriptions,
+      events: this.db
+        .prepare("SELECT id, payload FROM events ORDER BY position, id")
+        .all()
+        .map((row) =>
+          parseStoredPayload(row.payload, `事件 ${row.id} `),
+        ),
+      pendingNotifications: this.db
+        .prepare(
+          `SELECT id, payload
+           FROM pending_notifications
+           ORDER BY position, id`,
+        )
+        .all()
+        .map((row) =>
+          parseStoredPayload(
+            row.payload,
+            `待发送通知 ${row.id} `,
+          ),
+        ),
+      discoveryReminders: this.db
+        .prepare(
+          `SELECT id, payload
+           FROM discovery_reminders
+           ORDER BY position, id`,
+        )
+        .all()
+        .map((row) =>
+          parseStoredPayload(row.payload, `持续提醒 ${row.id} `),
+        ),
+    };
+    return normalizeState(state);
+  }
+
+  writeState(state, { importedFrom = null } = {}) {
+    this.db.exec(`
+      DELETE FROM discovery_reminders;
+      DELETE FROM pending_notifications;
+      DELETE FROM events;
+      DELETE FROM seasons;
+      DELETE FROM subscriptions;
+      DELETE FROM settings;
+    `);
+
+    this.db
+      .prepare("INSERT INTO settings (id, payload) VALUES (1, ?)")
+      .run(JSON.stringify(state.settings));
+
+    const insertSubscription = this.db.prepare(
+      `INSERT INTO subscriptions
+        (id, position, updated_at, payload)
+       VALUES (?, ?, ?, ?)`,
+    );
+    const insertSeason = this.db.prepare(
+      `INSERT INTO seasons
+        (subscription_id, series_id, position, updated_at, payload)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    state.subscriptions.forEach((subscription, position) => {
+      const { seasons, ...subscriptionData } = subscription;
+      insertSubscription.run(
+        subscription.id,
+        position,
+        subscription.updatedAt,
+        JSON.stringify(subscriptionData),
+      );
+      seasons.forEach((season, seasonPosition) => {
+        insertSeason.run(
+          subscription.id,
+          season.seriesId,
+          seasonPosition,
+          season.updatedAt,
+          JSON.stringify(season),
+        );
+      });
     });
 
-    this.queue = operation.catch(() => {});
-    return operation;
+    const insertEvent = this.db.prepare(
+      `INSERT INTO events (id, position, created_at, payload)
+       VALUES (?, ?, ?, ?)`,
+    );
+    state.events.forEach((event, position) => {
+      insertEvent.run(
+        event.id,
+        position,
+        event.createdAt,
+        JSON.stringify(event),
+      );
+    });
+
+    const insertPending = this.db.prepare(
+      `INSERT INTO pending_notifications
+        (id, subscription_id, season_id, position, due_at, payload)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    state.pendingNotifications.forEach((notification, position) => {
+      insertPending.run(
+        notification.id,
+        notification.subscriptionId,
+        notification.seasonId,
+        position,
+        notification.dueAt,
+        JSON.stringify(notification),
+      );
+    });
+
+    const insertReminder = this.db.prepare(
+      `INSERT INTO discovery_reminders
+        (id, subscription_id, season_id, position, expires_at,
+         next_reminder_at, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    state.discoveryReminders.forEach((reminder, position) => {
+      insertReminder.run(
+        reminder.id,
+        reminder.subscriptionId,
+        reminder.seasonId,
+        position,
+        reminder.expiresAt,
+        reminder.nextReminderAt,
+        JSON.stringify(reminder),
+      );
+    });
+
+    const revision = Number(this.readMetadata("revision") || 0) + 1;
+    this.writeMetadata("state_version", String(STATE_VERSION));
+    this.writeMetadata("schema_version", String(SQLITE_SCHEMA_VERSION));
+    this.writeMetadata("revision", String(revision));
+    this.writeMetadata("updated_at", nowIso());
+    if (importedFrom) {
+      this.writeMetadata("legacy_imported_from", importedFrom);
+    }
+  }
+
+  readMetadata(key) {
+    return this.db
+      .prepare("SELECT value FROM metadata WHERE key = ?")
+      .get(key)?.value;
+  }
+
+  writeMetadata(key, value) {
+    this.db
+      .prepare(
+        `INSERT INTO metadata (key, value)
+         VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(key, value);
+  }
+}
+
+// Retain the old export so existing integrations can migrate without a
+// simultaneous class-name change; the implementation is SQLite-backed.
+export class JsonStateStore extends SqliteStateStore {
+  constructor(stateFile, options = {}) {
+    const legacyStateFile = path.resolve(stateFile);
+    super(databaseFileForStateFile(legacyStateFile), {
+      legacyStateFile,
+      ...options,
+    });
+    this.filePath = legacyStateFile;
   }
 }

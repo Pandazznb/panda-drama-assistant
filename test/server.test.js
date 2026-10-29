@@ -91,6 +91,7 @@ async function startHarness(t, options = {}) {
     app.service.stop();
     await app.screenshotImport.stop();
     await new Promise((resolve) => app.server.close(resolve));
+    await app.store.close();
     await fs.rm(directory, { recursive: true, force: true });
   });
   return {
@@ -363,7 +364,7 @@ test("settings API saves a custom Cron schedule and all notification channels wi
   assert.equal(JSON.stringify(state).includes("abc_DEF-123"), false);
   assert.equal(JSON.stringify(state).includes("proxy-pass"), false);
 
-  const onDisk = JSON.parse(await fs.readFile(harness.stateFile, "utf8"));
+  const onDisk = await harness.store.read();
   assert.equal(onDisk.version, 10);
   assert.equal(onDisk.settings.checkCron, "0 0 * * 0");
   assert.equal(onDisk.settings.staleCompletionDays, 120);

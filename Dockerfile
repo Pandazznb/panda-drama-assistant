@@ -1,8 +1,9 @@
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3417 \
+    HONGUO_DATABASE_FILE=/app/data/state.sqlite3 \
     HONGUO_STATE_FILE=/app/data/state.json
 
 WORKDIR /app

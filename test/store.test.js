@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
   JsonStateStore,
+  SqliteStateStore,
   createDefaultState,
+  databaseFileForStateFile,
   normalizeState,
 } from "../src/store.js";
 
@@ -14,26 +17,43 @@ async function temporaryStatePath() {
   return path.join(directory, "state.json");
 }
 
-test("store creates a private JSON state file with defaults", async () => {
+test("store creates a private SQLite database with defaults", async () => {
   const filePath = await temporaryStatePath();
   const store = new JsonStateStore(filePath);
-  const state = await store.init();
-  assert.deepEqual(state, createDefaultState());
-  const stat = await fs.stat(filePath);
-  assert.equal(stat.mode & 0o777, 0o600);
+  try {
+    const state = await store.init();
+    assert.deepEqual(state, createDefaultState());
+    assert.equal(store.databaseFile, databaseFileForStateFile(filePath));
+    const stat = await fs.stat(store.databaseFile);
+    assert.equal(stat.mode & 0o777, 0o600);
+    const header = (await fs.readFile(store.databaseFile))
+      .subarray(0, 16)
+      .toString("utf8");
+    assert.equal(header, "SQLite format 3\u0000");
+    assert.equal(
+      store.db.prepare("PRAGMA journal_mode").get().journal_mode,
+      "wal",
+    );
+  } finally {
+    await store.close();
+  }
 });
 
 test("store backs up corrupt JSON and starts fresh", async () => {
   const filePath = await temporaryStatePath();
   await fs.writeFile(filePath, "{broken", "utf8");
   const store = new JsonStateStore(filePath);
-  const state = await store.init();
-  assert.deepEqual(state, createDefaultState());
-  const files = await fs.readdir(path.dirname(filePath));
-  assert.ok(files.some((file) => file.startsWith("state.json.corrupt-")));
+  try {
+    const state = await store.init();
+    assert.deepEqual(state, createDefaultState());
+    const files = await fs.readdir(path.dirname(filePath));
+    assert.ok(files.some((file) => file.startsWith("state.json.corrupt-")));
+  } finally {
+    await store.close();
+  }
 });
 
-test("mutations are serialized and persist valid JSON", async () => {
+test("mutations are serialized and survive reopening SQLite", async () => {
   const filePath = await temporaryStatePath();
   const store = new JsonStateStore(filePath);
   await store.init();
@@ -50,8 +70,88 @@ test("mutations are serialized and persist valid JSON", async () => {
   );
   const state = await store.read();
   assert.equal(state.settings.checkCron, cronExpressions[7]);
-  const onDisk = JSON.parse(await fs.readFile(filePath, "utf8"));
-  assert.equal(onDisk.settings.checkCron, cronExpressions[7]);
+  await store.close();
+
+  const restartedStore = new JsonStateStore(filePath);
+  try {
+    const restartedState = await restartedStore.init();
+    assert.equal(
+      restartedState.settings.checkCron,
+      cronExpressions[7],
+    );
+  } finally {
+    await restartedStore.close();
+  }
+});
+
+test("two store instances preserve concurrent read-modify-write updates", async () => {
+  const filePath = await temporaryStatePath();
+  const first = new SqliteStateStore(databaseFileForStateFile(filePath), {
+    legacyStateFile: filePath,
+  });
+  const second = new SqliteStateStore(databaseFileForStateFile(filePath), {
+    legacyStateFile: filePath,
+  });
+
+  try {
+    await first.init();
+    await second.init();
+    await Promise.all(
+      Array.from({ length: 40 }, (_, index) =>
+        (index % 2 === 0 ? first : second).mutate((state) => {
+          state.settings.staleCompletionDays += 1;
+        }),
+      ),
+    );
+    assert.equal(
+      (await first.read()).settings.staleCompletionDays,
+      130,
+    );
+    assert.equal(
+      (await second.read()).settings.staleCompletionDays,
+      130,
+    );
+  } finally {
+    await first.close();
+    await second.close();
+  }
+});
+
+test("legacy JSON is imported once and retained for rollback", async () => {
+  const filePath = await temporaryStatePath();
+  const legacyState = createDefaultState();
+  legacyState.settings.staleCompletionDays = 123;
+  await fs.writeFile(filePath, JSON.stringify(legacyState), "utf8");
+
+  const store = new JsonStateStore(filePath);
+  try {
+    await store.init();
+    assert.equal(
+      (await store.read()).settings.staleCompletionDays,
+      123,
+    );
+    assert.equal(
+      store.readMetadata("legacy_imported_from"),
+      filePath,
+    );
+    const legacyStat = await fs.stat(filePath);
+    assert.equal(legacyStat.mode & 0o777, 0o600);
+  } finally {
+    await store.close();
+  }
+
+  legacyState.settings.staleCompletionDays = 321;
+  await fs.writeFile(filePath, JSON.stringify(legacyState), "utf8");
+  const restartedStore = new JsonStateStore(filePath);
+  try {
+    await restartedStore.init();
+    assert.equal(
+      (await restartedStore.read()).settings.staleCompletionDays,
+      123,
+    );
+  } finally {
+    await restartedStore.close();
+  }
 });
 
 test("normalizeState keeps only valid event records and bounds settings", () => {
@@ -656,13 +756,16 @@ test("store persists a legacy state migration and completion event cleanup", asy
   );
 
   const store = new JsonStateStore(filePath);
-  await store.init();
-  const onDisk = JSON.parse(await fs.readFile(filePath, "utf8"));
-  assert.equal(onDisk.version, 10);
-  assert.deepEqual(
-    onDisk.events.map((event) => event.id),
-    ["evt_disk_episode"],
-  );
-  assert.equal(onDisk.subscriptions[0].seriesStatus, "unknown");
-  assert.equal(onDisk.subscriptions[0].completedAt, null);
+  try {
+    const state = await store.init();
+    assert.equal(state.version, 10);
+    assert.deepEqual(
+      state.events.map((event) => event.id),
+      ["evt_disk_episode"],
+    );
+    assert.equal(state.subscriptions[0].seriesStatus, "unknown");
+    assert.equal(state.subscriptions[0].completedAt, null);
+  } finally {
+    await store.close();
+  }
 });

@@ -1,6 +1,6 @@
 {
   "name": "panda-drama-assistant",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "熊猫 · 短剧助手：追踪短剧新季、新集并通过多渠道发送提醒",
@@ -9,7 +9,7 @@
     "test": "node --test"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "dependencies": {
     "@tesseract.js-data/chi_sim": "^1.0.0",

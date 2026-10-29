@@ -33,7 +33,7 @@ Docker Hub：<https://hub.docker.com/r/pandazzz/panda-drama-assistant>
 
 ## 运行
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 24 或更高版本，使用内置的 `node:sqlite`。
 
 ```bash
 npm start
@@ -50,8 +50,11 @@ http://192.168.10.101:3417
 ```bash
 HOST=0.0.0.0
 PORT=3417
+HONGUO_DATABASE_FILE=/path/to/state.sqlite3
 HONGUO_STATE_FILE=/path/to/state.json
 ```
+
+`HONGUO_DATABASE_FILE` 是 SQLite 数据库路径。`HONGUO_STATE_FILE` 仅用于首次迁移旧版 JSON，数据库已有数据后不会再读取或覆盖这份 JSON。未设置数据库路径时，会在旧状态文件同目录生成 `state.sqlite3`。
 
 ## Docker 部署
 
@@ -68,9 +71,9 @@ docker compose pull
 docker compose up -d
 ```
 
-默认访问地址为 `http://127.0.0.1:3417`。追更数据保存在 `hongguo-data` 命名卷中，重新创建容器不会丢失。
+默认访问地址为 `http://127.0.0.1:3417`。追更数据以 SQLite 保存在 `hongguo-data` 命名卷中，重新创建容器不会丢失。
 
-从旧版 `hongguo-reminder` 镜像升级时，请继续挂载原来的 `hongguo-data` 卷，并保留 `HONGUO_STATE_FILE` 环境变量。新品牌没有更改这两个兼容标识，因此已有追更、通知密钥和代理配置不会被重置。
+从旧版 JSON 存储升级时，请继续挂载原来的 `hongguo-data` 卷并保留 `HONGUO_STATE_FILE`。首次启动会把 `state.json` 导入 `state.sqlite3`，原 JSON 保留不动，因此已有追更、通知密钥和代理配置不会丢失。迁移完成后应以 SQLite 数据库为准。
 
 也可以直接使用 `docker run`：
 
@@ -98,7 +101,7 @@ docker compose pull
 docker compose up -d
 ```
 
-如需备份数据，可先停止容器，再备份命名卷中的 `state.json`。不要把它提交到 Git 或公开上传，文件中可能包含通知密钥与代理凭据。
+如需备份数据，应先停止容器，再备份命名卷中的 `state.sqlite3`、`state.sqlite3-wal` 和 `state.sqlite3-shm`（后两个文件可能不存在）。服务运行期间不要单独复制数据库文件，否则可能遗漏 WAL 中尚未合并的数据。不要把这些文件提交到 Git 或公开上传，其中可能包含通知密钥与代理凭据。
 
 ## 使用
 
@@ -176,7 +179,7 @@ docker compose up -d
 - 代理地址可包含用户名和密码，例如 `http://user:password@127.0.0.1:7890`。
 - 勾选需要走代理的通知渠道；未勾选的渠道保持直连。只有已启用的通知渠道会实际发送。
 - 当前不支持 `socks5://` 等其他协议，代理地址不能包含路径、查询参数或锚点。
-- 设置接口和页面只显示脱敏后的代理地址，不会公开用户名或密码；完整地址保存在权限为 `0600` 的状态文件中。
+- 设置接口和页面只显示脱敏后的代理地址，不会公开用户名或密码；完整地址保存在权限为 `0600` 的 SQLite 数据库中。
 
 ## 截图导入规则
 
@@ -225,11 +228,12 @@ docker compose up -d
 - 批量或定时检查不会逐季发送；每个系列只展示本次最新的季/集变化，并在一条汇总消息中附带检测时间。
 - 加集提醒默认立即发送；选择汇总窗口后，从第一次发现该季加集时开始计时，窗口内继续加集只累计新增集数，到期后将所有待发系列合并发送。
 - 新内容持续提醒在首次发现后独立计时，并在有效期内按 Cron 重复提醒；重复提醒不触发额外检查，也不延长首次发现时确定的到期时间。
-- 待汇总通知会写入状态文件，服务重启后继续等待或补发；发送失败会保留队列，并在 15 分钟后重试。只要至少一个已启用渠道成功送达，就视为本次通知已完成。
+- 待汇总通知会写入 SQLite，服务重启后继续等待或补发；发送失败会保留队列，并在 15 分钟后重试。只要至少一个已启用渠道成功送达，就视为本次通知已完成。
 
 ## 数据与限制
 
-- 状态保存在 `data/state.json`，可能包含通知代理地址及代理凭据、Bark key、ntfy access token、Telegram Bot token、企业微信机器人 key、钉钉 access token 与加签 secret；文件以仅当前用户可读写的 `0600` 权限创建，请勿公开或同步该文件。
+- 状态保存在 SQLite 数据库 `data/state.sqlite3`，使用 WAL 和 `BEGIN IMMEDIATE` 写事务处理并发修改。数据库及 WAL/SHM 文件以仅当前用户可读写的 `0600` 权限创建。
+- SQLite 中可能包含通知代理地址及代理凭据、Bark key、ntfy access token、Telegram Bot token、企业微信机器人 key、钉钉 access token 与加签 secret，请勿公开或同步数据库文件。旧版 `state.json` 也会限制为 `0600`，并在迁移后保留作回滚源。
 - 五类通知只发送到 `https://api.day.app`、`https://ntfy.sh`、`https://api.telegram.org`、`https://qyapi.weixin.qq.com` 和 `https://oapi.dingtalk.com`，不接受任意通知 URL 或自定义 Webhook。
 - 工具只监听进程运行期间；关闭进程后不会在后台继续检查。重新启动时会立即补执行已经错过的检查，但停机期间仍无法发送通知。
 - 自动加入新季依赖红果公开多季列表和详情页推荐，不能保证官方接口永久稳定。

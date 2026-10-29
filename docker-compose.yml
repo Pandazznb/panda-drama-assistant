@@ -4,24 +4,15 @@ services:
   panda-drama-assistant:
     image: pandazzz/panda-drama-assistant:latest
     container_name: panda-drama-assistant
-    build:
-      context: .
     ports:
       - "3417:3417"
     environment:
-      HOST: 0.0.0.0
-      PORT: 3417
-      HONGUO_STATE_FILE: /app/data/state.json
       TZ: Asia/Shanghai
+      HONGUO_DATABASE_FILE: /app/data/state.sqlite3
+      HONGUO_STATE_FILE: /app/data/state.json
     volumes:
       - hongguo-data:/app/data
     restart: unless-stopped
-    init: true
-    stop_grace_period: 10s
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
 volumes:
   hongguo-data:
