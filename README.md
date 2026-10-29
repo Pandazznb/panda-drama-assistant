@@ -4,7 +4,7 @@
 
 项目：`panda-drama-assistant`
 
-GitHub：<https://github.com/PANDAZZ1108/panda-drama-assistant>
+GitHub：<https://github.com/Pandazznb/panda-drama-assistant>
 
 Docker Hub：<https://hub.docker.com/r/pandazzz/panda-drama-assistant>
 
