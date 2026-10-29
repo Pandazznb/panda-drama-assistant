@@ -1,0 +1,11 @@
+node_modules
+.git
+.gitignore
+.github
+data
+test
+test-results
+chi_sim.traineddata
+eng.traineddata
+*.log
+.DS_Store

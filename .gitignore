@@ -1,0 +1,10 @@
+node_modules/
+data/*
+!data/.gitkeep
+*.traineddata
+.env
+.env.*
+!.env.example
+test-results/
+npm-debug.log*
+.DS_Store

@@ -1,0 +1,2532 @@
+import {
+  CANDIDATE_RECHECK_MS,
+  DEFAULT_DISCOVERY_REMINDER_CRON,
+  DEFAULT_INTERVAL_MINUTES,
+  DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES,
+  DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
+  DISCOVERY_INTERVAL_MS,
+  EPISODE_NOTIFICATION_WINDOW_OPTIONS,
+  EVENT_TYPE,
+  MAX_DISCOVERY_REMINDER_DURATION_MINUTES,
+  MAX_INTERVAL_MINUTES,
+  MIN_INTERVAL_MINUTES,
+  SERIES_STATUS,
+} from "./constants.js";
+import {
+  isValidCronExpression,
+  nextCronOccurrence,
+  normalizeCronExpression,
+} from "./cron.js";
+import {
+  fetchAlbumSeriesInfo,
+  fetchSeriesDetail,
+  resolveSharedSeries,
+} from "./hongguo.js";
+import {
+  applyNotificationSettingsPatch,
+  describeNotificationSettings,
+  enabledNotificationChannels,
+  sendNotificationChannels,
+  summarizeNotificationDelivery,
+} from "./notifications.js";
+import {
+  albumMetadataIssue,
+  deriveSeriesStatus,
+  deriveSubscriptionIdentity,
+  hasNewerSeason,
+  normalizeAlbumMetadata,
+  seasonNumber,
+  seriesVerificationComplete,
+  titleWithoutSeason,
+} from "./series.js";
+import { appendEvent } from "./store.js";
+import {
+  createId,
+  normalizeWhitespace,
+  nowIso,
+} from "./utils.js";
+
+const MAX_SUBSCRIPTIONS = 100;
+const MAX_SEASONS_PER_SERIES = 64;
+const NETWORK_CONCURRENCY = 3;
+const NOTIFICATION_RETRY_MS = 15 * 60 * 1000;
+const NOTIFICATION_TIME_ZONE = "Asia/Shanghai";
+const SUMMARY_EVENT_TYPES = new Set([
+  EVENT_TYPE.EPISODE,
+  EVENT_TYPE.SEASON,
+  EVENT_TYPE.COMPLETED,
+]);
+
+export class ReminderError extends Error {
+  constructor(message, code = "REMINDER_ERROR", statusCode = 400) {
+    super(message);
+    this.name = "ReminderError";
+    this.code = code;
+    this.statusCode = statusCode;
+  }
+}
+
+function isRecent(timestamp, durationMs, nowMs) {
+  const parsed = Date.parse(timestamp || "");
+  return Number.isFinite(parsed) && nowMs - parsed < durationMs;
+}
+
+function isKnownCompletedSeries(subscription) {
+  return (
+    subscription?.seriesStatus === SERIES_STATUS.COMPLETED ||
+    Number.isFinite(Date.parse(subscription?.completedAt || "")) ||
+    Number.isFinite(
+      Date.parse(subscription?.seriesCompletionVerifiedAt || ""),
+    )
+  );
+}
+
+function statusLabel(status) {
+  if (status === "completed") {
+    return "已完结";
+  }
+  if (status === "updating") {
+    return "更新中";
+  }
+  return "状态未知";
+}
+
+function seasonSortValue(season) {
+  const firstVisibleMs = Date.parse(season.firstVisibleTime || "");
+  if (Number.isFinite(firstVisibleMs)) {
+    return firstVisibleMs;
+  }
+  return Date.parse(season.addedAt || "") || 0;
+}
+
+function createSeason(detail, source, timestamp) {
+  return {
+    seriesId: detail.seriesId,
+    seriesGroupId: detail.seriesGroupId,
+    title: detail.title,
+    coverUrl: detail.coverUrl,
+    intro: detail.intro,
+    tags: detail.tags,
+    firstVisibleTime: detail.firstVisibleTime,
+    lastEpisodeChangedAt: null,
+    status: detail.status,
+    episodeCount: detail.episodeCount,
+    totalEpisodeCount: detail.totalEpisodeCount,
+    accessibleEpisodeCount: detail.accessibleEpisodeCount,
+    highWaterEpisodeCount: detail.episodeCount,
+    lastObservedEpisodeCount: detail.episodeCount,
+    rightText: detail.rightText,
+    detailUrl: detail.detailUrl,
+    source,
+    addedAt: timestamp,
+    updatedAt: timestamp,
+    lastCheckedAt: timestamp,
+    lastError: null,
+  };
+}
+
+function baselineMessage(detail, source) {
+  const prefix =
+    source === "manual"
+      ? "手动追加同系列季"
+      : source === "album"
+        ? "官方多季列表发现同系列季"
+        : source === "recommendation"
+          ? "发现同系列季"
+          : "开始追更";
+  return `${prefix}《${detail.title}》，基线 ${detail.episodeCount} 集，${statusLabel(detail.status)}。`;
+}
+
+function findSeasonReference(state, seriesId) {
+  for (const subscription of state.subscriptions) {
+    const season = subscription.seasons.find(
+      (item) => item.seriesId === String(seriesId),
+    );
+    if (season) {
+      return { subscription, season };
+    }
+  }
+  return null;
+}
+
+function earliestVisibleSeason(seasons) {
+  return [...seasons].sort((left, right) => {
+    const leftVisible =
+      Date.parse(left.firstVisibleTime || "") || Number.POSITIVE_INFINITY;
+    const rightVisible =
+      Date.parse(right.firstVisibleTime || "") || Number.POSITIVE_INFINITY;
+    return leftVisible - rightVisible;
+  })[0] || null;
+}
+
+function applySubscriptionIdentity(subscription, preferredFirstSeason = null) {
+  const identity = deriveSubscriptionIdentity(subscription);
+  const preferredGroupMatches =
+    !preferredFirstSeason ||
+    !preferredFirstSeason.seriesGroupId ||
+    preferredFirstSeason.seriesGroupId === subscription.seriesGroupId;
+  const preferredNumber = seasonNumber(preferredFirstSeason?.title);
+  const preferredIsFirst =
+    preferredGroupMatches &&
+    Boolean(preferredFirstSeason?.title) &&
+    (preferredNumber === null || preferredNumber === 1);
+  const firstSeason = preferredIsFirst
+    ? preferredFirstSeason
+    : identity.firstSeason;
+  const firstSeasonTitle = normalizeWhitespace(
+    firstSeason?.title || identity.firstSeasonTitle,
+  );
+
+  subscription.firstSeasonId =
+    firstSeason?.seriesId || identity.firstSeasonId || null;
+  subscription.firstSeasonTitle = firstSeasonTitle;
+  subscription.displayTitle = firstSeasonTitle;
+  subscription.title = firstSeasonTitle;
+  subscription.coverUrl =
+    firstSeason?.coverUrl || subscription.coverUrl || "";
+  return {
+    ...identity,
+    firstSeasonId: subscription.firstSeasonId,
+    firstSeasonTitle: subscription.firstSeasonTitle,
+    displayTitle: subscription.displayTitle,
+  };
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function run() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      try {
+        results[currentIndex] = await worker(items[currentIndex], currentIndex);
+      } catch (error) {
+        results[currentIndex] = { error };
+      }
+    }
+  }
+
+  const runners = Array.from(
+    { length: Math.min(limit, items.length) },
+    () => run(),
+  );
+  await Promise.all(runners);
+  return results;
+}
+
+function formatNotificationTime(value) {
+  if (!value) {
+    return "时间未知";
+  }
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    return "时间未知";
+  }
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("zh-CN", {
+      timeZone: NOTIFICATION_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
+function latestEventTime(events) {
+  return events.reduce((latest, event) => {
+    const eventMs = Date.parse(event.createdAt || event.lastObservedAt || "");
+    const latestMs = Date.parse(latest || "");
+    return Number.isFinite(eventMs) &&
+      (!Number.isFinite(latestMs) || eventMs > latestMs)
+      ? event.createdAt || event.lastObservedAt
+      : latest;
+  }, "");
+}
+
+function seasonForEvent(subscription, event) {
+  return subscription?.seasons.find(
+    (season) => season.seriesId === event.seasonId,
+  );
+}
+
+function eventTimingParts(subscription, event) {
+  const season = seasonForEvent(subscription, event);
+  const parts = [];
+  if (season) {
+    parts.push(`季上线：${formatNotificationTime(season.firstVisibleTime)}`);
+  }
+  if (event.type === EVENT_TYPE.EPISODE) {
+    parts.push(`检测到更新：${formatNotificationTime(event.createdAt)}`);
+  } else if (event.type === EVENT_TYPE.SEASON) {
+    parts.push(`检测到新季：${formatNotificationTime(event.createdAt)}`);
+  } else if (event.type === EVENT_TYPE.COMPLETED) {
+    parts.push(`确认完结：${formatNotificationTime(event.createdAt)}`);
+  }
+  return parts;
+}
+
+function subscriptionEventLines(subscription, events) {
+  return events
+    .filter((event) => SUMMARY_EVENT_TYPES.has(event.type))
+    .sort((left, right) => {
+      const leftMs = Date.parse(left.createdAt || "") || 0;
+      const rightMs = Date.parse(right.createdAt || "") || 0;
+      return leftMs - rightMs;
+    })
+    .map((event) => {
+      if (event.type === EVENT_TYPE.EPISODE) {
+        const delta =
+          Number(event.episodeCount) - Number(event.previousEpisodeCount);
+        const timing = eventTimingParts(subscription, event);
+        return `• 集数更新：《${event.seasonTitle}》更新到第 ${event.episodeCount} 集${
+          Number.isFinite(delta) && delta > 0 ? `，新增 ${delta} 集` : ""
+        }。${timing.length ? `\n  ${timing.join("；")}` : ""}`;
+      }
+      if (event.type === EVENT_TYPE.SEASON) {
+        const timing = eventTimingParts(subscription, event);
+        return `• 发现新季：《${event.seasonTitle}》，当前 ${event.episodeCount} 集。${
+          timing.length ? `\n  ${timing.join("；")}` : ""
+        }`;
+      }
+      if (event.type === EVENT_TYPE.COMPLETED) {
+        const timing = eventTimingParts(subscription, event);
+        return `• 系列完结：共 ${event.seasonCount || 0} 季，合计 ${event.episodeCount || 0} 集。${
+          timing.length ? `\n  ${timing.join("；")}` : ""
+        }`;
+      }
+      return "";
+    })
+    .filter(Boolean);
+}
+
+function detailedCheckMessage(state, events, subscriptionId) {
+  const subscription = state.subscriptions.find(
+    (item) => item.id === subscriptionId,
+  );
+  const relevantEvents = events.filter((event) =>
+    SUMMARY_EVENT_TYPES.has(event.type),
+  );
+  if (!subscription || !relevantEvents.length) {
+    return null;
+  }
+
+  const seriesTitle =
+    subscription.displayTitle ||
+    subscription.firstSeasonTitle ||
+    subscription.title;
+  const contentTypes = new Set(relevantEvents.map((event) => event.type));
+  const notificationTitle =
+    relevantEvents.length === 1 && contentTypes.has(EVENT_TYPE.EPISODE)
+      ? "红果短剧更新"
+      : relevantEvents.length === 1 && contentTypes.has(EVENT_TYPE.SEASON)
+        ? "发现同系列新季"
+        : relevantEvents.length === 1 &&
+            contentTypes.has(EVENT_TYPE.COMPLETED)
+          ? "短剧系列已完结"
+          : `《${seriesTitle}》更新详情`;
+  const lines = [
+    `检查时间：${formatNotificationTime(latestEventTime(relevantEvents))}`,
+    "",
+    ...subscriptionEventLines(subscription, relevantEvents),
+    "",
+    `当前共收录 ${subscription.seasons.length} 季。`,
+  ];
+
+  return {
+    title: notificationTitle,
+    body: lines.join("\n"),
+  };
+}
+
+function seasonRankMap(subscription) {
+  return new Map(
+    [...subscription.seasons]
+      .sort((left, right) => seasonSortValue(right) - seasonSortValue(left))
+      .map((season, index) => [season.seriesId, index]),
+  );
+}
+
+function latestChangedEvent(subscription, events) {
+  const ranks = seasonRankMap(subscription);
+  const contentEvents = events.filter(
+    (event) =>
+      event.type === EVENT_TYPE.EPISODE || event.type === EVENT_TYPE.SEASON,
+  );
+  contentEvents.sort((left, right) => {
+    const leftRank = ranks.get(left.seasonId) ?? Number.MAX_SAFE_INTEGER;
+    const rightRank = ranks.get(right.seasonId) ?? Number.MAX_SAFE_INTEGER;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+    const leftMs = Date.parse(left.createdAt || "") || 0;
+    const rightMs = Date.parse(right.createdAt || "") || 0;
+    return rightMs - leftMs;
+  });
+  return (
+    contentEvents[0] ||
+    events.find((event) => event.type === EVENT_TYPE.COMPLETED) ||
+    null
+  );
+}
+
+function compactSeasonTitle(seriesTitle, seasonTitle) {
+  const normalizedSeriesTitle = normalizeWhitespace(
+    seriesTitle || seasonTitle || "未知短剧",
+  );
+  const normalizedSeasonTitle = normalizeWhitespace(
+    seasonTitle || seriesTitle || "未知短剧",
+  );
+  if (normalizedSeasonTitle === normalizedSeriesTitle) {
+    return `《${normalizedSeriesTitle}》`;
+  }
+
+  const seriesBase = titleWithoutSeason(normalizedSeriesTitle);
+  const seasonBase = titleWithoutSeason(normalizedSeasonTitle);
+  if (
+    seriesBase &&
+    seriesBase === seasonBase &&
+    normalizedSeasonTitle.startsWith(seasonBase)
+  ) {
+    const seasonSuffix = normalizeWhitespace(
+      normalizedSeasonTitle.slice(seasonBase.length),
+    );
+    if (seasonSuffix) {
+      return `《${seasonBase}》${seasonSuffix}`;
+    }
+  }
+  return `《${normalizedSeasonTitle}》`;
+}
+
+function compactChangeLine(subscription, events) {
+  const seriesTitle =
+    subscription.displayTitle ||
+    subscription.firstSeasonTitle ||
+    subscription.title;
+  const event = latestChangedEvent(subscription, events);
+  if (!event) {
+    return "";
+  }
+
+  let detail;
+  if (event.type === EVENT_TYPE.COMPLETED) {
+    detail = `《${seriesTitle}》全系列完结 · ${event.seasonCount || subscription.seasons.length} 季/${event.episodeCount || 0} 集`;
+  } else {
+    const title = compactSeasonTitle(seriesTitle, event.seasonTitle);
+    if (event.type === EVENT_TYPE.SEASON) {
+      detail = `${title} · 新季 ${event.episodeCount} 集`;
+    } else {
+      const delta =
+        Number(event.episodeCount) - Number(event.previousEpisodeCount);
+      detail = `${title} · 第 ${event.episodeCount} 集${
+        Number.isFinite(delta) && delta > 0 ? `（新增 ${delta} 集）` : ""
+      }`;
+    }
+    if (events.some((item) => item.type === EVENT_TYPE.COMPLETED)) {
+      detail += " · 已完结";
+    }
+  }
+
+  const timing = eventTimingParts(subscription, event);
+  return timing.length ? `${detail} · ${timing.join(" · ")}` : detail;
+}
+
+function groupedCheckEvents(state, events) {
+  const groups = new Map();
+  for (const event of events) {
+    if (!event.subscriptionId || !SUMMARY_EVENT_TYPES.has(event.type)) {
+      continue;
+    }
+    const subscription = state.subscriptions.find(
+      (item) => item.id === event.subscriptionId,
+    );
+    if (!subscription) {
+      continue;
+    }
+    const group = groups.get(event.subscriptionId) || {
+      subscription,
+      events: [],
+      order: groups.size,
+    };
+    group.events.push(event);
+    groups.set(event.subscriptionId, group);
+  }
+  return [...groups.values()].sort((left, right) => left.order - right.order);
+}
+
+function batchCheckMessage(state, events) {
+  const groups = groupedCheckEvents(state, events);
+  if (!groups.length) {
+    return null;
+  }
+  const allEvents = groups.flatMap((group) => group.events);
+  const lines = groups
+    .map((group, index) => {
+      const line = compactChangeLine(group.subscription, group.events);
+      return line ? `${index + 1}. ${line}` : "";
+    })
+    .filter(Boolean);
+  if (!lines.length) {
+    return null;
+  }
+
+  return {
+    title: `红果追更 · ${lines.length} 个系列有更新`,
+    body: `检查时间：${formatNotificationTime(latestEventTime(allEvents))}\n\n${lines.join("\n")}`,
+  };
+}
+
+function pendingNotificationCopy(state, pendingNotifications) {
+  const pendingBySubscription = new Map();
+  for (const pending of pendingNotifications) {
+    const subscription = state.subscriptions.find(
+      (item) => item.id === pending.subscriptionId,
+    );
+    if (!subscription) {
+      continue;
+    }
+    const group = pendingBySubscription.get(pending.subscriptionId) || {
+      subscription,
+      pending: [],
+      order: pendingBySubscription.size,
+    };
+    group.pending.push(pending);
+    pendingBySubscription.set(pending.subscriptionId, group);
+  }
+
+  const groups = [...pendingBySubscription.values()]
+    .sort((left, right) => left.order - right.order)
+    .map((group) => {
+      const ranks = seasonRankMap(group.subscription);
+      const pending = [...group.pending].sort((left, right) => {
+        const leftRank =
+          ranks.get(left.seasonId) ?? Number.MAX_SAFE_INTEGER;
+        const rightRank =
+          ranks.get(right.seasonId) ?? Number.MAX_SAFE_INTEGER;
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+        return (
+          (Date.parse(right.lastObservedAt || "") || 0) -
+          (Date.parse(left.lastObservedAt || "") || 0)
+        );
+      })[0];
+      if (!pending) {
+        return null;
+      }
+      const seriesTitle =
+        group.subscription.displayTitle ||
+        group.subscription.firstSeasonTitle ||
+        group.subscription.title;
+      const title = compactSeasonTitle(seriesTitle, pending.seasonTitle);
+      const delta = pending.episodeCount - pending.baselineEpisodeCount;
+      const season = group.subscription.seasons.find(
+        (item) => item.seriesId === pending.seasonId,
+      );
+      const timing = [
+        `季上线：${formatNotificationTime(season?.firstVisibleTime)}`,
+        `检测到更新：${formatNotificationTime(pending.lastObservedAt)}`,
+      ];
+      return {
+        subscriptionId: group.subscription.id,
+        line: `${title} · 第 ${pending.episodeCount} 集（本时段新增 ${delta} 集） · ${timing.join(" · ")}`,
+        lastObservedAt: pending.lastObservedAt,
+      };
+    })
+    .filter(Boolean);
+
+  if (!groups.length) {
+    return null;
+  }
+  return {
+    title: "红果短剧更新汇总",
+    body: `最近检测：${formatNotificationTime(latestEventTime(groups))}\n\n${groups
+      .map((group, index) => `${index + 1}. ${group.line}`)
+      .join("\n")}`,
+  };
+}
+
+function discoveryReminderCopy(state, reminders, nowMs) {
+  const remindersBySubscription = new Map();
+  for (const reminder of reminders) {
+    const subscription = state.subscriptions.find(
+      (item) => item.id === reminder.subscriptionId,
+    );
+    if (!subscription) {
+      continue;
+    }
+    const group = remindersBySubscription.get(reminder.subscriptionId) || {
+      subscription,
+      reminders: [],
+      order: remindersBySubscription.size,
+    };
+    group.reminders.push(reminder);
+    remindersBySubscription.set(reminder.subscriptionId, group);
+  }
+
+  const groups = [...remindersBySubscription.values()]
+    .sort((left, right) => left.order - right.order)
+    .map((group) => {
+      const ranks = seasonRankMap(group.subscription);
+      const reminder = [...group.reminders].sort((left, right) => {
+        const leftRank =
+          ranks.get(left.seasonId) ?? Number.MAX_SAFE_INTEGER;
+        const rightRank =
+          ranks.get(right.seasonId) ?? Number.MAX_SAFE_INTEGER;
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+        return (
+          (Date.parse(right.lastDiscoveredAt || "") || 0) -
+          (Date.parse(left.lastDiscoveredAt || "") || 0)
+        );
+      })[0];
+      if (!reminder) {
+        return null;
+      }
+
+      const seriesTitle =
+        group.subscription.displayTitle ||
+        group.subscription.firstSeasonTitle ||
+        group.subscription.title;
+      const title = compactSeasonTitle(
+        seriesTitle,
+        reminder.seasonTitle,
+      );
+      const season = group.subscription.seasons.find(
+        (item) => item.seriesId === reminder.seasonId,
+      );
+      const change =
+        reminder.type === EVENT_TYPE.SEASON
+          ? `${title} · 新季 ${reminder.episodeCount} 集`
+          : `${title} · 第 ${reminder.episodeCount} 集${
+              reminder.episodeCount > reminder.previousEpisodeCount
+                ? `（新增 ${
+                    reminder.episodeCount -
+                    reminder.previousEpisodeCount
+                  } 集）`
+                : ""
+            }`;
+      const timing = [
+        season
+          ? `季上线：${formatNotificationTime(season.firstVisibleTime)}`
+          : "",
+        `${
+          reminder.type === EVENT_TYPE.SEASON
+            ? "检测到新季"
+            : "检测到更新"
+        }：${formatNotificationTime(reminder.lastDiscoveredAt)}`,
+        `提醒有效至：${formatNotificationTime(reminder.expiresAt)}`,
+      ].filter(Boolean);
+
+      return `${change} · ${timing.join(" · ")}`;
+    })
+    .filter(Boolean);
+
+  if (!groups.length) {
+    return null;
+  }
+  return {
+    title: "红果短剧新内容提醒",
+    body: `提醒时间：${formatNotificationTime(
+      new Date(nowMs).toISOString(),
+    )}\n\n${groups
+      .map((group, index) => `${index + 1}. ${group}`)
+      .join("\n")}`,
+  };
+}
+
+function queueEpisodeNotification(
+  state,
+  event,
+  windowMinutes,
+  nowMs,
+) {
+  if (!windowMinutes) {
+    return null;
+  }
+
+  const existing = state.pendingNotifications.find(
+    (pending) =>
+      pending.subscriptionId === event.subscriptionId &&
+      pending.seasonId === event.seasonId,
+  );
+  if (existing) {
+    existing.seasonTitle = event.seasonTitle;
+    existing.episodeCount = Math.max(
+      existing.episodeCount,
+      event.episodeCount,
+    );
+    existing.lastObservedAt = event.createdAt;
+    existing.eventIds = [
+      ...new Set([...existing.eventIds, event.id]),
+    ];
+    event.notificationDueAt = existing.dueAt;
+    return existing;
+  }
+
+  const dueAt = new Date(
+    nowMs + windowMinutes * 60_000,
+  ).toISOString();
+  const pending = {
+    id: createId("notify_"),
+    type: EVENT_TYPE.EPISODE,
+    subscriptionId: event.subscriptionId,
+    seasonId: event.seasonId,
+    seasonTitle: event.seasonTitle,
+    baselineEpisodeCount: event.previousEpisodeCount,
+    episodeCount: event.episodeCount,
+    firstObservedAt: event.createdAt,
+    lastObservedAt: event.createdAt,
+    dueAt,
+    eventIds: [event.id],
+    lastError: null,
+  };
+  state.pendingNotifications.push(pending);
+  event.notificationDueAt = dueAt;
+  return pending;
+}
+
+function nextDiscoveryReminderTime(cron, fromMs, expiresAtMs) {
+  try {
+    const nextMs = nextCronOccurrence(cron, new Date(fromMs)).getTime();
+    return Number.isFinite(nextMs) && nextMs < expiresAtMs
+      ? new Date(nextMs).toISOString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function queueDiscoveryReminder(state, event, nowMs) {
+  if (
+    ![EVENT_TYPE.EPISODE, EVENT_TYPE.SEASON].includes(event.type) ||
+    !state.settings.discoveryReminderDurationMinutes
+  ) {
+    return null;
+  }
+
+  state.discoveryReminders = state.discoveryReminders.filter((reminder) => {
+    const expiresAtMs = Date.parse(reminder.expiresAt || "");
+    return Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+  });
+
+  const existing = state.discoveryReminders.find(
+    (reminder) =>
+      reminder.subscriptionId === event.subscriptionId &&
+      reminder.seasonId === event.seasonId,
+  );
+  if (existing) {
+    existing.type = event.type;
+    existing.seasonTitle = event.seasonTitle;
+    existing.previousEpisodeCount =
+      event.type === EVENT_TYPE.EPISODE
+        ? event.previousEpisodeCount
+        : null;
+    existing.episodeCount = event.episodeCount;
+    existing.lastDiscoveredAt = event.createdAt;
+    existing.eventIds = [
+      ...new Set([...existing.eventIds, event.id]),
+    ];
+    return existing;
+  }
+
+  const expiresAtMs =
+    nowMs + state.settings.discoveryReminderDurationMinutes * 60_000;
+  const nextReminderAt = nextDiscoveryReminderTime(
+    state.settings.discoveryReminderCron,
+    nowMs,
+    expiresAtMs,
+  );
+  if (!nextReminderAt) {
+    return null;
+  }
+
+  const reminder = {
+    id: createId("repeat_"),
+    type: event.type,
+    subscriptionId: event.subscriptionId,
+    seasonId: event.seasonId,
+    seasonTitle: event.seasonTitle,
+    previousEpisodeCount:
+      event.type === EVENT_TYPE.EPISODE
+        ? event.previousEpisodeCount
+        : null,
+    episodeCount: event.episodeCount,
+    firstDiscoveredAt: event.createdAt,
+    lastDiscoveredAt: event.createdAt,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    eventIds: [event.id],
+    nextReminderAt,
+    lastReminderAt: null,
+    lastError: null,
+  };
+  state.discoveryReminders.push(reminder);
+  return reminder;
+}
+
+export class ReminderService {
+  constructor({
+    store,
+    fetchDetail = fetchSeriesDetail,
+    fetchAlbumSeries = fetchAlbumSeriesInfo,
+    resolveShared = resolveSharedSeries,
+    sendNotifications = sendNotificationChannels,
+    now = () => new Date(),
+    discoveryIntervalMs = DISCOVERY_INTERVAL_MS,
+    candidateRecheckMs = CANDIDATE_RECHECK_MS,
+    timers = { setTimeout, clearTimeout },
+  }) {
+    this.store = store;
+    this.fetchDetail = fetchDetail;
+    this.fetchAlbumSeries = fetchAlbumSeries;
+    this.resolveShared = resolveShared;
+    this.sendNotifications = sendNotifications;
+    this.now = now;
+    this.discoveryIntervalMs = discoveryIntervalMs;
+    this.candidateRecheckMs = candidateRecheckMs;
+    this.timers = timers;
+    this.operationQueue = Promise.resolve();
+    this.checking = false;
+    this.schedulerTimer = null;
+    this.nextCheckAt = null;
+    this.stopped = true;
+  }
+
+  enqueue(operation) {
+    const queued = this.operationQueue.then(operation);
+    this.operationQueue = queued.catch(() => {});
+    return queued;
+  }
+
+  async resolveFirstSeasonDetail(detail) {
+    const number = seasonNumber(detail?.title);
+    if (number === 1 || number === null) {
+      return detail;
+    }
+    if (!detail.seriesGroupId) {
+      return number === null ? detail : null;
+    }
+
+    try {
+      const album = normalizeAlbumMetadata(
+        await this.fetchAlbumSeries(detail.seriesId),
+      );
+      if (albumMetadataIssue(album)) {
+        return null;
+      }
+
+      const detailResults = await mapWithConcurrency(
+        album.publishedSeriesIds.slice(0, MAX_SEASONS_PER_SERIES),
+        NETWORK_CONCURRENCY,
+        async (seriesId) =>
+          seriesId === detail.seriesId
+            ? { detail }
+            : this.fetchDetail(seriesId),
+      );
+      const matchingDetails = detailResults
+        .filter((result) => !result?.error && result?.detail)
+        .map((result) => result.detail)
+        .filter(
+          (candidate) =>
+            candidate.seriesGroupId === detail.seriesGroupId,
+        );
+      const explicitFirstSeasons = matchingDetails.filter(
+        (candidate) => seasonNumber(candidate.title) === 1,
+      );
+      if (explicitFirstSeasons.length) {
+        return earliestVisibleSeason(explicitFirstSeasons);
+      }
+
+      const unnumberedSeasons = matchingDetails.filter(
+        (candidate) => seasonNumber(candidate.title) === null,
+      );
+      if (unnumberedSeasons.length) {
+        return earliestVisibleSeason(unnumberedSeasons);
+      }
+      return null;
+    } catch {
+      if (number === null) {
+        return detail;
+      }
+      return null;
+    }
+  }
+
+  async addSubscription(input, { detail: preparedDetail = null } = {}) {
+    let detail = preparedDetail;
+    if (!detail) {
+      const resolved = await this.resolveShared(input);
+      ({ detail } = await this.fetchDetail(resolved.seriesId));
+    }
+    const firstSeasonDetail = await this.resolveFirstSeasonDetail(detail);
+    const timestamp = this.now().toISOString();
+
+    return this.store.mutate((state) => {
+      const existing = findSeasonReference(state, detail.seriesId);
+      if (existing) {
+        const error = new ReminderError(
+          "这部剧已经在追更列表中。",
+          "SUBSCRIPTION_EXISTS",
+          409,
+        );
+        error.subscriptionId = existing.subscription.id;
+        error.seriesTitle =
+          existing.subscription.displayTitle ||
+          existing.subscription.firstSeasonTitle ||
+          existing.subscription.title;
+        throw error;
+      }
+
+      if (state.subscriptions.length >= MAX_SUBSCRIPTIONS) {
+        throw new ReminderError(
+          `最多支持 ${MAX_SUBSCRIPTIONS} 部短剧。`,
+          "SUBSCRIPTION_LIMIT",
+          409,
+        );
+      }
+
+      let subscription = detail.seriesGroupId
+        ? state.subscriptions.find(
+            (item) => item.seriesGroupId === detail.seriesGroupId,
+          )
+        : null;
+      let action = "created";
+
+      if (subscription) {
+        if (subscription.seasons.length >= MAX_SEASONS_PER_SERIES) {
+          throw new ReminderError(
+            "同一系列已确认的季数过多。",
+            "SEASON_LIMIT",
+            409,
+          );
+        }
+        subscription.seasons.push(createSeason(detail, "share", timestamp));
+        subscription.updatedAt = timestamp;
+        subscription.discovery.lastRunAt = null;
+        subscription.discovery.lastCompletedAt = null;
+        subscription.discovery.lastDiscoveryIssue = null;
+        subscription.discovery.confirmedSeriesIds = [];
+        subscription.discovery.unpublishedSeriesIds = [];
+        subscription.discovery.unpublishedSeasonCount = 0;
+        subscription.discovery.albumSeasonCount = null;
+        subscription.discovery.albumItemCount = null;
+        if (
+          hasNewerSeason(
+            subscription.seasons.slice(0, -1),
+            subscription.seasons,
+          )
+        ) {
+          subscription.seriesCompletionAnnounced = false;
+          subscription.completedAt = null;
+          subscription.seriesCompletionVerifiedAt = null;
+        }
+        action = "season_added";
+      } else {
+        subscription = {
+          id: createId("sub_"),
+          primarySeriesId: detail.seriesId,
+          seriesGroupId: detail.seriesGroupId,
+          title: detail.title,
+          displayTitle: detail.title,
+          firstSeasonId: firstSeasonDetail?.seriesId || null,
+          firstSeasonTitle: firstSeasonDetail?.title || detail.title,
+          coverUrl: detail.coverUrl,
+          seriesStatus:
+            detail.status === SERIES_STATUS.UPDATING
+              ? SERIES_STATUS.UPDATING
+              : SERIES_STATUS.UNKNOWN,
+          seriesStatusReason:
+            detail.status === SERIES_STATUS.UPDATING
+              ? "已确认季度中有季度仍在更新。"
+              : "已确认季度均已完结，等待官方多季列表及最高季“完结篇”标识核验。",
+          completedAt: null,
+          seriesCompletionVerifiedAt: null,
+          seriesCompletionAnnounced: false,
+          hasUnreadUpdate: false,
+          lastWatchedAt: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          lastCheckedAt: timestamp,
+          lastError: null,
+          discovery: {
+            lastRunAt: null,
+            lastCompletedAt: null,
+            lastDiscoveryIssue: null,
+            confirmedSeriesIds: [],
+            unpublishedSeriesIds: [],
+            unpublishedSeasonCount: 0,
+            albumSeasonCount: null,
+            albumItemCount: null,
+            candidates: {},
+          },
+          seasons: [createSeason(detail, "share", timestamp)],
+        };
+        state.subscriptions.unshift(subscription);
+      }
+      const identity = applySubscriptionIdentity(
+        subscription,
+        firstSeasonDetail,
+      );
+      const seriesStatus = deriveSeriesStatus(subscription.seasons, {
+        confirmedSeriesIds: subscription.discovery.confirmedSeriesIds,
+        discoveryError: subscription.discovery.lastDiscoveryIssue,
+        unpublishedSeasonCount:
+          subscription.discovery.unpublishedSeasonCount,
+      });
+      subscription.seriesStatus = seriesStatus.status;
+      subscription.seriesStatusReason = seriesStatus.reason;
+
+      const event = appendEvent(state, {
+        id: createId("evt_"),
+        type: EVENT_TYPE.BASELINE,
+        subscriptionId: subscription.id,
+        seasonId: detail.seriesId,
+        seasonTitle: detail.title,
+        message: baselineMessage(
+          { ...detail, title: identity.displayTitle },
+          "share",
+        ),
+        episodeCount: detail.episodeCount,
+        previousEpisodeCount: null,
+        createdAt: timestamp,
+        notified: false,
+      });
+
+      return {
+        action,
+        subscriptionId: subscription.id,
+        seasonId: detail.seriesId,
+        seasonTitle: detail.title,
+        title: identity.displayTitle,
+        episodeCount: detail.episodeCount,
+        eventId: event?.id || null,
+      };
+    });
+  }
+
+  async addSeason(subscriptionId, input) {
+    const snapshot = await this.store.read();
+    const subscription = snapshot.subscriptions.find(
+      (item) => item.id === subscriptionId,
+    );
+    if (!subscription) {
+      throw new ReminderError("追更条目不存在。", "SUBSCRIPTION_NOT_FOUND", 404);
+    }
+    if (!subscription.seriesGroupId) {
+      throw new ReminderError(
+        "当前条目没有官方系列分组信息，无法确认同系列关系。",
+        "SERIES_GROUP_MISSING",
+        409,
+      );
+    }
+
+    const resolved = await this.resolveShared(input);
+    const { detail } = await this.fetchDetail(resolved.seriesId);
+    if (!detail.seriesGroupId) {
+      throw new ReminderError(
+        "红果详情页没有提供该剧的系列分组，不能自动归入同系列。",
+        "SERIES_GROUP_MISSING",
+        409,
+      );
+    }
+    if (detail.seriesGroupId !== subscription.seriesGroupId) {
+      throw new ReminderError(
+        "这是另一部剧：红果官方系列分组与当前追更条目不匹配。",
+        "SERIES_GROUP_MISMATCH",
+        409,
+      );
+    }
+
+    const firstSeasonDetail = await this.resolveFirstSeasonDetail(detail);
+    const timestamp = this.now().toISOString();
+    return this.store.mutate((state) => {
+      const current = state.subscriptions.find(
+        (item) => item.id === subscriptionId,
+      );
+      if (!current) {
+        throw new ReminderError("追更条目不存在。", "SUBSCRIPTION_NOT_FOUND", 404);
+      }
+      if (
+        current.seasons.some((season) => season.seriesId === detail.seriesId)
+      ) {
+        throw new ReminderError(
+          "这部剧已经在当前系列中。",
+          "SEASON_EXISTS",
+          409,
+        );
+      }
+      if (current.seasons.length >= MAX_SEASONS_PER_SERIES) {
+        throw new ReminderError(
+          "同一系列已确认的季数过多。",
+          "SEASON_LIMIT",
+          409,
+        );
+      }
+
+      const newerSeason = hasNewerSeason(current.seasons, [
+        ...current.seasons,
+        detail,
+      ]);
+      current.seasons.push(createSeason(detail, "manual", timestamp));
+      current.updatedAt = timestamp;
+      current.discovery.lastRunAt = null;
+      current.discovery.lastCompletedAt = null;
+      current.discovery.lastDiscoveryIssue = null;
+      current.discovery.confirmedSeriesIds = [];
+      current.discovery.unpublishedSeriesIds = [];
+      current.discovery.unpublishedSeasonCount = 0;
+      current.discovery.albumSeasonCount = null;
+      current.discovery.albumItemCount = null;
+      if (newerSeason) {
+        current.seriesCompletionAnnounced = false;
+        current.completedAt = null;
+        current.seriesCompletionVerifiedAt = null;
+      }
+      const identity = applySubscriptionIdentity(
+        current,
+        firstSeasonDetail,
+      );
+      const seriesStatus = deriveSeriesStatus(current.seasons, {
+        confirmedSeriesIds: current.discovery.confirmedSeriesIds,
+        discoveryError: current.discovery.lastDiscoveryIssue,
+        unpublishedSeasonCount:
+          current.discovery.unpublishedSeasonCount,
+      });
+      current.seriesStatus = seriesStatus.status;
+      current.seriesStatusReason = seriesStatus.reason;
+      const event = appendEvent(state, {
+        id: createId("evt_"),
+        type: EVENT_TYPE.BASELINE,
+        subscriptionId: current.id,
+        seasonId: detail.seriesId,
+        seasonTitle: detail.title,
+        message: baselineMessage(detail, "manual"),
+        episodeCount: detail.episodeCount,
+        previousEpisodeCount: null,
+        createdAt: timestamp,
+        notified: false,
+      });
+
+      return {
+        subscriptionId: current.id,
+        seasonId: detail.seriesId,
+        seasonTitle: detail.title,
+        title: identity.displayTitle,
+        eventId: event?.id || null,
+      };
+    });
+  }
+
+  async removeSubscription(subscriptionId) {
+    return this.store.mutate((state) => {
+      const index = state.subscriptions.findIndex(
+        (item) => item.id === subscriptionId,
+      );
+      if (index === -1) {
+        throw new ReminderError(
+          "追更条目不存在。",
+          "SUBSCRIPTION_NOT_FOUND",
+          404,
+        );
+      }
+      const [removed] = state.subscriptions.splice(index, 1);
+      state.events = state.events.filter(
+        (event) => event.subscriptionId !== subscriptionId,
+      );
+      state.pendingNotifications = state.pendingNotifications.filter(
+        (pending) => pending.subscriptionId !== subscriptionId,
+      );
+      state.discoveryReminders = state.discoveryReminders.filter(
+        (reminder) => reminder.subscriptionId !== subscriptionId,
+      );
+      return {
+        id: removed.id,
+        title: removed.displayTitle || removed.title,
+      };
+    });
+  }
+
+  async markSubscriptionWatched(subscriptionId) {
+    const timestamp = this.now().toISOString();
+    return this.store.mutate((state) => {
+      const subscription = state.subscriptions.find(
+        (item) => item.id === subscriptionId,
+      );
+      if (!subscription) {
+        throw new ReminderError(
+          "追更条目不存在。",
+          "SUBSCRIPTION_NOT_FOUND",
+          404,
+        );
+      }
+
+      const affectedEventIds = new Set();
+      for (const pending of state.pendingNotifications) {
+        if (pending.subscriptionId === subscriptionId) {
+          for (const eventId of pending.eventIds || []) {
+            affectedEventIds.add(eventId);
+          }
+        }
+      }
+      for (const reminder of state.discoveryReminders) {
+        if (reminder.subscriptionId === subscriptionId) {
+          for (const eventId of reminder.eventIds || []) {
+            affectedEventIds.add(eventId);
+          }
+        }
+      }
+      for (const event of state.events) {
+        if (
+          event.subscriptionId === subscriptionId &&
+          affectedEventIds.has(event.id)
+        ) {
+          event.notificationDueAt = null;
+          event.notificationError = null;
+        }
+      }
+
+      state.pendingNotifications = state.pendingNotifications.filter(
+        (pending) => pending.subscriptionId !== subscriptionId,
+      );
+      state.discoveryReminders = state.discoveryReminders.filter(
+        (reminder) => reminder.subscriptionId !== subscriptionId,
+      );
+      subscription.hasUnreadUpdate = false;
+      subscription.lastWatchedAt = timestamp;
+
+      return {
+        id: subscription.id,
+        title:
+          subscription.displayTitle ||
+          subscription.firstSeasonTitle ||
+          subscription.title,
+        lastWatchedAt: timestamp,
+      };
+    });
+  }
+
+  async updateSettings({
+    notifications,
+    intervalMinutes,
+    episodeNotificationWindowMinutes,
+    discoveryReminderDurationMinutes,
+    discoveryReminderCron,
+  }) {
+    let normalizedInterval;
+    if (intervalMinutes !== undefined) {
+      normalizedInterval = Number(intervalMinutes);
+      if (
+        !Number.isInteger(normalizedInterval) ||
+        normalizedInterval < MIN_INTERVAL_MINUTES ||
+        normalizedInterval > MAX_INTERVAL_MINUTES
+      ) {
+        throw new ReminderError(
+          `检查间隔需要在 ${MIN_INTERVAL_MINUTES} 到 ${MAX_INTERVAL_MINUTES} 分钟之间。`,
+          "INVALID_INTERVAL",
+          400,
+        );
+      }
+    }
+    let normalizedNotificationWindow;
+    if (episodeNotificationWindowMinutes !== undefined) {
+      normalizedNotificationWindow = Number(
+        episodeNotificationWindowMinutes,
+      );
+      if (
+        !Number.isInteger(normalizedNotificationWindow) ||
+        !EPISODE_NOTIFICATION_WINDOW_OPTIONS.includes(
+          normalizedNotificationWindow,
+        )
+      ) {
+        throw new ReminderError(
+          "更新提醒汇总窗口不在支持范围内。",
+          "INVALID_NOTIFICATION_WINDOW",
+          400,
+        );
+      }
+    }
+    let normalizedDiscoveryDuration;
+    if (discoveryReminderDurationMinutes !== undefined) {
+      normalizedDiscoveryDuration = Number(
+        discoveryReminderDurationMinutes,
+      );
+      if (
+        !Number.isInteger(normalizedDiscoveryDuration) ||
+        normalizedDiscoveryDuration < 0 ||
+        normalizedDiscoveryDuration >
+          MAX_DISCOVERY_REMINDER_DURATION_MINUTES
+      ) {
+        throw new ReminderError(
+          `持续提醒时长需要在 0 到 ${MAX_DISCOVERY_REMINDER_DURATION_MINUTES} 分钟之间。`,
+          "INVALID_DISCOVERY_REMINDER_DURATION",
+          400,
+        );
+      }
+    }
+    let normalizedDiscoveryCron;
+    if (discoveryReminderCron !== undefined) {
+      normalizedDiscoveryCron =
+        normalizeCronExpression(discoveryReminderCron);
+      if (!isValidCronExpression(normalizedDiscoveryCron, this.now())) {
+        throw new ReminderError(
+          "持续提醒频率需要使用有效的 5 段 Cron 表达式。",
+          "INVALID_DISCOVERY_REMINDER_CRON",
+          400,
+        );
+      }
+    }
+
+    const settings = await this.store.mutate((state) => {
+      const previousWindow =
+        state.settings.episodeNotificationWindowMinutes;
+      const previousDiscoveryDuration =
+        state.settings.discoveryReminderDurationMinutes;
+      const previousDiscoveryCron =
+        state.settings.discoveryReminderCron;
+      if (notifications !== undefined) {
+        state.settings.notifications = applyNotificationSettingsPatch(
+          state.settings.notifications,
+          notifications,
+        );
+      }
+      if (normalizedInterval !== undefined) {
+        state.settings.intervalMinutes = normalizedInterval;
+      }
+      if (normalizedNotificationWindow !== undefined) {
+        state.settings.episodeNotificationWindowMinutes =
+          normalizedNotificationWindow;
+        if (normalizedNotificationWindow !== previousWindow) {
+          const nowMs = this.now().getTime();
+          for (const pending of state.pendingNotifications) {
+            const firstObservedMs =
+              Date.parse(pending.firstObservedAt || "") || nowMs;
+            const dueAtMs =
+              normalizedNotificationWindow === 0
+                ? nowMs
+                : firstObservedMs +
+                  normalizedNotificationWindow * 60_000;
+            pending.dueAt = new Date(dueAtMs).toISOString();
+            pending.lastError = null;
+            for (const event of state.events) {
+              if (pending.eventIds.includes(event.id)) {
+                event.notificationDueAt = pending.dueAt;
+                event.notificationError = null;
+              }
+            }
+          }
+        }
+      }
+      if (normalizedDiscoveryDuration !== undefined) {
+        state.settings.discoveryReminderDurationMinutes =
+          normalizedDiscoveryDuration;
+      }
+      if (normalizedDiscoveryCron !== undefined) {
+        state.settings.discoveryReminderCron = normalizedDiscoveryCron;
+      }
+
+      const discoverySettingsChanged =
+        normalizedDiscoveryDuration !== undefined &&
+        normalizedDiscoveryDuration !== previousDiscoveryDuration ||
+        normalizedDiscoveryCron !== undefined &&
+        normalizedDiscoveryCron !== previousDiscoveryCron;
+      if (discoverySettingsChanged) {
+        const nowMs = this.now().getTime();
+        const durationMinutes =
+          state.settings.discoveryReminderDurationMinutes;
+        const cron = state.settings.discoveryReminderCron;
+        state.discoveryReminders = state.discoveryReminders
+          .map((reminder) => {
+            if (!durationMinutes) {
+              return null;
+            }
+            const firstDiscoveredMs = Date.parse(
+              reminder.firstDiscoveredAt || "",
+            );
+            if (!Number.isFinite(firstDiscoveredMs)) {
+              return null;
+            }
+            const expiresAtMs =
+              firstDiscoveredMs + durationMinutes * 60_000;
+            if (expiresAtMs <= nowMs) {
+              return null;
+            }
+            reminder.expiresAt = new Date(expiresAtMs).toISOString();
+            reminder.nextReminderAt = nextDiscoveryReminderTime(
+              cron,
+              nowMs,
+              expiresAtMs,
+            );
+            reminder.lastError = null;
+            return reminder;
+          })
+          .filter(Boolean);
+      } else {
+        const nowMs = this.now().getTime();
+        state.discoveryReminders = state.discoveryReminders.filter(
+          (reminder) =>
+            (Date.parse(reminder.expiresAt || "") || 0) > nowMs,
+        );
+      }
+      return {
+        intervalMinutes: state.settings.intervalMinutes,
+        episodeNotificationWindowMinutes:
+          state.settings.episodeNotificationWindowMinutes ||
+          DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
+        discoveryReminderDurationMinutes:
+          state.settings.discoveryReminderDurationMinutes,
+        discoveryReminderCron: state.settings.discoveryReminderCron,
+        notifications: describeNotificationSettings(
+          state.settings.notifications,
+        ),
+        pendingNotificationCount: state.pendingNotifications.length,
+        pendingDiscoveryReminderCount:
+          state.discoveryReminders.length,
+      };
+    });
+
+    if (
+      (normalizedInterval !== undefined ||
+        normalizedNotificationWindow !== undefined ||
+        notifications !== undefined ||
+        normalizedDiscoveryDuration !== undefined ||
+        normalizedDiscoveryCron !== undefined) &&
+      !this.stopped
+    ) {
+      await this.flushDiscoveryReminders();
+      await this.flushDueNotifications();
+      await this.reschedule();
+    }
+    return settings;
+  }
+
+  async sendTestNotification() {
+    const state = await this.store.read();
+    const result = await this.sendNotifications(state.settings.notifications, {
+      title: "红果追更连接成功",
+      body: "后续发现新集、新季或完结时，会发送提醒。",
+      group: "红果追更",
+    });
+    return {
+      ...result,
+      message: summarizeNotificationDelivery(result),
+    };
+  }
+
+  async getDashboard() {
+    const state = await this.store.read();
+    const nowMs = this.now().getTime();
+    const subscriptions = state.subscriptions.map((subscription) => {
+      const seasons = [...subscription.seasons].sort(
+        (left, right) => seasonSortValue(right) - seasonSortValue(left),
+      );
+      const latestSeason = seasons[0];
+      const firstSeason = subscription.seasons.find(
+        (season) => season.seriesId === subscription.firstSeasonId,
+      );
+      const currentEpisodeCount = seasons.reduce(
+        (sum, season) => sum + (season.highWaterEpisodeCount || 0),
+        0,
+      );
+      return {
+        id: subscription.id,
+        title: subscription.displayTitle || subscription.title,
+        displayTitle:
+          subscription.displayTitle ||
+          subscription.firstSeasonTitle ||
+          subscription.title,
+        firstSeasonId: subscription.firstSeasonId,
+        firstSeasonTitle:
+          subscription.firstSeasonTitle ||
+          subscription.displayTitle ||
+          subscription.title,
+        coverUrl: firstSeason?.coverUrl || subscription.coverUrl,
+        seriesGroupId: subscription.seriesGroupId,
+        seriesStatus: subscription.seriesStatus,
+        seriesStatusReason: subscription.seriesStatusReason,
+        completedAt: subscription.completedAt,
+        seriesCompletionAnnounced:
+          subscription.seriesCompletionAnnounced,
+        hasUnreadUpdate: subscription.hasUnreadUpdate === true,
+        lastWatchedAt: subscription.lastWatchedAt,
+        createdAt: subscription.createdAt,
+        updatedAt: subscription.updatedAt,
+        lastCheckedAt: subscription.lastCheckedAt,
+        lastError: subscription.lastError,
+        seasonCount: seasons.length,
+        highWaterEpisodeCount: currentEpisodeCount,
+        latestSeasonId: latestSeason?.seriesId || null,
+        seasons: seasons.map((season) => ({
+          seriesId: season.seriesId,
+          title: season.title,
+          coverUrl: season.coverUrl,
+          status: season.status,
+          episodeCount: season.episodeCount,
+          highWaterEpisodeCount: season.highWaterEpisodeCount,
+          totalEpisodeCount: season.totalEpisodeCount,
+          accessibleEpisodeCount: season.accessibleEpisodeCount,
+          firstVisibleTime: season.firstVisibleTime,
+          lastEpisodeChangedAt: season.lastEpisodeChangedAt,
+          addedAt: season.addedAt,
+          updatedAt: season.updatedAt,
+          lastCheckedAt: season.lastCheckedAt,
+          lastError: season.lastError,
+          source: season.source,
+          detailUrl: season.detailUrl,
+          isLatest: season.seriesId === latestSeason?.seriesId,
+        })),
+      };
+    });
+
+    return {
+      app: {
+        name: "红果追更",
+        checking: this.checking,
+        nextCheckAt: this.nextCheckAt,
+      },
+      settings: {
+        notifications: describeNotificationSettings(
+          state.settings.notifications,
+        ),
+        intervalMinutes:
+          state.settings.intervalMinutes || DEFAULT_INTERVAL_MINUTES,
+        episodeNotificationWindowMinutes:
+          state.settings.episodeNotificationWindowMinutes ||
+          DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
+        pendingNotificationCount: state.pendingNotifications.length,
+        discoveryReminderDurationMinutes:
+          state.settings.discoveryReminderDurationMinutes,
+        discoveryReminderCron: state.settings.discoveryReminderCron,
+        pendingDiscoveryReminderCount:
+          state.discoveryReminders.filter((reminder) => {
+            const expiresAtMs = Date.parse(reminder.expiresAt || "");
+            const nextReminderMs = Date.parse(
+              reminder.nextReminderAt || "",
+            );
+            return (
+              Number.isFinite(expiresAtMs) &&
+              expiresAtMs > nowMs &&
+              Number.isFinite(nextReminderMs)
+            );
+          }).length,
+        lastCheckAt: state.settings.lastCheckAt,
+        lastCheckResult: state.settings.lastCheckResult,
+      },
+      subscriptions,
+      events: state.events.slice(0, 40),
+    };
+  }
+
+  async checkSubscription(subscriptionId, options = {}) {
+    return this.enqueue(async () => {
+      this.checking = true;
+      try {
+        const snapshot = await this.store.read();
+        if (
+          !snapshot.subscriptions.some((item) => item.id === subscriptionId)
+        ) {
+          throw new ReminderError(
+            "追更条目不存在。",
+            "SUBSCRIPTION_NOT_FOUND",
+            404,
+          );
+        }
+        const notificationEvents = [];
+        const result = await this.checkOne(subscriptionId, {
+          ...options,
+          notificationMode: "manual",
+          eventSink: notificationEvents,
+        });
+        if (options.notify ?? true) {
+          await this.deliverCheckSummary(notificationEvents, {
+            mode: "detailed",
+            subscriptionId,
+          });
+          await this.flushDueNotificationsLocked();
+        }
+        await this.recordCheckRun(result);
+        return result;
+      } finally {
+        this.checking = false;
+      }
+    });
+  }
+
+  async checkSubscriptions(subscriptionIds, options = {}) {
+    return this.enqueue(async () => {
+      this.checking = true;
+      try {
+        const uniqueIds = [
+          ...new Set(
+            (Array.isArray(subscriptionIds) ? subscriptionIds : [])
+              .map((item) => String(item || ""))
+              .filter(Boolean),
+          ),
+        ];
+        const entries = await mapWithConcurrency(
+          uniqueIds,
+          NETWORK_CONCURRENCY,
+          async (subscriptionId) => {
+            try {
+              const notificationEvents = [];
+              const result = await this.checkOne(subscriptionId, {
+                ...options,
+                notificationMode: "aggregated",
+                skipCompleted: options.skipCompleted ?? true,
+                eventSink: notificationEvents,
+              });
+              return {
+                subscriptionId,
+                result,
+                notificationEvents,
+                error: null,
+              };
+            } catch (error) {
+              return {
+                subscriptionId,
+                result: null,
+                notificationEvents: [],
+                error,
+              };
+            }
+          },
+        );
+        const notificationEvents = entries.flatMap(
+          (entry) => entry.notificationEvents,
+        );
+        if (options.notify ?? true) {
+          await this.deliverCheckSummary(notificationEvents, {
+            mode: "summary",
+          });
+          await this.flushDueNotificationsLocked();
+        }
+        const aggregate = {
+          subscriptions: entries.length,
+          checkedSubscriptions: entries.filter(
+            (entry) =>
+              entry.result &&
+              !entry.result.skipped &&
+              entry.result.errors === 0,
+          ).length,
+          skippedCompleted: entries.filter(
+            (entry) => entry.result?.skipped === "completed",
+          ).length,
+          failedSubscriptions: entries.filter(
+            (entry) => entry.error || entry.result?.errors > 0,
+          ).length,
+          seasonsChecked: entries.reduce(
+            (sum, entry) => sum + (entry.result?.seasonsChecked || 0),
+            0,
+          ),
+          errors: entries.reduce(
+            (sum, entry) =>
+              sum + (entry.error ? 1 : entry.result?.errors || 0),
+            0,
+          ),
+          updatedSeasons: entries.reduce(
+            (sum, entry) => sum + (entry.result?.updatedSeasons || 0),
+            0,
+          ),
+          discoveredSeasons: entries.reduce(
+            (sum, entry) => sum + (entry.result?.discoveredSeasons || 0),
+            0,
+          ),
+          results: entries.map(({ notificationEvents: _, ...entry }) => entry),
+        };
+        await this.recordCheckRun(aggregate);
+        return aggregate;
+      } finally {
+        this.checking = false;
+      }
+    });
+  }
+
+  async checkAll(options = {}) {
+    return this.enqueue(async () => {
+      this.checking = true;
+      try {
+        const snapshot = await this.store.read();
+        const results = [];
+        const notificationEvents = [];
+        for (const subscription of snapshot.subscriptions) {
+          results.push(
+            await this.checkOne(subscription.id, {
+              notify: options.notify ?? true,
+              discover: options.discover ?? true,
+              forceDiscovery: options.forceDiscovery ?? false,
+              skipCompleted: options.skipCompleted ?? true,
+              notificationMode: "aggregated",
+              eventSink: notificationEvents,
+              markUnread: options.markUnread ?? true,
+            }),
+          );
+        }
+        if (options.notify ?? true) {
+          await this.deliverCheckSummary(notificationEvents, {
+            mode: "summary",
+          });
+          await this.flushDueNotificationsLocked();
+        }
+        const aggregate = {
+          subscriptions: results.length,
+          checkedSubscriptions: results.filter(
+            (result) => !result.skipped,
+          ).length,
+          skippedCompleted: results.filter(
+            (result) => result.skipped === "completed",
+          ).length,
+          seasonsChecked: results.reduce(
+            (sum, result) => sum + result.seasonsChecked,
+            0,
+          ),
+          errors: results.reduce((sum, result) => sum + result.errors, 0),
+          updatedSeasons: results.reduce(
+            (sum, result) => sum + result.updatedSeasons,
+            0,
+          ),
+          discoveredSeasons: results.reduce(
+            (sum, result) => sum + result.discoveredSeasons,
+            0,
+          ),
+        };
+        await this.recordCheckRun(aggregate);
+        return aggregate;
+      } finally {
+        this.checking = false;
+      }
+    });
+  }
+
+  async recordCheckRun(result) {
+    await this.store.mutate((state) => {
+      state.settings.lastCheckAt = this.now().toISOString();
+      state.settings.lastCheckResult =
+        result.errors === 0
+          ? "success"
+          : result.seasonsChecked > result.errors
+            ? "partial"
+            : "error";
+    });
+  }
+
+  async checkOne(
+    subscriptionId,
+    {
+      notify = true,
+      discover = true,
+      forceDiscovery = false,
+      skipCompleted = false,
+      notificationMode = "aggregated",
+      eventSink = null,
+      markUnread = true,
+    } = {},
+  ) {
+    const snapshot = await this.store.read();
+    const subscription = snapshot.subscriptions.find(
+      (item) => item.id === subscriptionId,
+    );
+    if (!subscription) {
+      throw new ReminderError("追更条目不存在。", "SUBSCRIPTION_NOT_FOUND", 404);
+    }
+    if (skipCompleted && isKnownCompletedSeries(subscription)) {
+      return {
+        subscriptionId,
+        skipped: "completed",
+        seasonsChecked: 0,
+        updatedSeasons: 0,
+        discoveredSeasons: 0,
+        errors: 0,
+        discoveryError: null,
+      };
+    }
+
+    const timestamp = this.now().toISOString();
+    const nowMs = this.now().getTime();
+    const seasons = [...subscription.seasons];
+    const shouldDiscover =
+      discover &&
+      (forceDiscovery ||
+        !isRecent(
+          subscription.discovery?.lastRunAt,
+          this.discoveryIntervalMs,
+          nowMs,
+        ));
+    const albumDiscoveryPromise = shouldDiscover
+      ? this.fetchAlbumSeries(subscription.primarySeriesId).then(
+          (album) => ({ album, error: null }),
+          (error) => ({ album: null, error }),
+        )
+      : Promise.resolve({ album: null, error: null });
+    const [seasonResults, albumDiscovery] = await Promise.all([
+      mapWithConcurrency(
+        seasons,
+        NETWORK_CONCURRENCY,
+        async (season) => {
+          try {
+            const result = await this.fetchDetail(season.seriesId);
+            return { season, ...result, ok: true };
+          } catch (error) {
+            return { season, ok: false, error };
+          }
+        },
+      ),
+      albumDiscoveryPromise,
+    ]);
+    const albumDiscoveryError = albumDiscovery.error || null;
+    const albumMetadata = normalizeAlbumMetadata(
+      albumDiscoveryError ? null : albumDiscovery.album,
+    );
+    const albumSeriesIds = albumMetadata.publishedSeriesIds;
+
+    const candidateMap = new Map();
+    // Official album entries are authoritative and must not be crowded out by
+    // the recommendation list, which regularly contains dozens of unrelated IDs.
+    for (const seriesId of albumSeriesIds) {
+      const normalizedSeriesId = String(seriesId || "");
+      if (
+        /^\d{8,25}$/.test(normalizedSeriesId) &&
+        !seasons.some((season) => season.seriesId === normalizedSeriesId)
+      ) {
+        candidateMap.set(normalizedSeriesId, {
+          seriesId: normalizedSeriesId,
+          title: "",
+          coverUrl: "",
+          episodeCount: 0,
+          source: "album",
+        });
+      }
+    }
+    for (const result of seasonResults) {
+      if (!result.ok) {
+        continue;
+      }
+      for (const recommendation of result.recommendations || []) {
+        if (
+          !seasons.some(
+            (season) => season.seriesId === recommendation.seriesId,
+          ) &&
+          !candidateMap.has(recommendation.seriesId)
+        ) {
+          candidateMap.set(recommendation.seriesId, {
+            ...recommendation,
+            source: "recommendation",
+          });
+        }
+      }
+    }
+
+    const candidateChecks = [];
+    if (shouldDiscover) {
+      const candidates = [...candidateMap.values()]
+        .filter((candidate) => {
+          const cached =
+            subscription.discovery?.candidates?.[candidate.seriesId];
+          return (
+            forceDiscovery ||
+            !cached ||
+            cached.lastError ||
+            !isRecent(
+              cached.checkedAt,
+              this.candidateRecheckMs,
+              nowMs,
+            )
+          );
+        })
+        .slice(0, Math.max(0, MAX_SEASONS_PER_SERIES - seasons.length));
+      const candidateResults = await mapWithConcurrency(
+        candidates,
+        NETWORK_CONCURRENCY,
+        async (candidate) => {
+          try {
+            const result = await this.fetchDetail(candidate.seriesId);
+            return {
+              candidate,
+              ok: true,
+              matchesGroup:
+                Boolean(result.detail.seriesGroupId) &&
+                result.detail.seriesGroupId === subscription.seriesGroupId,
+              detail: result.detail,
+            };
+          } catch (error) {
+            return { candidate, ok: false, error };
+          }
+        },
+      );
+      candidateChecks.push(...candidateResults);
+    }
+
+    const generatedEvents = [];
+    let updatedSeasons = 0;
+    let discoveredSeasons = 0;
+    let discoveredNewerSeason = false;
+    let errors = 0;
+    let resultSubscriptionId = subscriptionId;
+    let observedDiscoveryIssue = null;
+
+    await this.store.mutate((state) => {
+      const current = state.subscriptions.find(
+        (item) => item.id === subscriptionId,
+      );
+      if (!current) {
+        resultSubscriptionId = null;
+        return;
+      }
+
+      for (const result of seasonResults) {
+        const season = current.seasons.find(
+          (item) => item.seriesId === result.season.seriesId,
+        );
+        if (!season) {
+          continue;
+        }
+        season.lastCheckedAt = timestamp;
+        season.updatedAt = timestamp;
+
+        if (!result.ok) {
+          errors += 1;
+          const message =
+            normalizeWhitespace(result.error?.message) || "检查剧集失败。";
+          const wasDifferent = season.lastError !== message;
+          season.lastError = message;
+          if (wasDifferent) {
+            appendEvent(state, {
+              id: createId("evt_"),
+              type: EVENT_TYPE.ERROR,
+              subscriptionId: current.id,
+              seasonId: season.seriesId,
+              seasonTitle: season.title,
+              message: `《${season.title}》检查失败：${message}`,
+              episodeCount: season.highWaterEpisodeCount,
+              previousEpisodeCount: null,
+              createdAt: timestamp,
+              notified: false,
+            });
+          }
+          continue;
+        }
+
+        const detail = result.detail;
+        const previousHighWater = season.highWaterEpisodeCount;
+        season.lastError = null;
+        season.title = detail.title;
+        season.coverUrl = detail.coverUrl || season.coverUrl;
+        season.seriesGroupId =
+          detail.seriesGroupId || season.seriesGroupId || null;
+        season.intro = detail.intro || season.intro;
+        season.tags = detail.tags.length ? detail.tags : season.tags;
+        season.firstVisibleTime =
+          detail.firstVisibleTime || season.firstVisibleTime;
+        season.status = detail.status;
+        season.episodeCount = detail.episodeCount;
+        season.totalEpisodeCount = detail.totalEpisodeCount;
+        season.accessibleEpisodeCount = detail.accessibleEpisodeCount;
+        season.rightText = detail.rightText;
+        season.lastObservedEpisodeCount = detail.episodeCount;
+        season.highWaterEpisodeCount = Math.max(
+          previousHighWater,
+          detail.episodeCount,
+        );
+
+        if (detail.episodeCount > previousHighWater) {
+          updatedSeasons += 1;
+          season.lastEpisodeChangedAt = timestamp;
+          const event = appendEvent(state, {
+            id: createId("evt_"),
+            type: EVENT_TYPE.EPISODE,
+            subscriptionId: current.id,
+            seasonId: season.seriesId,
+            seasonTitle: season.title,
+            message: `《${season.title}》更新到第 ${detail.episodeCount} 集，新增 ${
+              detail.episodeCount - previousHighWater
+            } 集。`,
+            episodeCount: detail.episodeCount,
+            previousEpisodeCount: previousHighWater,
+            createdAt: timestamp,
+            notified: false,
+          });
+          if (event) {
+            if (markUnread) {
+              current.hasUnreadUpdate = true;
+            }
+            if (notify && notificationMode !== "manual") {
+              queueEpisodeNotification(
+                state,
+                event,
+                state.settings.episodeNotificationWindowMinutes,
+                nowMs,
+              );
+            }
+            if (notify) {
+              queueDiscoveryReminder(state, event, nowMs);
+            }
+            generatedEvents.push(event);
+          }
+        }
+
+      }
+
+      for (const result of candidateChecks) {
+        current.discovery.candidates[result.candidate.seriesId] = {
+          checkedAt: timestamp,
+          matchesGroup: Boolean(result.ok && result.matchesGroup),
+          lastError: result.ok
+            ? null
+            : normalizeWhitespace(result.error?.message) ||
+              "候选季检查失败。",
+        };
+        if (
+          !result.ok ||
+          !result.matchesGroup ||
+          current.seasons.some(
+            (season) => season.seriesId === result.detail.seriesId,
+          ) ||
+          current.seasons.length >= MAX_SEASONS_PER_SERIES
+        ) {
+          continue;
+        }
+
+        const newSeason = createSeason(
+          result.detail,
+          result.candidate.source === "album" ? "album" : "recommendation",
+          timestamp,
+        );
+        const seasonsBefore = [...current.seasons];
+        current.seasons.push(newSeason);
+        if (hasNewerSeason(seasonsBefore, current.seasons)) {
+          discoveredNewerSeason = true;
+        }
+        discoveredSeasons += 1;
+        const event = appendEvent(state, {
+          id: createId("evt_"),
+          type: EVENT_TYPE.SEASON,
+          subscriptionId: current.id,
+          seasonId: newSeason.seriesId,
+          seasonTitle: newSeason.title,
+          message: `发现同系列新季《${newSeason.title}》，当前 ${newSeason.episodeCount} 集。`,
+          episodeCount: newSeason.episodeCount,
+          previousEpisodeCount: null,
+          createdAt: timestamp,
+          notified: false,
+        });
+        if (event) {
+          if (markUnread) {
+            current.hasUnreadUpdate = true;
+          }
+          if (notify) {
+            queueDiscoveryReminder(state, event, nowMs);
+          }
+          generatedEvents.push(event);
+        }
+      }
+
+      if (discoveredNewerSeason) {
+        current.seriesCompletionAnnounced = false;
+        current.completedAt = null;
+        current.seriesCompletionVerifiedAt = null;
+      }
+
+      let discoveryIssue = null;
+      if (albumDiscoveryError) {
+        discoveryIssue =
+          normalizeWhitespace(albumDiscoveryError.message) ||
+          "多季列表检查失败。";
+        current.discovery.lastDiscoveryIssue = discoveryIssue;
+      } else if (shouldDiscover) {
+        const metadataIssue = albumMetadataIssue(albumMetadata);
+        const verificationComplete = seriesVerificationComplete(
+          current.seasons,
+          albumSeriesIds,
+        );
+        const currentSeasonIds = new Set(
+          current.seasons.map((season) => season.seriesId),
+        );
+        const albumSeriesIdSet = new Set(albumSeriesIds);
+        const missingPublishedSeasonCount = albumSeriesIds.filter(
+          (seriesId) => !currentSeasonIds.has(seriesId),
+        ).length;
+        const extraLocalSeasonCount = current.seasons.filter(
+          (season) => !albumSeriesIdSet.has(season.seriesId),
+        ).length;
+        const verificationIssue =
+          missingPublishedSeasonCount > 0
+            ? `官方多季列表中的季度未能全部确认，还有 ${missingPublishedSeasonCount} 个已发布季度待确认，后续检查会自动重试。`
+            : extraLocalSeasonCount > 0
+              ? `官方多季列表中的季度未能全部确认，本地有 ${extraLocalSeasonCount} 个已确认季度不在当前官方多季列表中，后续检查会自动重试。`
+              : "官方多季列表中的季度未能全部确认，后续检查会自动重试。";
+        discoveryIssue =
+          metadataIssue ||
+          (verificationComplete
+            ? null
+            : verificationIssue);
+        current.discovery.lastRunAt = timestamp;
+        current.discovery.lastDiscoveryIssue = discoveryIssue;
+        current.discovery.confirmedSeriesIds = verificationComplete
+          ? albumSeriesIds
+          : [];
+        current.discovery.lastCompletedAt =
+          verificationComplete && !metadataIssue ? timestamp : null;
+        current.discovery.unpublishedSeriesIds =
+          albumMetadata.unpublishedSeriesIds;
+        current.discovery.unpublishedSeasonCount =
+          albumMetadata.unpublishedSeasonCount;
+        current.discovery.albumSeasonCount =
+          albumMetadata.declaredSeasonCount;
+        current.discovery.albumItemCount = albumMetadata.itemCount;
+      } else {
+        discoveryIssue = current.discovery.lastDiscoveryIssue || null;
+      }
+      observedDiscoveryIssue = discoveryIssue;
+      const identity = applySubscriptionIdentity(current);
+      const status = deriveSeriesStatus(current.seasons, {
+        confirmedSeriesIds: current.discovery.confirmedSeriesIds,
+        discoveryError: discoveryIssue,
+        seasonErrors: errors,
+        unpublishedSeasonCount:
+          current.discovery.unpublishedSeasonCount,
+      });
+      current.seriesStatus = status.status;
+      current.seriesStatusReason = status.reason;
+      if (status.status === SERIES_STATUS.COMPLETED) {
+        current.seriesCompletionVerifiedAt ||= timestamp;
+        current.completedAt ||= timestamp;
+        if (!current.seriesCompletionAnnounced) {
+          const seasonEpisodeCount = current.seasons.reduce(
+            (sum, season) => sum + (season.highWaterEpisodeCount || 0),
+            0,
+          );
+          const event = appendEvent(state, {
+            id: createId("evt_"),
+            type: EVENT_TYPE.COMPLETED,
+            subscriptionId: current.id,
+            seasonId: null,
+            seasonTitle: identity.displayTitle,
+            message: `《${identity.displayTitle}》最高季明确标注“完结篇”，整个系列已完结，共 ${current.seasons.length} 季，合计 ${seasonEpisodeCount} 集。`,
+            episodeCount: seasonEpisodeCount,
+            seasonCount: current.seasons.length,
+            previousEpisodeCount: null,
+            createdAt: timestamp,
+            notified: false,
+          });
+          current.seriesCompletionAnnounced = true;
+          if (event) {
+            generatedEvents.push(event);
+          }
+        }
+      } else if (status.status === SERIES_STATUS.UPDATING) {
+        current.seriesCompletionAnnounced = false;
+        current.completedAt = null;
+        current.seriesCompletionVerifiedAt = null;
+      } else {
+        if (!current.seriesCompletionVerifiedAt) {
+          current.completedAt = null;
+          current.seriesCompletionAnnounced = false;
+        }
+      }
+      current.lastCheckedAt = timestamp;
+      current.updatedAt = timestamp;
+      current.lastError =
+        errors > 0 ? `${errors} 个季度检查失败，可稍后重试。` : null;
+    });
+
+    if (resultSubscriptionId && eventSink) {
+      eventSink.push(...generatedEvents);
+    }
+
+    return {
+      subscriptionId: resultSubscriptionId,
+      seasonsChecked: seasons.length,
+      updatedSeasons,
+      discoveredSeasons,
+      errors,
+      discoveryError: observedDiscoveryIssue,
+    };
+  }
+
+  async deliverCheckSummary(
+    events,
+    { mode = "summary", subscriptionId = null } = {},
+  ) {
+    const immediateEvents = events.filter(
+      (event) =>
+        !event.notificationDueAt && SUMMARY_EVENT_TYPES.has(event.type),
+    );
+    if (!immediateEvents.length) {
+      return;
+    }
+    const state = await this.store.read();
+    const notificationSettings = state.settings.notifications;
+    if (!enabledNotificationChannels(notificationSettings).length) {
+      return;
+    }
+
+    const message =
+      mode === "detailed"
+        ? detailedCheckMessage(state, immediateEvents, subscriptionId)
+        : batchCheckMessage(state, immediateEvents);
+    if (!message) {
+      return;
+    }
+
+    let notified = false;
+    let notificationError = null;
+    try {
+      const result = await this.sendNotifications(notificationSettings, {
+        ...message,
+        group: "红果追更",
+      });
+      notified = result.delivered > 0;
+      if (result.failed > 0) {
+        notificationError = summarizeNotificationDelivery(result, {
+          subject: mode === "detailed" ? "检查详情" : "汇总通知",
+        });
+      }
+    } catch (error) {
+      notificationError =
+        normalizeWhitespace(error?.message) || "通知发送失败。";
+    }
+
+    const eventIds = new Set(immediateEvents.map((event) => event.id));
+    await this.store.mutate((currentState) => {
+      for (const storedEvent of currentState.events) {
+        if (!eventIds.has(storedEvent.id)) {
+          continue;
+        }
+        storedEvent.notified = notified;
+        storedEvent.notificationError = notificationError;
+      }
+    });
+  }
+
+  async flushDiscoveryReminders() {
+    return this.enqueue(() => this.flushDiscoveryRemindersLocked());
+  }
+
+  async flushDiscoveryRemindersLocked() {
+    const state = await this.store.read();
+    const nowMs = this.now().getTime();
+    const activeReminders = state.discoveryReminders.filter((reminder) => {
+      const expiresAtMs = Date.parse(reminder.expiresAt || "");
+      return Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+    });
+
+    if (!enabledNotificationChannels(state.settings.notifications).length) {
+      if (activeReminders.length !== state.discoveryReminders.length) {
+        await this.store.mutate((currentState) => {
+          currentState.discoveryReminders =
+            currentState.discoveryReminders.filter(
+              (reminder) =>
+                (Date.parse(reminder.expiresAt || "") || 0) > nowMs,
+            );
+        });
+      }
+      return {
+        sent: 0,
+        pending: activeReminders.filter((reminder) =>
+          Number.isFinite(Date.parse(reminder.nextReminderAt || "")),
+        ).length,
+      };
+    }
+
+    const dueReminders = activeReminders.filter((reminder) => {
+      const nextReminderMs = Date.parse(
+        reminder.nextReminderAt || "",
+      );
+      return Number.isFinite(nextReminderMs) && nextReminderMs <= nowMs;
+    });
+    if (!dueReminders.length) {
+      if (activeReminders.length !== state.discoveryReminders.length) {
+        await this.store.mutate((currentState) => {
+          currentState.discoveryReminders =
+            currentState.discoveryReminders.filter(
+              (reminder) =>
+                (Date.parse(reminder.expiresAt || "") || 0) > nowMs,
+            );
+        });
+      }
+      return {
+        sent: 0,
+        pending: activeReminders.filter((reminder) =>
+          Number.isFinite(Date.parse(reminder.nextReminderAt || "")),
+        ).length,
+      };
+    }
+
+    const message = discoveryReminderCopy(state, dueReminders, nowMs);
+    let notified = false;
+    let notificationError = null;
+    if (message) {
+      try {
+        const result = await this.sendNotifications(
+          state.settings.notifications,
+          {
+            ...message,
+            group: "红果追更",
+          },
+        );
+        notified = result.delivered > 0;
+        if (result.failed > 0) {
+          notificationError = summarizeNotificationDelivery(result, {
+            subject: "持续提醒",
+          });
+        }
+      } catch (error) {
+        notificationError =
+          normalizeWhitespace(error?.message) || "持续提醒发送失败。";
+      }
+    } else {
+      notificationError = "持续提醒内容已失效。";
+    }
+
+    const completedAtMs = this.now().getTime();
+    const dueIds = new Set(dueReminders.map((reminder) => reminder.id));
+    await this.store.mutate((currentState) => {
+      currentState.discoveryReminders =
+        currentState.discoveryReminders
+          .map((reminder) => {
+            const expiresAtMs = Date.parse(reminder.expiresAt || "");
+            if (
+              !Number.isFinite(expiresAtMs) ||
+              expiresAtMs <= completedAtMs
+            ) {
+              return null;
+            }
+            if (!dueIds.has(reminder.id)) {
+              return reminder;
+            }
+            if (notified) {
+              reminder.lastReminderAt =
+                new Date(completedAtMs).toISOString();
+              reminder.nextReminderAt = nextDiscoveryReminderTime(
+                currentState.settings.discoveryReminderCron,
+                completedAtMs,
+                expiresAtMs,
+              );
+              reminder.lastError = null;
+              return reminder.nextReminderAt ? reminder : null;
+            }
+
+            const retryAtMs = completedAtMs + NOTIFICATION_RETRY_MS;
+            if (retryAtMs >= expiresAtMs) {
+              return null;
+            }
+            reminder.nextReminderAt = new Date(retryAtMs).toISOString();
+            reminder.lastError =
+              notificationError || "持续提醒发送失败，稍后重试。";
+            return reminder;
+          })
+          .filter(Boolean);
+    });
+
+    const latestState = await this.store.read();
+    return {
+      sent: notified ? 1 : 0,
+      pending: latestState.discoveryReminders.filter((reminder) => {
+        const expiresAtMs = Date.parse(reminder.expiresAt || "");
+        return (
+          Number.isFinite(expiresAtMs) &&
+          expiresAtMs > completedAtMs &&
+          Number.isFinite(Date.parse(reminder.nextReminderAt || ""))
+        );
+      }).length,
+    };
+  }
+
+  async flushDueNotifications() {
+    return this.enqueue(() => this.flushDueNotificationsLocked());
+  }
+
+  async flushDueNotificationsLocked() {
+    const state = await this.store.read();
+    if (!enabledNotificationChannels(state.settings.notifications).length) {
+      return { sent: 0, pending: state.pendingNotifications.length };
+    }
+    const nowMs = this.now().getTime();
+    const dueNotifications = state.pendingNotifications.filter((pending) => {
+      const dueAtMs = Date.parse(pending.dueAt || "");
+      return Number.isFinite(dueAtMs) && dueAtMs <= nowMs;
+    });
+    if (!dueNotifications.length) {
+      return { sent: 0, pending: state.pendingNotifications.length };
+    }
+
+    const message = pendingNotificationCopy(state, dueNotifications);
+    let notified = false;
+    let notificationError = null;
+    if (message) {
+      try {
+        const result = await this.sendNotifications(
+          state.settings.notifications,
+          {
+            ...message,
+            group: "红果追更",
+          },
+        );
+        notified = result.delivered > 0;
+        if (result.failed > 0) {
+          notificationError = summarizeNotificationDelivery(result, {
+            subject: "汇总通知",
+          });
+        }
+      } catch (error) {
+        notificationError =
+          normalizeWhitespace(error?.message) || "汇总通知发送失败。";
+      }
+    }
+
+    const pendingIds = new Set(
+      dueNotifications.map((pending) => pending.id),
+    );
+    const eventIds = new Set(
+      dueNotifications.flatMap((pending) => pending.eventIds),
+    );
+    const retryAt = new Date(
+      nowMs + NOTIFICATION_RETRY_MS,
+    ).toISOString();
+    await this.store.mutate((currentState) => {
+      for (const event of currentState.events) {
+        if (!eventIds.has(event.id)) {
+          continue;
+        }
+        event.notified = notified;
+        event.notificationError = notificationError;
+      }
+      if (notified) {
+        currentState.pendingNotifications =
+          currentState.pendingNotifications.filter(
+            (pending) => !pendingIds.has(pending.id),
+          );
+        return;
+      }
+
+      for (const pending of currentState.pendingNotifications) {
+        if (!pendingIds.has(pending.id)) {
+          continue;
+        }
+        pending.dueAt = retryAt;
+        pending.lastError =
+          notificationError || "汇总通知发送失败，稍后重试。";
+        for (const event of currentState.events) {
+          if (pending.eventIds.includes(event.id)) {
+            event.notificationDueAt = retryAt;
+          }
+        }
+      }
+    });
+
+    return {
+      sent: notified ? 1 : 0,
+      pending: (await this.store.read()).pendingNotifications.length,
+    };
+  }
+
+  async start() {
+    if (!this.stopped) {
+      return;
+    }
+    this.stopped = false;
+    await this.flushDiscoveryReminders();
+    await this.flushDueNotifications();
+    await this.scheduleNext();
+  }
+
+  stop() {
+    this.stopped = true;
+    this.nextCheckAt = null;
+    if (this.schedulerTimer) {
+      this.timers.clearTimeout(this.schedulerTimer);
+      this.schedulerTimer = null;
+    }
+  }
+
+  async reschedule() {
+    if (this.schedulerTimer) {
+      this.timers.clearTimeout(this.schedulerTimer);
+      this.schedulerTimer = null;
+    }
+    await this.scheduleNext();
+  }
+
+  async scheduleNext() {
+    if (this.stopped) {
+      return;
+    }
+    const state = await this.store.read();
+    const intervalMs =
+      (state.settings.intervalMinutes || DEFAULT_INTERVAL_MINUTES) * 60_000;
+    const lastCheckMs = Date.parse(state.settings.lastCheckAt || "");
+    const nowMs = this.now().getTime();
+    const checkTarget = Number.isFinite(lastCheckMs)
+      ? lastCheckMs + intervalMs
+      : nowMs + intervalMs;
+    const pendingDueTargets =
+      enabledNotificationChannels(state.settings.notifications).length > 0
+        ? state.pendingNotifications
+            .map((pending) => Date.parse(pending.dueAt || ""))
+            .filter(Number.isFinite)
+        : [];
+    const discoveryReminderTargets =
+      enabledNotificationChannels(state.settings.notifications).length > 0
+        ? state.discoveryReminders
+            .map((reminder) => {
+              const expiresAtMs = Date.parse(reminder.expiresAt || "");
+              const nextReminderMs = Date.parse(
+                reminder.nextReminderAt || "",
+              );
+              return Number.isFinite(expiresAtMs) &&
+                Number.isFinite(nextReminderMs) &&
+                nextReminderMs < expiresAtMs
+                ? nextReminderMs
+                : null;
+            })
+            .filter(Number.isFinite)
+        : [];
+    const target = Math.min(
+      checkTarget,
+      ...pendingDueTargets,
+      ...discoveryReminderTargets,
+    );
+    const delay = Math.max(1_000, target - nowMs);
+
+    this.nextCheckAt = new Date(checkTarget).toISOString();
+    this.schedulerTimer = this.timers.setTimeout(async () => {
+      this.schedulerTimer = null;
+      try {
+        await this.flushDiscoveryReminders();
+        await this.flushDueNotifications();
+        const latestState = await this.store.read();
+        const latestLastCheckMs = Date.parse(
+          latestState.settings.lastCheckAt || "",
+        );
+        const latestIntervalMs =
+          (latestState.settings.intervalMinutes ||
+            DEFAULT_INTERVAL_MINUTES) * 60_000;
+        const latestCheckTarget = Number.isFinite(latestLastCheckMs)
+          ? latestLastCheckMs + latestIntervalMs
+          : this.now().getTime() + latestIntervalMs;
+        if (this.now().getTime() >= latestCheckTarget - 500) {
+          await this.checkAll({ notify: true, discover: true });
+        }
+      } catch {
+        // The next timer is still scheduled so a transient error cannot stop monitoring.
+      } finally {
+        await this.scheduleNext();
+      }
+    }, delay);
+    this.schedulerTimer?.unref?.();
+  }
+}
+
+export const __test = {
+  MAX_SEASONS_PER_SERIES,
+  MAX_SUBSCRIPTIONS,
+  mapWithConcurrency,
+  seasonSortValue,
+};

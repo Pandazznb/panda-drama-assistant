@@ -1,0 +1,1194 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="通过红果短剧分享链接追更，发现同系列最新季并通过多种渠道提醒。"
+    >
+    <meta name="theme-color" content="#f7f8fa">
+    <title>红果追更</title>
+    <script src="/theme.js"></script>
+    <link
+      rel="icon"
+      href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iOCIgZmlsbD0iI2M5MmQyNSIvPjxwYXRoIGQ9Ik0xMyA5LjUgMjMgMTZsLTEwIDYuNXoiIGZpbGw9IiNmZmYiLz48L3N2Zz4="
+    >
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="app-header">
+      <div class="app-header__inner">
+        <a class="brand" href="/" aria-label="红果追更首页">
+          <span class="brand__mark" aria-hidden="true">
+            <svg class="icon" viewBox="0 0 24 24">
+              <use href="#icon-play"></use>
+            </svg>
+          </span>
+          <span class="brand__text">红果追更</span>
+        </a>
+        <div class="app-header__actions">
+          <div class="theme-switcher" role="group" aria-label="主题">
+            <button
+              class="theme-switcher__option"
+              type="button"
+              data-theme-choice="auto"
+              aria-label="自动主题，跟随系统"
+              aria-pressed="true"
+              title="自动（跟随系统）"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-auto"></use>
+              </svg>
+              <span class="theme-switcher__label">自动</span>
+            </button>
+            <button
+              class="theme-switcher__option"
+              type="button"
+              data-theme-choice="light"
+              aria-label="白天主题"
+              aria-pressed="false"
+              title="白天"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-sun"></use>
+              </svg>
+              <span class="theme-switcher__label">白天</span>
+            </button>
+            <button
+              class="theme-switcher__option"
+              type="button"
+              data-theme-choice="dark"
+              aria-label="黑夜主题"
+              aria-pressed="false"
+              title="黑夜"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-moon"></use>
+              </svg>
+              <span class="theme-switcher__label">黑夜</span>
+            </button>
+          </div>
+          <button
+            class="button button--quiet"
+            type="button"
+            id="open-settings"
+            aria-label="打开通知设置"
+            aria-haspopup="dialog"
+            title="通知设置"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-settings"></use>
+            </svg>
+            <span class="header-action__label">通知设置</span>
+            <span class="notification-state" id="notification-state">未配置</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main-content" class="page">
+      <section class="overview" aria-labelledby="page-title">
+        <div class="overview__copy">
+          <h1 id="page-title">追更列表</h1>
+        </div>
+        <div class="overview__side">
+          <dl class="stats" aria-label="追更概况">
+            <div class="stat">
+              <dt>系列</dt>
+              <dd id="stat-series">-</dd>
+            </div>
+            <div class="stat">
+              <dt>已确认季</dt>
+              <dd id="stat-seasons">-</dd>
+            </div>
+            <div class="stat stat--wide">
+              <dt>上次检查</dt>
+              <dd id="stat-last-check">尚未检查</dd>
+            </div>
+          </dl>
+          <button class="button button--secondary" type="button" id="check-all">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-refresh"></use>
+            </svg>
+            <span>立即检查</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="capture-band" aria-labelledby="add-title">
+        <form class="add-form" id="add-form" novalidate>
+          <div class="field field--grow series-search-field" id="series-search-field">
+            <label for="share-input" id="add-title">搜索或添加短剧</label>
+            <input
+              id="share-input"
+              name="share"
+              type="text"
+              inputmode="search"
+              enterkeyhint="search"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="搜索剧名，或粘贴分享链接 / 剧集 ID"
+              aria-describedby="share-help share-feedback"
+              aria-autocomplete="list"
+              aria-expanded="false"
+              aria-controls="series-search-list"
+              aria-haspopup="listbox"
+              role="combobox"
+            >
+            <div
+              class="series-search-panel"
+              id="series-search-panel"
+              hidden
+            >
+              <p
+                class="series-search-panel__status"
+                id="series-search-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+              <ul
+                class="series-search-results"
+                id="series-search-list"
+                role="listbox"
+                aria-label="红果短剧搜索结果"
+              ></ul>
+            </div>
+            <p class="field__help" id="share-help">
+              输入剧名搜索官方结果，也支持红果分享链接和纯数字剧集 ID。
+            </p>
+            <p class="field__feedback" id="share-feedback" aria-live="polite"></p>
+          </div>
+          <div class="add-actions">
+            <button class="button button--primary" type="submit" id="add-submit">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-plus"></use>
+              </svg>
+              <span>加入追更</span>
+            </button>
+            <button
+              class="button button--secondary"
+              type="button"
+              id="open-screenshot-import"
+              aria-haspopup="dialog"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-image-plus"></use>
+              </svg>
+              <span>截图导入</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <div class="workspace">
+        <section class="watchlist" aria-labelledby="watchlist-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="watchlist-title" tabindex="-1">正在追更</h2>
+              <p id="watchlist-summary">正在读取追更列表…</p>
+            </div>
+            <span class="check-indicator" id="check-indicator" hidden>
+              <span class="spinner" aria-hidden="true"></span>
+              正在检查
+            </span>
+          </div>
+          <div class="subscription-list" id="subscription-list" aria-live="polite">
+            <div class="skeleton-row" aria-label="正在加载">
+              <span class="skeleton skeleton--cover"></span>
+              <span class="skeleton-lines">
+                <span class="skeleton skeleton--title"></span>
+                <span class="skeleton skeleton--text"></span>
+                <span class="skeleton skeleton--short"></span>
+              </span>
+            </div>
+            <div class="skeleton-row" aria-hidden="true">
+              <span class="skeleton skeleton--cover"></span>
+              <span class="skeleton-lines">
+                <span class="skeleton skeleton--title"></span>
+                <span class="skeleton skeleton--text"></span>
+                <span class="skeleton skeleton--short"></span>
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="event-panel" aria-labelledby="event-title">
+          <div class="section-heading section-heading--compact">
+            <div>
+              <h2 id="event-title">最近动态</h2>
+              <p>更新、同系列季和检查异常</p>
+            </div>
+          </div>
+          <div class="event-list" id="event-list">
+            <p class="muted-copy">正在读取动态…</p>
+          </div>
+        </aside>
+      </div>
+
+      <footer class="page-footer">
+        <p>收藏截图只在本机进行 OCR 识别，不会上传第三方；导入后会通过官方公开详情校验同系列。</p>
+      </footer>
+    </main>
+
+    <dialog
+      class="dialog dialog--screenshot-import"
+      id="screenshot-import-dialog"
+      aria-labelledby="screenshot-import-title"
+      aria-describedby="screenshot-import-description"
+    >
+      <div class="dialog__panel">
+        <div class="dialog__header">
+          <div>
+            <p class="eyebrow">本机 OCR</p>
+            <h2 id="screenshot-import-title">从收藏截图导入</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close-dialog="screenshot-import-dialog"
+            aria-label="关闭收藏截图导入"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-close"></use>
+            </svg>
+          </button>
+        </div>
+
+        <div
+          class="dialog__body screenshot-import__body"
+          id="screenshot-import-content"
+          aria-busy="false"
+        >
+          <div class="screenshot-intro" id="screenshot-import-description">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-image-plus"></use>
+            </svg>
+            <div>
+              <strong>支持红果“收藏”页截图</strong>
+              <p>
+                单个剧本卡片需要同时露出剧名和集数。一次最多 6 张，图片只在本机识别。
+              </p>
+            </div>
+          </div>
+
+          <div class="field screenshot-file-field">
+            <label for="screenshot-files">收藏页截图</label>
+            <input
+              id="screenshot-files"
+              name="screenshots"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              aria-describedby="screenshot-file-help screenshot-feedback"
+            >
+            <p class="field__help" id="screenshot-file-help">
+              支持 JPG、PNG、WebP；超大图片会先在浏览器中缩小，避免占用过多内存。
+            </p>
+          </div>
+
+          <section
+            class="screenshot-selection"
+            id="screenshot-selection"
+            aria-labelledby="screenshot-selection-title"
+            hidden
+          >
+            <div class="screenshot-section-heading">
+              <h3 id="screenshot-selection-title">待识别截图</h3>
+              <span id="screenshot-file-count"></span>
+            </div>
+            <ul class="screenshot-file-list" id="screenshot-file-list"></ul>
+          </section>
+
+          <p
+            class="field__feedback screenshot-feedback"
+            id="screenshot-feedback"
+            role="status"
+            aria-live="polite"
+          ></p>
+
+          <section
+            class="screenshot-results"
+            id="screenshot-results"
+            aria-labelledby="screenshot-results-title"
+            hidden
+          >
+            <div class="screenshot-section-heading screenshot-section-heading--results">
+              <div>
+                <h3 id="screenshot-results-title" tabindex="-1">识别结果</h3>
+                <p id="screenshot-results-summary"></p>
+              </div>
+            </div>
+            <div class="screenshot-bulk-bar">
+              <p
+                class="screenshot-bulk-bar__status"
+                id="screenshot-selection-count"
+                role="status"
+                aria-live="polite"
+              ></p>
+              <div class="screenshot-bulk-actions">
+                <button
+                  class="button button--quiet"
+                  type="button"
+                  id="screenshot-select-all"
+                  disabled
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-check"></use>
+                  </svg>
+                  <span>全选已匹配</span>
+                </button>
+                <button
+                  class="button button--quiet"
+                  type="button"
+                  id="screenshot-clear-selection"
+                  disabled
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-close"></use>
+                  </svg>
+                  <span>取消全选</span>
+                </button>
+              </div>
+            </div>
+            <div class="screenshot-result-list" id="screenshot-result-list"></div>
+          </section>
+
+          <section
+            class="screenshot-outcomes"
+            id="screenshot-import-outcomes"
+            aria-labelledby="screenshot-outcomes-title"
+            hidden
+          >
+            <h3 id="screenshot-outcomes-title" tabindex="-1">导入结果</h3>
+            <ul class="screenshot-outcome-list" id="screenshot-outcome-list"></ul>
+          </section>
+        </div>
+
+        <div class="dialog__actions dialog__actions--split">
+          <button
+            class="button button--quiet"
+            type="button"
+            data-close-dialog="screenshot-import-dialog"
+          >
+            关闭
+          </button>
+          <div class="dialog__action-group">
+            <button
+              class="button button--secondary"
+              type="button"
+              id="analyze-screenshots"
+              disabled
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-scan-text"></use>
+              </svg>
+              <span>识别截图</span>
+            </button>
+            <button
+              class="button button--primary"
+              type="button"
+              id="import-screenshots"
+              hidden
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-list-plus"></use>
+              </svg>
+              <span>一次导入</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog
+      class="dialog dialog--settings"
+      id="settings-dialog"
+      aria-labelledby="settings-title"
+    >
+      <form class="dialog__panel" id="settings-form" novalidate>
+        <div class="dialog__header">
+          <div>
+            <p class="eyebrow">检查频率与通知渠道</p>
+            <h2 id="settings-title">通知设置</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close-dialog="settings-dialog"
+            aria-label="关闭通知设置"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-close"></use>
+            </svg>
+          </button>
+        </div>
+
+        <div class="dialog__body">
+          <div class="field">
+            <label for="interval-minutes">自动检查间隔</label>
+            <div class="number-field">
+              <input
+                id="interval-minutes"
+                name="intervalMinutes"
+                type="number"
+                min="5"
+                max="10080"
+                step="1"
+                inputmode="numeric"
+                aria-describedby="interval-help settings-feedback"
+              >
+              <span>分钟</span>
+            </div>
+            <p class="field__help" id="interval-help">
+              可设置 5 到 10080 分钟，默认 30 分钟；最长间隔为 7 天。
+            </p>
+          </div>
+
+          <div class="field">
+            <label for="episode-notification-window">加集提醒汇总</label>
+            <select
+              id="episode-notification-window"
+              name="episodeNotificationWindowMinutes"
+              aria-describedby="episode-notification-window-help settings-feedback"
+            >
+              <option value="0">立即通知</option>
+              <option value="60">1 小时</option>
+              <option value="120">2 小时</option>
+              <option value="360">6 小时</option>
+              <option value="720">12 小时</option>
+              <option value="1440">24 小时</option>
+            </select>
+            <p class="field__help" id="episode-notification-window-help">
+              批量或定时检查按此窗口合并加集，到期后所有待发系列汇总为一条；新季也随当次检查合并。手动检查单个系列会立即发送一条详情。
+            </p>
+          </div>
+
+          <fieldset class="notification-channel discovery-reminder-settings">
+            <legend>新内容持续提醒</legend>
+            <div class="discovery-reminder-settings__body">
+              <div class="field">
+                <div class="field__label-row">
+                  <label for="discovery-reminder-duration">
+                    持续提醒时长
+                  </label>
+                  <span
+                    class="channel-status"
+                    data-discovery-reminder-status
+                  >未启用</span>
+                </div>
+                <div class="number-field">
+                  <input
+                    id="discovery-reminder-duration"
+                    name="discoveryReminderDuration"
+                    type="number"
+                    min="0"
+                    max="43200"
+                    step="any"
+                    inputmode="numeric"
+                    aria-describedby="discovery-reminder-help settings-feedback"
+                  >
+                  <select
+                    id="discovery-reminder-unit"
+                    name="discoveryReminderUnit"
+                    aria-label="持续提醒时长单位"
+                  >
+                    <option value="minutes">分钟</option>
+                    <option value="hours">小时</option>
+                    <option value="days">天</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="discovery-reminder-cron">提醒频率</label>
+                <input
+                  id="discovery-reminder-cron"
+                  name="discoveryReminderCron"
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="0 */6 * * *"
+                  aria-describedby="discovery-reminder-help settings-feedback"
+                >
+              </div>
+
+              <p class="field__help" id="discovery-reminder-help">
+                0 关闭；Cron 使用 5 段格式，仅控制有效期内新季/新集的重复提醒，不改变自动检查频率。
+              </p>
+            </div>
+          </fieldset>
+
+          <fieldset
+            class="notification-channel proxy-settings"
+            data-proxy-settings
+          >
+            <legend>发送代理</legend>
+            <div class="notification-channel__summary">
+              <div>
+                <p>仅为勾选的通知渠道启用 HTTP 或 HTTPS 代理。</p>
+                <span class="channel-status" data-proxy-status>未配置</span>
+              </div>
+              <label class="channel-toggle" for="proxy-enabled">
+                <input id="proxy-enabled" type="checkbox">
+                <span class="channel-toggle__track" aria-hidden="true"></span>
+                <span>启用</span>
+              </label>
+            </div>
+            <div class="notification-channel__config" data-proxy-config hidden>
+              <div class="field">
+                <label for="proxy-url">代理地址</label>
+                <div class="input-with-action">
+                  <input
+                    id="proxy-url"
+                    name="proxyUrl"
+                    type="password"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                    placeholder="例如 http://127.0.0.1:7890"
+                    aria-describedby="proxy-help settings-feedback"
+                  >
+                  <button
+                    class="input-action"
+                    type="button"
+                    data-toggle-secret="proxy-url"
+                    aria-label="显示代理地址"
+                    aria-pressed="false"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-eye"></use>
+                    </svg>
+                  </button>
+                </div>
+                <p class="field__help" id="proxy-help">
+                  支持 http:// 和 https:// 代理，可包含用户名和密码；留空会保留已保存的地址。
+                </p>
+              </div>
+              <div
+                class="proxy-channel-field"
+                role="group"
+                aria-labelledby="proxy-channel-label"
+                aria-describedby="proxy-channel-help settings-feedback"
+              >
+                <p id="proxy-channel-label">走代理的通知渠道</p>
+                <div class="proxy-channel-options">
+                  <label class="check-field" for="proxy-channel-bark">
+                    <input
+                      id="proxy-channel-bark"
+                      type="checkbox"
+                      data-proxy-channel="bark"
+                    >
+                    <span>Bark</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-ntfy">
+                    <input
+                      id="proxy-channel-ntfy"
+                      type="checkbox"
+                      data-proxy-channel="ntfy"
+                    >
+                    <span>ntfy</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-telegram">
+                    <input
+                      id="proxy-channel-telegram"
+                      type="checkbox"
+                      data-proxy-channel="telegram"
+                    >
+                    <span>Telegram</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-wecom">
+                    <input
+                      id="proxy-channel-wecom"
+                      type="checkbox"
+                      data-proxy-channel="wecom"
+                    >
+                    <span>企业微信</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-dingtalk">
+                    <input
+                      id="proxy-channel-dingtalk"
+                      type="checkbox"
+                      data-proxy-channel="dingtalk"
+                    >
+                    <span>钉钉</span>
+                  </label>
+                </div>
+                <p class="field__help" id="proxy-channel-help">
+                  只勾选网络受限的渠道；未勾选的渠道继续直连。
+                </p>
+              </div>
+              <label class="check-field channel-clear" for="clear-proxy">
+                <input id="clear-proxy" type="checkbox">
+                <span>清除已保存的代理配置</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="notification-settings">
+            <p class="notification-settings__label">通知渠道</p>
+            <p class="notification-settings__help">
+              可同时启用多个渠道；单个渠道失败不会阻止其他渠道发送。
+            </p>
+
+            <fieldset
+              class="notification-channel"
+              data-notification-channel="bark"
+            >
+              <legend>Bark</legend>
+              <div class="notification-channel__summary">
+                <div>
+                  <p id="bark-description">发送到 iPhone 上的 Bark App。</p>
+                  <span class="channel-status" data-channel-status>未配置</span>
+                </div>
+                <label class="channel-toggle" for="enabled-bark">
+                  <input id="enabled-bark" type="checkbox">
+                  <span class="channel-toggle__track" aria-hidden="true"></span>
+                  <span>启用</span>
+                </label>
+              </div>
+              <div class="notification-channel__config" data-channel-config hidden>
+                <div class="field">
+                  <label for="bark-key">Bark key</label>
+                  <div class="input-with-action">
+                    <input
+                      id="bark-key"
+                      name="barkKey"
+                      type="password"
+                      autocomplete="new-password"
+                      spellcheck="false"
+                      placeholder="粘贴 Bark key"
+                      aria-describedby="bark-help settings-feedback"
+                    >
+                    <button
+                      class="input-action"
+                      type="button"
+                      data-toggle-secret="bark-key"
+                      aria-label="显示 Bark key"
+                      aria-pressed="false"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#icon-eye"></use>
+                      </svg>
+                    </button>
+                  </div>
+                  <p class="field__help" id="bark-help">
+                    只填 key，不要粘贴完整网址。请求固定发送到 api.day.app。
+                  </p>
+                </div>
+                <label class="check-field channel-clear" for="clear-bark">
+                  <input id="clear-bark" type="checkbox" data-clear-channel="bark">
+                  <span>清除已保存的 Bark 配置</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset
+              class="notification-channel"
+              data-notification-channel="ntfy"
+            >
+              <legend>ntfy</legend>
+              <div class="notification-channel__summary">
+                <div>
+                  <p id="ntfy-description">通过公开 ntfy 服务推送到手机或桌面。</p>
+                  <span class="channel-status" data-channel-status>未配置</span>
+                </div>
+                <label class="channel-toggle" for="enabled-ntfy">
+                  <input id="enabled-ntfy" type="checkbox">
+                  <span class="channel-toggle__track" aria-hidden="true"></span>
+                  <span>启用</span>
+                </label>
+              </div>
+              <div class="notification-channel__config" data-channel-config hidden>
+                <div class="field">
+                  <label for="ntfy-topic">Topic</label>
+                  <input
+                    id="ntfy-topic"
+                    name="ntfyTopic"
+                    type="text"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    placeholder="例如 hongguo-reminder-8f3a"
+                    aria-describedby="ntfy-help settings-feedback"
+                  >
+                  <p class="field__help" id="ntfy-help">
+                    仅支持字母、数字、下划线和短横线。请使用不易猜到的 topic。
+                  </p>
+                </div>
+                <div class="field">
+                  <label for="ntfy-token">Access token（可选）</label>
+                  <div class="input-with-action">
+                    <input
+                      id="ntfy-token"
+                      name="ntfyToken"
+                      type="password"
+                      autocomplete="new-password"
+                      spellcheck="false"
+                      placeholder="留空表示不鉴权"
+                      aria-describedby="ntfy-token-help settings-feedback"
+                    >
+                    <button
+                      class="input-action"
+                      type="button"
+                      data-toggle-secret="ntfy-token"
+                      aria-label="显示 ntfy access token"
+                      aria-pressed="false"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#icon-eye"></use>
+                      </svg>
+                    </button>
+                  </div>
+                  <p class="field__help" id="ntfy-token-help">
+                    使用受保护 topic 时填写；留空会保留已保存的 token。
+                  </p>
+                </div>
+                <label class="check-field channel-clear" for="clear-ntfy">
+                  <input id="clear-ntfy" type="checkbox" data-clear-channel="ntfy">
+                  <span>清除已保存的 ntfy 配置</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset
+              class="notification-channel"
+              data-notification-channel="telegram"
+            >
+              <legend>Telegram</legend>
+              <div class="notification-channel__summary">
+                <div>
+                  <p id="telegram-description">通过 Telegram Bot 发送私聊或频道消息。</p>
+                  <span class="channel-status" data-channel-status>未配置</span>
+                </div>
+                <label class="channel-toggle" for="enabled-telegram">
+                  <input id="enabled-telegram" type="checkbox">
+                  <span class="channel-toggle__track" aria-hidden="true"></span>
+                  <span>启用</span>
+                </label>
+              </div>
+              <div class="notification-channel__config" data-channel-config hidden>
+                <div class="field">
+                  <label for="telegram-bot-token">Bot token</label>
+                  <div class="input-with-action">
+                    <input
+                      id="telegram-bot-token"
+                      name="telegramBotToken"
+                      type="password"
+                      autocomplete="new-password"
+                      spellcheck="false"
+                      placeholder="从 BotFather 获取"
+                      aria-describedby="telegram-help settings-feedback"
+                    >
+                    <button
+                      class="input-action"
+                      type="button"
+                      data-toggle-secret="telegram-bot-token"
+                      aria-label="显示 Telegram Bot token"
+                      aria-pressed="false"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#icon-eye"></use>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="telegram-chat-id">Chat ID</label>
+                  <input
+                    id="telegram-chat-id"
+                    name="telegramChatId"
+                    type="text"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    placeholder="例如 123456789 或 @channel"
+                    aria-describedby="telegram-help settings-feedback"
+                  >
+                  <p class="field__help" id="telegram-help">
+                    填写数字 chat ID 或公开频道用户名；Bot 需已加入目标会话。
+                  </p>
+                </div>
+                <label class="check-field channel-clear" for="clear-telegram">
+                  <input
+                    id="clear-telegram"
+                    type="checkbox"
+                    data-clear-channel="telegram"
+                  >
+                  <span>清除已保存的 Telegram 配置</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset
+              class="notification-channel"
+              data-notification-channel="wecom"
+            >
+              <legend>企业微信</legend>
+              <div class="notification-channel__summary">
+                <div>
+                  <p id="wecom-description">通过企业微信群机器人发送消息。</p>
+                  <span class="channel-status" data-channel-status>未配置</span>
+                </div>
+                <label class="channel-toggle" for="enabled-wecom">
+                  <input id="enabled-wecom" type="checkbox">
+                  <span class="channel-toggle__track" aria-hidden="true"></span>
+                  <span>启用</span>
+                </label>
+              </div>
+              <div class="notification-channel__config" data-channel-config hidden>
+                <div class="field">
+                  <label for="wecom-key">机器人 key</label>
+                  <div class="input-with-action">
+                    <input
+                      id="wecom-key"
+                      name="wecomKey"
+                      type="password"
+                      autocomplete="new-password"
+                      spellcheck="false"
+                      placeholder="粘贴企业微信机器人 key"
+                      aria-describedby="wecom-help settings-feedback"
+                    >
+                    <button
+                      class="input-action"
+                      type="button"
+                      data-toggle-secret="wecom-key"
+                      aria-label="显示企业微信机器人 key"
+                      aria-pressed="false"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#icon-eye"></use>
+                      </svg>
+                    </button>
+                  </div>
+                  <p class="field__help" id="wecom-help">
+                    只填群机器人 Webhook 地址中的 key，不要粘贴完整网址。
+                  </p>
+                </div>
+                <label class="check-field channel-clear" for="clear-wecom">
+                  <input
+                    id="clear-wecom"
+                    type="checkbox"
+                    data-clear-channel="wecom"
+                  >
+                  <span>清除已保存的企业微信配置</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset
+              class="notification-channel"
+              data-notification-channel="dingtalk"
+            >
+              <legend>钉钉</legend>
+              <div class="notification-channel__summary">
+                <div>
+                  <p id="dingtalk-description">通过钉钉群机器人发送消息。</p>
+                  <span class="channel-status" data-channel-status>未配置</span>
+                </div>
+                <label class="channel-toggle" for="enabled-dingtalk">
+                  <input id="enabled-dingtalk" type="checkbox">
+                  <span class="channel-toggle__track" aria-hidden="true"></span>
+                  <span>启用</span>
+                </label>
+              </div>
+              <div class="notification-channel__config" data-channel-config hidden>
+                <div class="field">
+                  <label for="dingtalk-access-token">Access token</label>
+                  <div class="input-with-action">
+                    <input
+                      id="dingtalk-access-token"
+                      name="dingtalkAccessToken"
+                      type="password"
+                      autocomplete="new-password"
+                      spellcheck="false"
+                      placeholder="粘贴钉钉机器人 access token"
+                      aria-describedby="dingtalk-help settings-feedback"
+                    >
+                    <button
+                      class="input-action"
+                      type="button"
+                      data-toggle-secret="dingtalk-access-token"
+                      aria-label="显示钉钉机器人 access token"
+                      aria-pressed="false"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#icon-eye"></use>
+                      </svg>
+                    </button>
+                  </div>
+                  <p class="field__help" id="dingtalk-help">
+                    只填 Webhook 地址中的 access_token；安全设置可选用加签或关键词。
+                  </p>
+                </div>
+                <div class="field">
+                  <label for="dingtalk-secret">加签 secret（可选）</label>
+                  <div class="input-with-action">
+                    <input
+                      id="dingtalk-secret"
+                      name="dingtalkSecret"
+                      type="password"
+                      autocomplete="new-password"
+                      spellcheck="false"
+                      placeholder="启用加签时填写，否则留空"
+                      aria-describedby="dingtalk-secret-help settings-feedback"
+                    >
+                    <button
+                      class="input-action"
+                      type="button"
+                      data-toggle-secret="dingtalk-secret"
+                      aria-label="显示钉钉机器人加签 secret"
+                      aria-pressed="false"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#icon-eye"></use>
+                      </svg>
+                    </button>
+                  </div>
+                  <p class="field__help" id="dingtalk-secret-help">
+                    使用“加签”安全设置时填写 SEC 开头的 secret。若使用关键词，可填“红果”。
+                  </p>
+                </div>
+                <label class="check-field channel-clear" for="clear-dingtalk">
+                  <input
+                    id="clear-dingtalk"
+                    type="checkbox"
+                    data-clear-channel="dingtalk"
+                  >
+                  <span>清除已保存的钉钉配置</span>
+                </label>
+              </div>
+            </fieldset>
+          </div>
+
+          <p
+            class="field__feedback settings-feedback"
+            id="settings-feedback"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </div>
+
+        <div class="dialog__actions dialog__actions--split">
+          <button
+            class="button button--quiet"
+            type="button"
+            id="test-notifications"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-bell"></use>
+            </svg>
+            <span>测试全部渠道</span>
+          </button>
+          <div class="dialog__action-group">
+            <button
+              class="button button--quiet"
+              type="button"
+              data-close-dialog="settings-dialog"
+            >
+              取消
+            </button>
+            <button class="button button--primary" type="submit" id="save-settings">
+              保存设置
+            </button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="dialog" id="season-dialog" aria-labelledby="season-title">
+      <form class="dialog__panel" id="season-form">
+        <div class="dialog__header">
+          <div>
+            <p class="eyebrow">官方分组校验</p>
+            <h2 id="season-title">追加同系列季</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close-dialog="season-dialog"
+            aria-label="关闭追加同系列季"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-close"></use>
+            </svg>
+          </button>
+        </div>
+        <div class="dialog__body">
+          <p class="dialog__description" id="season-context"></p>
+          <p class="group-reference">
+            <span>验证依据</span>
+            <code id="season-group-id"></code>
+          </p>
+          <div class="field">
+            <label for="season-share-input">另一季的分享链接</label>
+            <input
+              id="season-share-input"
+              name="share"
+              type="text"
+              inputmode="url"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="粘贴同系列的分享链接或剧集 ID"
+              aria-describedby="season-help season-feedback"
+            >
+            <p class="field__help" id="season-help">
+              只有官方 series_group_id 与当前系列完全一致时才会加入。
+            </p>
+            <p class="field__feedback" id="season-feedback" aria-live="polite"></p>
+          </div>
+        </div>
+        <div class="dialog__actions">
+          <button
+            class="button button--quiet"
+            type="button"
+            data-close-dialog="season-dialog"
+          >
+            取消
+          </button>
+          <button class="button button--primary" type="submit" id="season-submit">
+            校验并追加
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="dialog dialog--danger" id="delete-dialog" aria-labelledby="delete-title">
+      <form class="dialog__panel" id="delete-form">
+        <div class="dialog__header">
+          <div>
+            <p class="eyebrow">删除追更</p>
+            <h2 id="delete-title">停止追更这部剧？</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close-dialog="delete-dialog"
+            aria-label="关闭删除确认"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-close"></use>
+            </svg>
+          </button>
+        </div>
+        <div class="dialog__body">
+          <p class="dialog__description" id="delete-context"></p>
+          <p class="field__feedback field__feedback--danger" id="delete-feedback" aria-live="polite"></p>
+        </div>
+        <div class="dialog__actions">
+          <button
+            class="button button--quiet"
+            type="button"
+            data-close-dialog="delete-dialog"
+          >
+            取消
+          </button>
+          <button class="button button--danger" type="submit" id="delete-submit">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-trash"></use>
+            </svg>
+            <span>删除追更</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <div class="page-progress" id="page-progress" hidden aria-hidden="true"></div>
+
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="icon-play" viewBox="0 0 24 24">
+        <path d="m8 5 11 7-11 7Z"></path>
+      </symbol>
+      <symbol id="icon-image-plus" viewBox="0 0 24 24">
+        <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"></path>
+        <path d="m21 15-5-5L5 21"></path>
+        <circle cx="9" cy="9" r="2"></circle>
+        <path d="M19 2v6M16 5h6"></path>
+      </symbol>
+      <symbol id="icon-scan-text" viewBox="0 0 24 24">
+        <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"></path>
+        <path d="M7 8h10M7 12h10M7 16h6"></path>
+      </symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="8"></circle>
+        <path d="m21 21-4.3-4.3"></path>
+      </symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24">
+        <path d="M20 11a8 8 0 1 0-2.34 5.66"></path>
+        <path d="M20 4v7h-7"></path>
+      </symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14"></path>
+      </symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24">
+        <path d="m18 6-12 12M6 6l12 12"></path>
+      </symbol>
+      <symbol id="icon-bell" viewBox="0 0 24 24">
+        <path d="M10.27 21a2 2 0 0 0 3.46 0"></path>
+        <path d="M3.26 15.33A1 1 0 0 1 4 13.67h.01a2 2 0 0 0 2-2V8a6 6 0 0 1 12 0v3.67a2 2 0 0 0 2 2H20a1 1 0 0 1 .74 1.66 10 10 0 0 1-17.48 0Z"></path>
+      </symbol>
+      <symbol id="icon-eye" viewBox="0 0 24 24">
+        <path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0Z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </symbol>
+      <symbol id="icon-eye-off" viewBox="0 0 24 24">
+        <path d="m2 2 20 20"></path>
+        <path d="M6.71 6.71A10.7 10.7 0 0 0 2.06 11.65a1 1 0 0 0 0 .7 10.75 10.75 0 0 0 14.4 5.96"></path>
+        <path d="M10.73 5.08A10.75 10.75 0 0 1 21.94 11.65a1 1 0 0 1 0 .7 10.7 10.7 0 0 1-1.67 2.69"></path>
+        <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path>
+      </symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24">
+        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"></path>
+        <path d="M10 11v5M14 11v5"></path>
+      </symbol>
+      <symbol id="icon-tv" viewBox="0 0 24 24">
+        <rect x="3" y="7" width="18" height="13" rx="2"></rect>
+        <path d="m8 2 4 5 4-5"></path>
+      </symbol>
+      <symbol id="icon-list-plus" viewBox="0 0 24 24">
+        <path d="M11 12H3M16 6H3M16 18H3M18 9v6M21 12h-6"></path>
+      </symbol>
+      <symbol id="icon-external" viewBox="0 0 24 24">
+        <path d="M15 3h6v6M10 14 21 3"></path>
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+      </symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 7v5l3 2"></path>
+      </symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24">
+        <path d="m20 6-11 11-5-5"></path>
+      </symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v5M12 16h.01"></path>
+      </symbol>
+      <symbol id="icon-inbox" viewBox="0 0 24 24">
+        <path d="M4 4h16v16H4z"></path>
+        <path d="M4 13h4l2 3h4l2-3h4"></path>
+      </symbol>
+      <symbol id="icon-auto" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 3a9 9 0 0 1 0 18Z"></path>
+      </symbol>
+      <symbol id="icon-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path>
+      </symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24">
+        <path d="M20.5 14.4A8.5 8.5 0 0 1 9.6 3.5a8.5 8.5 0 1 0 10.9 10.9Z"></path>
+      </symbol>
+    </svg>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "hongguo-reminder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "红果短剧分享链接追更与多渠道通知工具",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@tesseract.js-data/chi_sim": "^1.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "cron-parser": "^5.10.2",
+    "sharp": "^0.35.5",
+    "tesseract.js": "^7.0.0",
+    "undici": "^6.29.1"
+  }
+}
