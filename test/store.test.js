@@ -37,17 +37,21 @@ test("mutations are serialized and persist valid JSON", async () => {
   const filePath = await temporaryStatePath();
   const store = new JsonStateStore(filePath);
   await store.init();
+  const cronExpressions = Array.from(
+    { length: 8 },
+    (_, index) => `*/${10 + index} * * * *`,
+  );
   await Promise.all(
     Array.from({ length: 8 }, (_, index) =>
       store.mutate((state) => {
-        state.settings.intervalMinutes = 10 + index;
+        state.settings.checkCron = cronExpressions[index];
       }),
     ),
   );
   const state = await store.read();
-  assert.equal(state.settings.intervalMinutes, 17);
+  assert.equal(state.settings.checkCron, cronExpressions[7]);
   const onDisk = JSON.parse(await fs.readFile(filePath, "utf8"));
-  assert.equal(onDisk.settings.intervalMinutes, 17);
+  assert.equal(onDisk.settings.checkCron, cronExpressions[7]);
 });
 
 test("normalizeState keeps only valid event records and bounds settings", () => {
@@ -56,7 +60,7 @@ test("normalizeState keeps only valid event records and bounds settings", () => 
     subscriptions: [],
     events: [{ id: "evt_1", type: "episode", message: "更新" }],
   });
-  assert.equal(normalized.settings.intervalMinutes, 10080);
+  assert.equal(normalized.settings.checkCron, "*/30 * * * *");
   assert.deepEqual(normalized.settings.notifications.bark, {
     enabled: true,
     key: "abc_DEF",
@@ -65,16 +69,129 @@ test("normalizeState keeps only valid event records and bounds settings", () => 
   assert.equal(normalized.events[0].notified, false);
 });
 
-test("normalizeState clamps the custom interval at both boundaries", () => {
+test("normalizeState validates Cron and migrates representable legacy intervals", () => {
   assert.equal(
-    normalizeState({ settings: { intervalMinutes: 1 } }).settings
-      .intervalMinutes,
-    5,
+    normalizeState({
+      settings: { checkCron: "  0   */6 * * * " },
+    }).settings.checkCron,
+    "0 */6 * * *",
   );
   assert.equal(
-    normalizeState({ settings: { intervalMinutes: 10080 } }).settings
-      .intervalMinutes,
-    10080,
+    normalizeState({
+      settings: { checkCron: "60 * * * *" },
+    }).settings.checkCron,
+    "*/30 * * * *",
+  );
+  assert.equal(
+    normalizeState({ settings: { intervalMinutes: 60 } }).settings
+      .checkCron,
+    "0 * * * *",
+  );
+  assert.equal(
+    normalizeState({ settings: { intervalMinutes: 10_080 } }).settings
+      .checkCron,
+    "0 0 * * 0",
+  );
+  assert.equal(
+    normalizeState({ settings: { intervalMinutes: 45 } }).settings
+      .checkCron,
+    "*/30 * * * *",
+  );
+});
+
+test("normalizeState bounds the stale completion window", () => {
+  assert.equal(
+    normalizeState({}).settings.staleCompletionDays,
+    90,
+  );
+  assert.equal(
+    normalizeState({
+      settings: { staleCompletionDays: 1 },
+    }).settings.staleCompletionDays,
+    1,
+  );
+  assert.equal(
+    normalizeState({
+      settings: { staleCompletionDays: 3650 },
+    }).settings.staleCompletionDays,
+    3650,
+  );
+  assert.equal(
+    normalizeState({
+      settings: { staleCompletionDays: 0 },
+    }).settings.staleCompletionDays,
+    1,
+  );
+  assert.equal(
+    normalizeState({
+      settings: { staleCompletionDays: 3651 },
+    }).settings.staleCompletionDays,
+    3650,
+  );
+});
+
+test("normalizeState exposes automatic completion as completed and clears overrides", () => {
+  const seriesId = "7694653385668037657";
+  const normalized = normalizeState({
+    subscriptions: [
+      {
+        id: "sub_auto_completed",
+        primarySeriesId: seriesId,
+        seriesGroupId: "7698938199183215640",
+        title: "测试短剧",
+        seriesStatusOverride: "updating",
+        seriesStatusOverrideAt: "2026-10-27T08:00:00.000Z",
+        autoCompletedAt: "2027-02-04T08:00:00.000Z",
+        autoCompletionReason:
+          "超过 90 天未检测到新季或新集，已自动标记为完结。",
+        seasons: [
+          {
+            seriesId,
+            seriesGroupId: "7698938199183215640",
+            title: "测试短剧第一季",
+            status: "updating",
+            episodeCount: 12,
+          },
+        ],
+      },
+    ],
+  });
+  const subscription = normalized.subscriptions[0];
+  assert.equal(subscription.seriesStatus, "completed");
+  assert.equal(subscription.seriesStatusOverride, null);
+  assert.equal(
+    subscription.autoCompletedAt,
+    "2027-02-04T08:00:00.000Z",
+  );
+  assert.match(subscription.seriesStatusReason, /超过 90 天/);
+});
+
+test("normalizeState preserves and derives the next scheduled check", () => {
+  const explicit = normalizeState({
+    version: 10,
+    settings: {
+      checkCron: "0 * * * *",
+      lastCheckAt: "2026-10-27T08:00:00.000Z",
+      nextCheckAt: "2026-10-27T09:15:00.000Z",
+    },
+  });
+  assert.equal(
+    explicit.settings.nextCheckAt,
+    "2026-10-27T09:15:00.000Z",
+  );
+
+  const legacy = normalizeState({
+    version: 9,
+    settings: {
+      intervalMinutes: 60,
+      lastCheckAt: "2026-10-27T08:00:00.000Z",
+      nextCheckAt: "2026-10-27T09:15:00.000Z",
+    },
+  });
+  assert.equal(legacy.settings.checkCron, "0 * * * *");
+  assert.equal(
+    legacy.settings.nextCheckAt,
+    "2026-10-27T09:00:00.000Z",
   );
 });
 
@@ -201,6 +318,7 @@ test("normalizeState migrates legacy Bark settings without losing the key", () =
   assert.equal(normalized.settings.notifications.telegram.enabled, false);
   assert.equal(normalized.settings.notifications.wecom.enabled, false);
   assert.equal(normalized.settings.notifications.dingtalk.enabled, false);
+  assert.equal(normalized.settings.checkCron, "*/30 * * * *");
   assert.deepEqual(normalized.settings.notifications.proxy, {
     enabled: false,
     url: "",
@@ -369,7 +487,7 @@ test("normalizeState clears a verified legacy completion without a finale marker
     ],
   });
   const subscription = normalized.subscriptions[0];
-  assert.equal(normalized.version, 7);
+  assert.equal(normalized.version, 10);
   assert.equal(subscription.seriesStatus, "unknown");
   assert.match(subscription.seriesStatusReason, /完结篇/);
   assert.equal(subscription.completedAt, null);
@@ -540,7 +658,7 @@ test("store persists a legacy state migration and completion event cleanup", asy
   const store = new JsonStateStore(filePath);
   await store.init();
   const onDisk = JSON.parse(await fs.readFile(filePath, "utf8"));
-  assert.equal(onDisk.version, 7);
+  assert.equal(onDisk.version, 10);
   assert.deepEqual(
     onDisk.events.map((event) => event.id),
     ["evt_disk_episode"],

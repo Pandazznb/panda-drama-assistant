@@ -5,14 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="通过红果短剧分享链接追更，发现同系列最新季并通过多种渠道提醒。"
+      content="短剧助手：通过红果短剧分享链接追更，发现同系列最新季和新集，并通过多种渠道提醒。"
     >
-    <meta name="theme-color" content="#f7f8fa">
-    <title>红果追更</title>
+    <meta name="theme-color" content="#f3f5f7">
+    <title>短剧助手</title>
     <script src="/theme.js"></script>
     <link
       rel="icon"
-      href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iOCIgZmlsbD0iI2M5MmQyNSIvPjxwYXRoIGQ9Ik0xMyA5LjUgMjMgMTZsLTEwIDYuNXoiIGZpbGw9IiNmZmYiLz48L3N2Zz4="
+      href="/assets/panda-drama-assistant-icon.svg"
+      type="image/svg+xml"
     >
     <link rel="stylesheet" href="/styles.css">
   </head>
@@ -21,56 +22,69 @@
 
     <header class="app-header">
       <div class="app-header__inner">
-        <a class="brand" href="/" aria-label="红果追更首页">
+        <a class="brand" href="/" aria-label="短剧助手首页">
           <span class="brand__mark" aria-hidden="true">
             <svg class="icon" viewBox="0 0 24 24">
-              <use href="#icon-play"></use>
+              <use href="#icon-panda"></use>
             </svg>
           </span>
-          <span class="brand__text">红果追更</span>
+          <span class="brand__text">短剧助手</span>
         </a>
         <div class="app-header__actions">
-          <div class="theme-switcher" role="group" aria-label="主题">
+          <div
+            class="scroll-controls"
+            id="scroll-controls"
+            role="group"
+            aria-label="页面滚动导航"
+            hidden
+          >
             <button
-              class="theme-switcher__option"
+              class="scroll-controls__button"
+              id="scroll-to-top"
               type="button"
-              data-theme-choice="auto"
-              aria-label="自动主题，跟随系统"
-              aria-pressed="true"
-              title="自动（跟随系统）"
+              aria-label="回到最上"
+              title="回到最上"
+              disabled
             >
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                <use href="#icon-auto"></use>
+              <svg
+                class="icon scroll-controls__icon scroll-controls__icon--up"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <use href="#icon-chevron-down"></use>
               </svg>
-              <span class="theme-switcher__label">自动</span>
             </button>
             <button
-              class="theme-switcher__option"
+              class="scroll-controls__button"
+              id="scroll-to-bottom"
               type="button"
-              data-theme-choice="light"
-              aria-label="白天主题"
-              aria-pressed="false"
-              title="白天"
+              aria-label="回到最下"
+              title="回到最下"
             >
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                <use href="#icon-sun"></use>
+              <svg
+                class="icon scroll-controls__icon"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <use href="#icon-chevron-down"></use>
               </svg>
-              <span class="theme-switcher__label">白天</span>
-            </button>
-            <button
-              class="theme-switcher__option"
-              type="button"
-              data-theme-choice="dark"
-              aria-label="黑夜主题"
-              aria-pressed="false"
-              title="黑夜"
-            >
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                <use href="#icon-moon"></use>
-              </svg>
-              <span class="theme-switcher__label">黑夜</span>
             </button>
           </div>
+          <button
+            class="theme-switcher"
+            type="button"
+            data-theme-toggle
+            data-theme-preference="auto"
+            aria-label="当前主题：自动，跟随系统。点击切换为白天主题"
+            title="当前：自动（跟随系统），点击切换为白天"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use data-theme-icon href="#icon-auto"></use>
+            </svg>
+            <span class="theme-switcher__label" data-theme-label aria-live="polite">
+              自动
+            </span>
+          </button>
           <button
             class="button button--quiet"
             type="button"
@@ -92,7 +106,7 @@
     <main id="main-content" class="page">
       <section class="overview" aria-labelledby="page-title">
         <div class="overview__copy">
-          <h1 id="page-title">追更列表</h1>
+          <h1 id="page-title">我的追更</h1>
         </div>
         <div class="overview__side">
           <dl class="stats" aria-label="追更概况">
@@ -109,36 +123,214 @@
               <dd id="stat-last-check">尚未检查</dd>
             </div>
           </dl>
-          <button class="button button--secondary" type="button" id="check-all">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <use href="#icon-refresh"></use>
-            </svg>
-            <span>立即检查</span>
-          </button>
+          <div class="overview__actions">
+            <button
+              class="button button--primary"
+              type="button"
+              id="open-add-dialog"
+              aria-haspopup="dialog"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-plus"></use>
+              </svg>
+              <span>新增追更</span>
+            </button>
+            <button class="button button--secondary" type="button" id="check-all">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-refresh"></use>
+              </svg>
+              <span>立即检查</span>
+            </button>
+          </div>
         </div>
       </section>
 
-      <section class="capture-band" aria-labelledby="add-title">
-        <form class="add-form" id="add-form" novalidate>
-          <div class="field field--grow series-search-field" id="series-search-field">
-            <label for="share-input" id="add-title">搜索或添加短剧</label>
-            <input
-              id="share-input"
-              name="share"
-              type="text"
-              inputmode="search"
-              enterkeyhint="search"
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-              placeholder="搜索剧名，或粘贴分享链接 / 剧集 ID"
-              aria-describedby="share-help share-feedback"
-              aria-autocomplete="list"
-              aria-expanded="false"
-              aria-controls="series-search-list"
-              aria-haspopup="listbox"
-              role="combobox"
-            >
+      <div class="workspace">
+        <section class="watchlist" aria-labelledby="watchlist-title">
+          <div class="section-heading">
+            <div class="section-heading__title-row">
+              <h2 id="watchlist-title" tabindex="-1">正在追更</h2>
+              <div class="section-heading__actions">
+                <span class="check-indicator" id="check-indicator" hidden>
+                  <span class="spinner" aria-hidden="true"></span>
+                  正在检查
+                </span>
+                <button
+                  class="button button--quiet recent-events-button"
+                  type="button"
+                  id="open-events"
+                  aria-haspopup="dialog"
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-activity"></use>
+                  </svg>
+                  <span>最近动态</span>
+                  <span
+                    class="recent-events-button__count"
+                    id="event-count"
+                    hidden
+                  ></span>
+                </button>
+              </div>
+            </div>
+            <div class="watchlist-search" id="watchlist-search">
+              <label class="sr-only" for="watchlist-search-input">
+                搜索正在追更的短剧
+              </label>
+              <div class="watchlist-search__control">
+                <svg
+                  class="icon watchlist-search__icon"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <use href="#icon-search"></use>
+                </svg>
+                <input
+                  class="watchlist-search__input"
+                  id="watchlist-search-input"
+                  type="text"
+                  inputmode="search"
+                  enterkeyhint="search"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="搜索剧名、全拼或首字母"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded="false"
+                  aria-controls="watchlist-search-list"
+                  aria-haspopup="listbox"
+                >
+                <button
+                  class="watchlist-search__clear search-clear"
+                  type="button"
+                  id="watchlist-search-clear"
+                  aria-label="清除追更搜索"
+                  title="清除搜索"
+                  hidden
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-close"></use>
+                  </svg>
+                </button>
+              </div>
+              <div
+                class="watchlist-search__popover"
+                id="watchlist-search-panel"
+                hidden
+              >
+                <p
+                  class="watchlist-search__status"
+                  id="watchlist-search-status"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+                <ul
+                  class="watchlist-search__results"
+                  id="watchlist-search-list"
+                  role="listbox"
+                  aria-label="正在追更的短剧搜索结果"
+                ></ul>
+              </div>
+            </div>
+            <p id="watchlist-summary">正在读取我的追更…</p>
+          </div>
+          <div class="subscription-list" id="subscription-list" aria-live="polite">
+            <div class="skeleton-row" aria-label="正在加载">
+              <span class="skeleton skeleton--cover"></span>
+              <span class="skeleton-lines">
+                <span class="skeleton skeleton--title"></span>
+                <span class="skeleton skeleton--text"></span>
+                <span class="skeleton skeleton--short"></span>
+              </span>
+            </div>
+            <div class="skeleton-row" aria-hidden="true">
+              <span class="skeleton skeleton--cover"></span>
+              <span class="skeleton-lines">
+                <span class="skeleton skeleton--title"></span>
+                <span class="skeleton skeleton--text"></span>
+                <span class="skeleton skeleton--short"></span>
+              </span>
+            </div>
+          </div>
+        </section>
+
+      </div>
+
+      <footer class="page-footer">
+        <p>收藏截图只在本机进行 OCR 识别，不会上传第三方；导入后会通过官方公开详情校验同系列。</p>
+      </footer>
+    </main>
+
+    <dialog
+      class="dialog dialog--add"
+      id="add-dialog"
+      aria-labelledby="add-title"
+      aria-describedby="add-description"
+    >
+      <form class="dialog__panel" id="add-form" novalidate>
+        <div class="dialog__header">
+          <div>
+            <p class="eyebrow">添加系列</p>
+            <h2 id="add-title">新增追更</h2>
+            <p class="dialog__heading-description" id="add-description">
+              搜索官方剧名，或粘贴红果分享链接和剧集 ID。
+            </p>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close-dialog="add-dialog"
+            aria-label="关闭新增追更"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-close"></use>
+            </svg>
+          </button>
+        </div>
+
+        <div class="dialog__body add-dialog__body">
+          <div class="field series-search-field" id="series-search-field">
+            <label for="share-input">搜索或添加短剧</label>
+            <div class="series-search__control">
+              <svg
+                class="icon series-search__icon"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <use href="#icon-search"></use>
+              </svg>
+              <input
+                class="series-search__input"
+                id="share-input"
+                name="share"
+                type="text"
+                inputmode="search"
+                enterkeyhint="search"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                placeholder="搜索剧名，或粘贴分享链接 / 剧集 ID"
+                aria-describedby="share-help share-feedback"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="series-search-list"
+                aria-haspopup="listbox"
+                role="combobox"
+              >
+              <button
+                class="series-search__clear search-clear"
+                type="button"
+                id="share-input-clear"
+                aria-label="清除短剧搜索"
+                title="清除搜索"
+                hidden
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-close"></use>
+                </svg>
+              </button>
+            </div>
             <div
               class="series-search-panel"
               id="series-search-panel"
@@ -162,13 +354,17 @@
             </p>
             <p class="field__feedback" id="share-feedback" aria-live="polite"></p>
           </div>
-          <div class="add-actions">
-            <button class="button button--primary" type="submit" id="add-submit">
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                <use href="#icon-plus"></use>
-              </svg>
-              <span>加入追更</span>
-            </button>
+        </div>
+
+        <div class="dialog__actions dialog__actions--split">
+          <button
+            class="button button--quiet"
+            type="button"
+            data-close-dialog="add-dialog"
+          >
+            取消
+          </button>
+          <div class="dialog__action-group add-dialog__action-group">
             <button
               class="button button--secondary"
               type="button"
@@ -180,59 +376,64 @@
               </svg>
               <span>截图导入</span>
             </button>
+            <button class="button button--primary" type="submit" id="add-submit">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-plus"></use>
+              </svg>
+              <span>加入追更</span>
+            </button>
           </div>
-        </form>
-      </section>
+        </div>
+      </form>
+    </dialog>
 
-      <div class="workspace">
-        <section class="watchlist" aria-labelledby="watchlist-title">
-          <div class="section-heading">
-            <div>
-              <h2 id="watchlist-title" tabindex="-1">正在追更</h2>
-              <p id="watchlist-summary">正在读取追更列表…</p>
-            </div>
-            <span class="check-indicator" id="check-indicator" hidden>
-              <span class="spinner" aria-hidden="true"></span>
-              正在检查
-            </span>
+    <dialog
+      class="dialog dialog--events"
+      id="events-dialog"
+      aria-labelledby="event-title"
+      aria-describedby="event-description"
+    >
+      <div class="dialog__panel">
+        <div class="dialog__header">
+          <div>
+            <p class="eyebrow">自动检查记录</p>
+            <h2 id="event-title">最近动态</h2>
+            <p class="dialog__heading-description" id="event-description">
+              更新、同系列季和检查异常
+            </p>
           </div>
-          <div class="subscription-list" id="subscription-list" aria-live="polite">
-            <div class="skeleton-row" aria-label="正在加载">
-              <span class="skeleton skeleton--cover"></span>
-              <span class="skeleton-lines">
-                <span class="skeleton skeleton--title"></span>
-                <span class="skeleton skeleton--text"></span>
-                <span class="skeleton skeleton--short"></span>
-              </span>
-            </div>
-            <div class="skeleton-row" aria-hidden="true">
-              <span class="skeleton skeleton--cover"></span>
-              <span class="skeleton-lines">
-                <span class="skeleton skeleton--title"></span>
-                <span class="skeleton skeleton--text"></span>
-                <span class="skeleton skeleton--short"></span>
-              </span>
-            </div>
+          <div class="dialog__header-actions">
+            <a
+              class="dialog__all-link"
+              href="/api/logs/file"
+              target="_blank"
+              rel="noopener"
+              aria-label="在新标签页打开全部日志文件"
+            >
+              <span>显示全部</span>
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-external"></use>
+              </svg>
+            </a>
+            <button
+              class="icon-button"
+              type="button"
+              data-close-dialog="events-dialog"
+              aria-label="关闭最近动态"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-close"></use>
+              </svg>
+            </button>
           </div>
-        </section>
-
-        <aside class="event-panel" aria-labelledby="event-title">
-          <div class="section-heading section-heading--compact">
-            <div>
-              <h2 id="event-title">最近动态</h2>
-              <p>更新、同系列季和检查异常</p>
-            </div>
-          </div>
-          <div class="event-list" id="event-list">
+        </div>
+        <div class="dialog__body dialog__body--events">
+          <div class="event-list" id="event-list" aria-live="polite">
             <p class="muted-copy">正在读取动态…</p>
           </div>
-        </aside>
+        </div>
       </div>
-
-      <footer class="page-footer">
-        <p>收藏截图只在本机进行 OCR 识别，不会上传第三方；导入后会通过官方公开详情校验同系列。</p>
-      </footer>
-    </main>
+    </dialog>
 
     <dialog
       class="dialog dialog--screenshot-import"
@@ -278,6 +479,7 @@
           <div class="field screenshot-file-field">
             <label for="screenshot-files">收藏页截图</label>
             <input
+              class="sr-only"
               id="screenshot-files"
               name="screenshots"
               type="file"
@@ -285,6 +487,21 @@
               multiple
               aria-describedby="screenshot-file-help screenshot-feedback"
             >
+            <div class="screenshot-picker-row">
+              <label class="screenshot-picker" for="screenshot-files">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-image-plus"></use>
+                </svg>
+                <span id="screenshot-picker-label">选择截图</span>
+              </label>
+              <span
+                class="screenshot-picker__status"
+                id="screenshot-picker-status"
+                aria-live="polite"
+              >
+                可一次选择多张图片
+              </span>
+            </div>
             <p class="field__help" id="screenshot-file-help">
               支持 JPG、PNG、WebP；超大图片会先在浏览器中缩小，避免占用过多内存。
             </p>
@@ -378,15 +595,19 @@
           </button>
           <div class="dialog__action-group">
             <button
-              class="button button--secondary"
+              class="button button--secondary screenshot-analyze-button"
               type="button"
               id="analyze-screenshots"
+              data-state="idle"
               disabled
             >
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                <use href="#icon-scan-text"></use>
-              </svg>
-              <span>识别截图</span>
+              <span class="screenshot-analyze-button__icon" aria-hidden="true">
+                <svg class="icon" viewBox="0 0 24 24">
+                  <use href="#icon-scan-text"></use>
+                </svg>
+                <span class="spinner screenshot-analyze-button__spinner"></span>
+              </span>
+              <span data-button-label>识别截图</span>
             </button>
             <button
               class="button button--primary"
@@ -429,22 +650,45 @@
 
         <div class="dialog__body">
           <div class="field">
-            <label for="interval-minutes">自动检查间隔</label>
+            <label for="check-cron">自动检查间隔（Cron）</label>
+            <input
+              class="field__input--mono"
+              id="check-cron"
+              name="checkCron"
+              type="text"
+              maxlength="120"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              enterkeyhint="done"
+              placeholder="*/30 * * * *"
+              aria-describedby="check-cron-help settings-feedback"
+            >
+            <p class="field__help" id="check-cron-help">
+              标准 5 段 Cron，按 Asia/Shanghai 时区计算。例如
+              <code>*/30 * * * *</code> 每 30 分钟，
+              <code>0 * * * *</code> 每小时，
+              <code>0 8 * * *</code> 每天 08:00。
+            </p>
+          </div>
+
+          <div class="field">
+            <label for="stale-completion-days">无更新自动完结</label>
             <div class="number-field">
               <input
-                id="interval-minutes"
-                name="intervalMinutes"
+                id="stale-completion-days"
+                name="staleCompletionDays"
                 type="number"
-                min="5"
-                max="10080"
+                min="1"
+                max="3650"
                 step="1"
                 inputmode="numeric"
-                aria-describedby="interval-help settings-feedback"
+                aria-describedby="stale-completion-help settings-feedback"
               >
-              <span>分钟</span>
+              <span>天</span>
             </div>
-            <p class="field__help" id="interval-help">
-              可设置 5 到 10080 分钟，默认 30 分钟；最长间隔为 7 天。
+            <p class="field__help" id="stale-completion-help">
+              默认 90 天。仅对更新中或状态未知的系列生效，按实际新季、新集时间计算，不按检查时间。
             </p>
           </div>
 
@@ -712,7 +956,7 @@
                     autocomplete="off"
                     autocapitalize="off"
                     spellcheck="false"
-                    placeholder="例如 hongguo-reminder-8f3a"
+                    placeholder="例如 drama-assistant-8f3a"
                     aria-describedby="ntfy-help settings-feedback"
                   >
                   <p class="field__help" id="ntfy-help">
@@ -1057,6 +1301,122 @@
       </form>
     </dialog>
 
+    <dialog
+      class="dialog dialog--status"
+      id="status-dialog"
+      aria-labelledby="status-title"
+      aria-describedby="status-description"
+    >
+      <form class="dialog__panel" id="status-form" novalidate>
+        <div class="dialog__header">
+          <div>
+            <p class="eyebrow">检查策略</p>
+            <h2 id="status-title">切换系列状态</h2>
+            <p class="dialog__heading-description" id="status-description">
+              手动状态会覆盖自动判断，并决定是否继续检查更新。
+            </p>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close-dialog="status-dialog"
+            aria-label="关闭系列状态切换"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-close"></use>
+            </svg>
+          </button>
+        </div>
+        <div class="dialog__body">
+          <p class="dialog__description" id="status-context"></p>
+          <fieldset class="status-choice-list">
+            <legend class="sr-only">选择系列状态</legend>
+            <label class="status-choice" for="series-status-auto">
+              <input
+                id="series-status-auto"
+                type="radio"
+                name="seriesStatus"
+                value="auto"
+              >
+              <span class="status-choice__copy">
+                <span class="status-choice__label">自动判断</span>
+                <span class="status-choice__description">
+                  按官方多季列表和单季状态判断，清除手动设置。
+                </span>
+              </span>
+            </label>
+            <label class="status-choice" for="series-status-updating">
+              <input
+                id="series-status-updating"
+                type="radio"
+                name="seriesStatus"
+                value="updating"
+              >
+              <span class="status-choice__copy">
+                <span class="status-choice__label">更新中</span>
+                <span class="status-choice__description">
+                  继续检查新季和新集。
+                </span>
+              </span>
+            </label>
+            <label class="status-choice" for="series-status-completed">
+              <input
+                id="series-status-completed"
+                type="radio"
+                name="seriesStatus"
+                value="completed"
+              >
+              <span class="status-choice__copy">
+                <span class="status-choice__label">已完结</span>
+                <span class="status-choice__description">
+                  停止该系列的全部更新检查。
+                </span>
+              </span>
+            </label>
+            <label class="status-choice" for="series-status-unknown">
+              <input
+                id="series-status-unknown"
+                type="radio"
+                name="seriesStatus"
+                value="unknown"
+              >
+              <span class="status-choice__copy">
+                <span class="status-choice__label">状态未知</span>
+                <span class="status-choice__description">
+                  继续检查，并按无更新期限自动完结。
+                </span>
+              </span>
+            </label>
+          </fieldset>
+          <p class="field__help">
+            “更新中”和“状态未知”会继续检查；超过设置的无更新期限后，系统会自动转为已完结。
+          </p>
+          <p
+            class="field__feedback"
+            id="status-feedback"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </div>
+        <div class="dialog__actions">
+          <button
+            class="button button--quiet"
+            type="button"
+            data-close-dialog="status-dialog"
+          >
+            取消
+          </button>
+          <button
+            class="button button--primary"
+            type="submit"
+            id="status-submit"
+          >
+            保存状态
+          </button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog class="dialog dialog--danger" id="delete-dialog" aria-labelledby="delete-title">
       <form class="dialog__panel" id="delete-form">
         <div class="dialog__header">
@@ -1104,6 +1464,16 @@
       <symbol id="icon-play" viewBox="0 0 24 24">
         <path d="m8 5 11 7-11 7Z"></path>
       </symbol>
+      <symbol id="icon-panda" viewBox="0 0 24 24">
+        <circle cx="6.4" cy="5.4" r="3.3"></circle>
+        <circle cx="17.6" cy="5.4" r="3.3"></circle>
+        <path d="M12 3.1c5 0 8.7 3.6 8.7 8.6S17.4 21 12 21s-8.7-4.2-8.7-9.3S7 3.1 12 3.1Z"></path>
+        <ellipse cx="8.5" cy="10.9" rx="2.2" ry="2.8" fill="#22272e" stroke="none" transform="rotate(28 8.5 10.9)"></ellipse>
+        <ellipse cx="15.5" cy="10.9" rx="2.2" ry="2.8" fill="#22272e" stroke="none" transform="rotate(-28 15.5 10.9)"></ellipse>
+        <circle cx="8.8" cy="10.7" r=".65" fill="currentColor" stroke="none"></circle>
+        <circle cx="15.2" cy="10.7" r=".65" fill="currentColor" stroke="none"></circle>
+        <path d="M9.8 15.2h4.4l-2.2 1.9-2.2-1.9Z" fill="#22272e" stroke="none"></path>
+      </symbol>
       <symbol id="icon-image-plus" viewBox="0 0 24 24">
         <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"></path>
         <path d="m21 15-5-5L5 21"></path>
@@ -1136,6 +1506,14 @@
         <path d="M10.27 21a2 2 0 0 0 3.46 0"></path>
         <path d="M3.26 15.33A1 1 0 0 1 4 13.67h.01a2 2 0 0 0 2-2V8a6 6 0 0 1 12 0v3.67a2 2 0 0 0 2 2H20a1 1 0 0 1 .74 1.66 10 10 0 0 1-17.48 0Z"></path>
       </symbol>
+      <symbol id="icon-activity" viewBox="0 0 24 24">
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+      </symbol>
+      <symbol id="icon-layers" viewBox="0 0 24 24">
+        <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.57 3.91a2 2 0 0 0 1.66 0l8.57-3.9a1 1 0 0 0 0-1.83Z"></path>
+        <path d="m22 12.18-9.17 4.16a2 2 0 0 1-1.66 0L2 12.18"></path>
+        <path d="m22 17.18-9.17 4.16a2 2 0 0 1-1.66 0L2 17.18"></path>
+      </symbol>
       <symbol id="icon-eye" viewBox="0 0 24 24">
         <path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0Z"></path>
         <circle cx="12" cy="12" r="3"></circle>
@@ -1160,6 +1538,9 @@
       <symbol id="icon-external" viewBox="0 0 24 24">
         <path d="M15 3h6v6M10 14 21 3"></path>
         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+      </symbol>
+      <symbol id="icon-chevron-down" viewBox="0 0 24 24">
+        <path d="m6 9 6 6 6-6"></path>
       </symbol>
       <symbol id="icon-clock" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="9"></circle>

@@ -1,9 +1,12 @@
-export const APP_NAME = "红果追更";
+export const APP_NAME = "短剧助手";
 export const DEFAULT_PORT = 3417;
 export const DEFAULT_HOST = "127.0.0.1";
-export const DEFAULT_INTERVAL_MINUTES = 30;
+export const DEFAULT_CHECK_CRON = "*/30 * * * *";
 export const MIN_INTERVAL_MINUTES = 5;
 export const MAX_INTERVAL_MINUTES = 10_080;
+export const DEFAULT_STALE_COMPLETION_DAYS = 90;
+export const MIN_STALE_COMPLETION_DAYS = 1;
+export const MAX_STALE_COMPLETION_DAYS = 3650;
 export const DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES = 0;
 export const EPISODE_NOTIFICATION_WINDOW_OPTIONS = Object.freeze([
   0,

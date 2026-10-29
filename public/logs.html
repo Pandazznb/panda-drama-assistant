@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="查看短剧助手保存的全部更新、新季、完结和检查记录。"
+    >
+    <meta name="theme-color" content="#f3f5f7">
+    <title>全部动态 · 短剧助手</title>
+    <script src="/theme.js"></script>
+    <link
+      rel="icon"
+      href="/assets/panda-drama-assistant-icon.svg"
+      type="image/svg+xml"
+    >
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="logs-page">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="app-header">
+      <div class="app-header__inner">
+        <a class="brand" href="/" aria-label="返回短剧助手首页">
+          <span class="brand__mark" aria-hidden="true">
+            <svg class="icon" viewBox="0 0 24 24">
+              <use href="#icon-panda"></use>
+            </svg>
+          </span>
+          <span class="brand__text">短剧助手</span>
+        </a>
+        <div class="app-header__actions">
+          <a class="button button--quiet logs-back-link" href="/">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-arrow-left"></use>
+            </svg>
+            <span class="header-action__label">返回追更</span>
+          </a>
+          <button
+            class="theme-switcher"
+            type="button"
+            data-theme-toggle
+            data-theme-preference="auto"
+            aria-label="当前主题：自动，跟随系统。点击切换为白天主题"
+            title="当前：自动（跟随系统），点击切换为白天"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use data-theme-icon href="#icon-auto"></use>
+            </svg>
+            <span class="theme-switcher__label" data-theme-label aria-live="polite">
+              自动
+            </span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main-content" class="page logs-page__main">
+      <section class="logs-overview" aria-labelledby="logs-title">
+        <div class="logs-overview__copy">
+          <p class="eyebrow">持久化检查记录</p>
+          <h1 id="logs-title">全部动态</h1>
+          <p class="logs-overview__description">
+            记录集数更新、同系列新季、完结状态和检查异常。
+          </p>
+        </div>
+        <dl class="logs-stats" aria-label="日志概况">
+          <div class="logs-stat">
+            <dt>总记录</dt>
+            <dd id="logs-total">-</dd>
+          </div>
+          <div class="logs-stat">
+            <dt>日志文件</dt>
+            <dd id="logs-file-count">-</dd>
+          </div>
+          <div class="logs-stat logs-stat--wide">
+            <dt>最新记录</dt>
+            <dd id="logs-newest">读取中</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="logs-surface" aria-labelledby="logs-list-title">
+        <div class="logs-toolbar">
+          <div class="logs-toolbar__copy">
+            <h2 id="logs-list-title">日志记录</h2>
+            <p id="logs-storage">
+              按天归档，单个文件达到 1 MiB 后自动分卷。
+            </p>
+          </div>
+          <button
+            class="button button--secondary logs-refresh"
+            type="button"
+            id="logs-refresh"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-refresh"></use>
+            </svg>
+            <span>刷新</span>
+          </button>
+        </div>
+
+        <p class="logs-status" id="logs-status" role="status" aria-live="polite">
+          正在读取日志…
+        </p>
+        <div
+          class="logs-list"
+          id="logs-list"
+          aria-live="polite"
+          aria-busy="true"
+        ></div>
+
+        <div class="logs-footer">
+          <p class="logs-range" id="logs-range"></p>
+          <button
+            class="button button--secondary"
+            type="button"
+            id="logs-load-more"
+            hidden
+          >
+            <span>加载更多</span>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-chevron-down"></use>
+            </svg>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="icon-play" viewBox="0 0 24 24">
+        <path d="m8 5 11 7-11 7Z"></path>
+      </symbol>
+      <symbol id="icon-panda" viewBox="0 0 24 24">
+        <circle cx="6.4" cy="5.4" r="3.3"></circle>
+        <circle cx="17.6" cy="5.4" r="3.3"></circle>
+        <path d="M12 3.1c5 0 8.7 3.6 8.7 8.6S17.4 21 12 21s-8.7-4.2-8.7-9.3S7 3.1 12 3.1Z"></path>
+        <ellipse cx="8.5" cy="10.9" rx="2.2" ry="2.8" fill="#22272e" stroke="none" transform="rotate(28 8.5 10.9)"></ellipse>
+        <ellipse cx="15.5" cy="10.9" rx="2.2" ry="2.8" fill="#22272e" stroke="none" transform="rotate(-28 15.5 10.9)"></ellipse>
+        <circle cx="8.8" cy="10.7" r=".65" fill="currentColor" stroke="none"></circle>
+        <circle cx="15.2" cy="10.7" r=".65" fill="currentColor" stroke="none"></circle>
+        <path d="M9.8 15.2h4.4l-2.2 1.9-2.2-1.9Z" fill="#22272e" stroke="none"></path>
+      </symbol>
+      <symbol id="icon-arrow-left" viewBox="0 0 24 24">
+        <path d="m15 18-6-6 6-6"></path>
+      </symbol>
+      <symbol id="icon-auto" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 3a9 9 0 0 1 0 18Z"></path>
+      </symbol>
+      <symbol id="icon-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path>
+      </symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24">
+        <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z"></path>
+      </symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24">
+        <path d="M20 11a8 8 0 1 0-2.34 5.66"></path>
+        <path d="M20 4v7h-7"></path>
+      </symbol>
+      <symbol id="icon-chevron-down" viewBox="0 0 24 24">
+        <path d="m6 9 6 6 6-6"></path>
+      </symbol>
+      <symbol id="icon-bell" viewBox="0 0 24 24">
+        <path d="M10.27 21a2 2 0 0 0 3.46 0"></path>
+        <path d="M3.26 15.33A1 1 0 0 1 4 13.67h.01a2 2 0 0 0 2-2V8a6 6 0 0 1 12 0v3.67a2 2 0 0 0 2 2H20a1 1 0 0 1 .74 1.66 10 10 0 0 1-17.48 0Z"></path>
+      </symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24">
+        <path d="m20 6-11 11-5-5"></path>
+      </symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v5M12 16h.01"></path>
+      </symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 7v5l3 2"></path>
+      </symbol>
+      <symbol id="icon-inbox" viewBox="0 0 24 24">
+        <path d="M4 4h16v16H4z"></path>
+        <path d="M4 13h4l2 3h4l2-3h4"></path>
+      </symbol>
+    </svg>
+
+    <noscript>
+      <p class="logs-noscript">需要启用 JavaScript 才能读取日志。</p>
+    </noscript>
+    <script src="/logs.js" defer></script>
+  </body>
+</html>

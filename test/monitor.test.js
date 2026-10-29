@@ -163,6 +163,28 @@ test("first subscription creates a baseline and never notifies immediately", asy
   const dashboard = await harness.service.getDashboard();
   assert.equal(dashboard.subscriptions[0].hasUnreadUpdate, false);
   assert.equal(dashboard.subscriptions[0].lastWatchedAt, null);
+  assert.equal(dashboard.subscriptions[0].searchText, "测试短剧");
+  assert.equal(dashboard.subscriptions[0].searchPinyin, "ceshiduanju");
+  assert.equal(dashboard.subscriptions[0].searchInitials, "csdj");
+});
+
+test("dashboard exposes up to 100 recent events", async () => {
+  const harness = await createHarness();
+  await harness.store.mutate((state) => {
+    state.events = Array.from({ length: 100 }, (_, index) => ({
+      id: `dashboard-event-${index}`,
+      type: "baseline",
+      message: `动态 ${index}`,
+      createdAt: new Date(
+        Date.parse("2026-10-30T08:00:00.000Z") - index * 1000,
+      ).toISOString(),
+    }));
+  });
+
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.events.length, 100);
+  assert.equal(dashboard.events[0].id, "dashboard-event-0");
+  assert.equal(dashboard.events[99].id, "dashboard-event-99");
 });
 
 test("duplicate subscriptions expose the existing subscription id", async () => {
@@ -178,10 +200,10 @@ test("duplicate subscriptions expose the existing subscription id", async () => 
   );
 });
 
-test("settings accept a custom interval and multiple notification channels", async () => {
+test("settings accept a custom Cron schedule and multiple notification channels", async () => {
   const harness = await createHarness();
   const settings = await harness.service.updateSettings({
-    intervalMinutes: 10080,
+    checkCron: "0  0 * * 0",
     notifications: {
       bark: { enabled: true, key: "abc_DEF-123" },
       ntfy: {
@@ -206,11 +228,12 @@ test("settings accept a custom interval and multiple notification channels", asy
     },
   });
 
-  assert.equal(settings.intervalMinutes, 10080);
+  assert.equal(settings.checkCron, "0 0 * * 0");
   assert.equal(settings.notifications.enabledCount, 5);
   assert.equal(settings.notifications.configuredCount, 5);
 
   const state = await harness.store.read();
+  assert.equal(state.settings.checkCron, "0 0 * * 0");
   assert.equal(state.settings.notifications.bark.key, "abc_DEF-123");
   assert.equal(
     state.settings.notifications.ntfy.token,
@@ -234,15 +257,282 @@ test("settings accept a custom interval and multiple notification channels", asy
   assert.equal(publicSettings.includes("SEC_MONITOR-secret-123"), false);
 });
 
-test("custom interval rejects values outside five minutes and seven days", async () => {
+test("custom Cron rejects invalid five-field expressions", async () => {
   const harness = await createHarness();
-  for (const intervalMinutes of [4, 10081, 12.5]) {
+  for (const checkCron of [
+    "",
+    "0 0 * *",
+    "60 * * * *",
+    "*/0 * * * *",
+    "@every 30m",
+  ]) {
+    await assert.rejects(
+      harness.service.updateSettings({ checkCron }),
+      (error) =>
+        error.code === "INVALID_CHECK_CRON" && error.statusCode === 400,
+    );
+  }
+});
+
+test("legacy interval input is accepted only when it maps exactly to Cron", async () => {
+  const harness = await createHarness();
+  const converted = await harness.service.updateSettings({
+    intervalMinutes: 60,
+  });
+  assert.equal(converted.checkCron, "0 * * * *");
+
+  for (const intervalMinutes of [4, 45, 10_081, 12.5]) {
     await assert.rejects(
       harness.service.updateSettings({ intervalMinutes }),
       (error) =>
-        error.code === "INVALID_INTERVAL" && error.statusCode === 400,
+        error.code === "INVALID_CHECK_CRON" && error.statusCode === 400,
     );
   }
+});
+
+test("stale completion defaults to 90 days and accepts both boundaries", async () => {
+  const harness = await createHarness();
+  let dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.settings.staleCompletionDays, 90);
+
+  const minimum = await harness.service.updateSettings({
+    staleCompletionDays: 1,
+  });
+  assert.equal(minimum.staleCompletionDays, 1);
+
+  const maximum = await harness.service.updateSettings({
+    staleCompletionDays: 3650,
+  });
+  assert.equal(maximum.staleCompletionDays, 3650);
+  assert.equal(
+    (await harness.store.read()).settings.staleCompletionDays,
+    3650,
+  );
+
+  dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.settings.staleCompletionDays, 3650);
+
+  for (const staleCompletionDays of [0, 3651, 1.5, "invalid"]) {
+    await assert.rejects(
+      harness.service.updateSettings({ staleCompletionDays }),
+      (error) =>
+        error.code === "INVALID_STALE_COMPLETION_DAYS" &&
+        error.statusCode === 400,
+    );
+  }
+});
+
+test("persisted scheduling survives restart without shifting the next check", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.service.checkSubscriptions([subscriptionId], {
+    notify: false,
+    discover: false,
+  });
+
+  let state = await harness.store.read();
+  assert.equal(state.settings.lastCheckAt, "2026-10-27T08:00:00.000Z");
+  assert.equal(state.settings.nextCheckAt, "2026-10-27T08:30:00.000Z");
+
+  now = new Date("2026-10-27T08:10:00.000Z");
+  const restartedStore = new JsonStateStore(harness.statePath);
+  await restartedStore.init();
+  const scheduled = [];
+  const restartedService = new ReminderService({
+    store: restartedStore,
+    now: () => now,
+    timers: {
+      setTimeout(callback, delay) {
+        const timer = {
+          callback,
+          delay,
+          unref() {
+            return this;
+          },
+        };
+        scheduled.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+    },
+  });
+
+  await restartedService.start();
+  assert.equal(restartedService.nextCheckAt, "2026-10-27T08:30:00.000Z");
+  assert.equal(scheduled[0].delay, 20 * 60_000);
+  restartedService.stop();
+});
+
+test("saving a new check Cron reschedules in Asia/Shanghai time", async () => {
+  const now = new Date("2026-10-27T08:00:00.000Z");
+  const scheduled = [];
+  const timers = {
+    setTimeout(callback, delay) {
+      const timer = {
+        callback,
+        delay,
+        cleared: false,
+        unref() {
+          return this;
+        },
+      };
+      scheduled.push(timer);
+      return timer;
+    },
+    clearTimeout(timer) {
+      timer.cleared = true;
+    },
+  };
+  const harness = await createHarness({ now: () => now, timers });
+
+  await harness.service.start();
+  assert.equal(scheduled[0].delay, 30 * 60_000);
+  await harness.service.updateSettings({ checkCron: "0 9 * * *" });
+
+  const state = await harness.store.read();
+  assert.equal(state.settings.checkCron, "0 9 * * *");
+  assert.equal(
+    state.settings.nextCheckAt,
+    "2026-10-28T01:00:00.000Z",
+  );
+  assert.equal(scheduled[0].cleared, true);
+  assert.equal(scheduled[1].delay, 17 * 60 * 60_000);
+  assert.equal(
+    harness.service.nextCheckAt,
+    "2026-10-28T01:00:00.000Z",
+  );
+  harness.service.stop();
+});
+
+test("settings save does not wait for notification delivery", async () => {
+  const now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({
+    now: () => now,
+    timers: {
+      setTimeout(callback, delay) {
+        return {
+          callback,
+          delay,
+          unref() {
+            return this;
+          },
+        };
+      },
+      clearTimeout() {},
+    },
+  });
+  await harness.service.start();
+
+  let releaseNotification;
+  let markNotificationStarted;
+  const notificationBlocked = new Promise((resolve) => {
+    releaseNotification = resolve;
+  });
+  const notificationStarted = new Promise((resolve) => {
+    markNotificationStarted = resolve;
+  });
+  harness.service.flushDiscoveryReminders = async () => {
+    markNotificationStarted();
+    await notificationBlocked;
+    return { sent: 1, pending: 0 };
+  };
+  harness.service.flushDueNotifications = async () => ({
+    sent: 0,
+    pending: 0,
+  });
+
+  const startedAt = Date.now();
+  await harness.service.updateSettings({
+    checkCron: "0 9 * * *",
+  });
+  assert.ok(Date.now() - startedAt < 500);
+  await notificationStarted;
+
+  releaseNotification();
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.service.stop();
+});
+
+test("manual checks do not shift the durable automatic schedule", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  await harness.service.checkSubscriptions([subscriptionId], {
+    notify: false,
+    discover: false,
+  });
+  assert.equal(
+    (await harness.store.read()).settings.nextCheckAt,
+    "2026-10-27T08:30:00.000Z",
+  );
+
+  now = new Date("2026-10-27T08:10:00.000Z");
+  await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: false,
+  });
+
+  assert.equal(
+    (await harness.store.read()).settings.nextCheckAt,
+    "2026-10-27T08:30:00.000Z",
+  );
+});
+
+test("overdue checks run after restart and keep their absolute cadence", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({
+    now: () => now,
+    discoveryIntervalMs: 24 * 60 * 60_000,
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.service.checkSubscriptions([subscriptionId], {
+    notify: false,
+    discover: false,
+  });
+
+  now = new Date("2026-10-27T08:40:00.000Z");
+  const restartedStore = new JsonStateStore(harness.statePath);
+  await restartedStore.init();
+  const scheduled = [];
+  const restartedService = new ReminderService({
+    store: restartedStore,
+    fetchDetail: harness.service.fetchDetail,
+    fetchAlbumSeries: harness.service.fetchAlbumSeries,
+    resolveShared: async () => ({ seriesId: ROOT_ID, sharedUrl: "" }),
+    sendNotifications: harness.service.sendNotifications,
+    now: () => now,
+    discoveryIntervalMs: 24 * 60 * 60_000,
+    timers: {
+      setTimeout(callback, delay) {
+        const timer = {
+          callback,
+          delay,
+          unref() {
+            return this;
+          },
+        };
+        scheduled.push(timer);
+        return timer;
+      },
+      clearTimeout() {},
+    },
+  });
+
+  await restartedService.start();
+  assert.equal(scheduled[0].delay, 1_000);
+  await scheduled.shift().callback();
+
+  const state = await restartedStore.read();
+  assert.equal(state.settings.lastCheckAt, "2026-10-27T08:40:00.000Z");
+  assert.equal(state.settings.nextCheckAt, "2026-10-27T09:00:00.000Z");
+  assert.equal(restartedService.nextCheckAt, "2026-10-27T09:00:00.000Z");
+  assert.equal(scheduled[0].delay, 20 * 60_000);
+  restartedService.stop();
 });
 
 test("discovery reminder settings validate duration and Cron expressions", async () => {
@@ -452,6 +742,25 @@ test("marking watched clears queued reminders until another update arrives", asy
   assert.equal(state.subscriptions[0].hasUnreadUpdate, true);
   assert.equal(state.pendingNotifications.length, 1);
   assert.equal(state.discoveryReminders.length, 1);
+});
+
+test("watched state can be restored to unread without losing watch history", async () => {
+  const harness = await createHarness();
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  const watched = await harness.service.markSubscriptionWatched(subscriptionId);
+  const unwatched =
+    await harness.service.markSubscriptionUnwatched(subscriptionId);
+  const state = await harness.store.read();
+
+  assert.equal(watched.hasUnreadUpdate, false);
+  assert.equal(unwatched.hasUnreadUpdate, true);
+  assert.equal(state.subscriptions[0].hasUnreadUpdate, true);
+  assert.equal(
+    state.subscriptions[0].lastWatchedAt,
+    "2026-10-27T08:00:00.000Z",
+  );
 });
 
 test("Cron reminders combine series and never trigger an automatic check", async () => {
@@ -1251,7 +1560,7 @@ test("all completed seasons stay unknown without a series finale marker", async 
   assert.equal(harness.notifications.length, 0);
 });
 
-test("complete series is announced once and survives transient check failures", async () => {
+test("complete series is announced once and non-forced checks are skipped", async () => {
   let now = new Date("2026-10-27T08:00:00.000Z");
   const harness = await createHarness({
     albumSeriesIds: [ROOT_ID],
@@ -1292,27 +1601,32 @@ test("complete series is announced once and survives transient check failures", 
     1,
   );
 
-  const healthyFetchDetail = harness.service.fetchDetail;
-  harness.service.fetchDetail = async () => {
-    throw new Error("临时网络失败");
+  const calls = [];
+  harness.service.fetchDetail = async (seriesId) => {
+    calls.push(seriesId);
+    throw new Error("已完结系列不应继续请求详情");
   };
   now = new Date("2026-10-27T09:00:00.000Z");
-  await harness.service.checkSubscription(subscriptionId, {
+  const skippedResult = await harness.service.checkSubscription(subscriptionId, {
     discover: true,
     forceDiscovery: true,
+    forceCompletedCheck: false,
   });
+  assert.equal(skippedResult.skipped, "completed");
+  assert.deepEqual(calls, []);
   state = await harness.store.read();
   subscription = state.subscriptions[0];
-  assert.equal(subscription.seriesStatus, "unknown");
+  assert.equal(subscription.seriesStatus, "completed");
   assert.equal(subscription.seriesCompletionAnnounced, true);
   assert.equal(subscription.completedAt, completedAt);
 
-  harness.service.fetchDetail = healthyFetchDetail;
   now = new Date("2026-10-27T10:00:00.000Z");
   await harness.service.checkSubscription(subscriptionId, {
     discover: true,
     forceDiscovery: true,
+    forceCompletedCheck: false,
   });
+  assert.deepEqual(calls, []);
   state = await harness.store.read();
   assert.equal(state.subscriptions[0].seriesStatus, "completed");
   assert.equal(state.subscriptions[0].completedAt, completedAt);
@@ -1328,7 +1642,7 @@ test("complete series is announced once and survives transient check failures", 
   );
 });
 
-test("bulk checks skip completed series while manual checks can revalidate", async () => {
+test("bulk checks skip completed series while manual checks force verification", async () => {
   const harness = await createHarness({
     albumSeriesIds: [ROOT_ID],
   });
@@ -1381,7 +1695,13 @@ test("bulk checks skip completed series while manual checks can revalidate", asy
   );
   assert.equal(manualResult.skipped, undefined);
   assert.equal(manualResult.seasonsChecked, 1);
+  assert.equal(manualResult.completionRechecked, true);
+  assert.equal(manualResult.reactivatedFromCompleted, false);
   assert.deepEqual(calls, [ROOT_ID]);
+  assert.equal(
+    (await harness.store.read()).subscriptions[0].seriesStatus,
+    "completed",
+  );
 });
 
 test("check all skips completed series and still checks active series", async () => {
@@ -1441,6 +1761,155 @@ test("check all skips completed series and still checks active series", async ()
   assert.equal(completedSubscription.lastCheckedAt, completedLastCheckedAt);
 });
 
+test("stale active series auto-completes from content time despite a recent check", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({
+    rootDetail: detail({
+      firstVisibleTime: "2026-10-16T16:04:00.000Z",
+    }),
+    now: () => now,
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.store.mutate((state) => {
+    state.subscriptions[0].lastCheckedAt =
+      "2027-02-03T07:00:00.000Z";
+  });
+
+  const calls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    calls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+  now = new Date("2027-02-04T08:00:00.000Z");
+
+  const result = await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: false,
+  });
+  assert.equal(result.autoCompleted, true);
+  assert.equal(result.skipped, "completed");
+  assert.deepEqual(calls, []);
+
+  const state = await harness.store.read();
+  const subscription = state.subscriptions[0];
+  assert.equal(subscription.autoCompletedAt, "2027-02-04T08:00:00.000Z");
+  assert.match(subscription.autoCompletionReason, /超过 90 天/);
+  assert.equal(subscription.seriesStatus, "completed");
+  assert.equal(subscription.seriesStatusOverride, null);
+  assert.equal(subscription.completedAt, null);
+
+  const again = await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: false,
+  });
+  assert.equal(again.skipped, undefined);
+  assert.equal(again.completionRechecked, true);
+  assert.equal(again.reactivatedFromCompleted, false);
+  assert.deepEqual(calls, [ROOT_ID]);
+});
+
+test("recent content prevents automatic completion", async () => {
+  const harness = await createHarness({
+    rootDetail: detail({
+      firstVisibleTime: "2026-08-01T00:00:00.000Z",
+    }),
+  });
+
+  const result = await harness.service.addSubscription(ROOT_ID);
+  const checked = await harness.service.checkSubscription(
+    result.subscriptionId,
+    { notify: false, discover: false },
+  );
+  assert.equal(checked.autoCompleted, undefined);
+  const state = await harness.store.read();
+  assert.equal(state.subscriptions[0].autoCompletedAt, null);
+  assert.notEqual(state.subscriptions[0].seriesStatus, "completed");
+});
+
+test("manual updating and unknown statuses still auto-complete stale content", async () => {
+  for (const status of ["updating", "unknown"]) {
+    let now = new Date("2026-10-27T08:00:00.000Z");
+    const harness = await createHarness({
+      rootDetail: detail({
+        firstVisibleTime: "2026-07-01T00:00:00.000Z",
+      }),
+      now: () => now,
+    });
+    const added = await harness.service.addSubscription(ROOT_ID);
+    await harness.service.updateSubscriptionStatus(
+      added.subscriptionId,
+      status,
+    );
+    let dashboard = await harness.service.getDashboard();
+    assert.equal(dashboard.subscriptions[0].seriesStatus, status);
+
+    now = new Date("2026-10-28T08:00:00.000Z");
+    const result = await harness.service.checkSubscription(
+      added.subscriptionId,
+      { notify: false, discover: false },
+    );
+    assert.equal(result.autoCompleted, true, status);
+
+    const state = await harness.store.read();
+    assert.equal(state.subscriptions[0].autoCompletedAt, now.toISOString());
+    assert.equal(state.subscriptions[0].seriesStatusOverride, null);
+    dashboard = await harness.service.getDashboard();
+    assert.equal(dashboard.subscriptions[0].seriesStatus, "completed");
+  }
+});
+
+test("manual check reopens a completed series when a new episode is found", async () => {
+  const harness = await createHarness();
+  const added = await harness.service.addSubscription(ROOT_ID);
+  await harness.service.updateSubscriptionStatus(
+    added.subscriptionId,
+    "completed",
+  );
+
+  const calls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    calls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  const unchanged = await harness.service.checkSubscription(
+    added.subscriptionId,
+    { notify: false, discover: false },
+  );
+  assert.equal(unchanged.completionRechecked, true);
+  assert.equal(unchanged.reactivatedFromCompleted, false);
+  let state = await harness.store.read();
+  assert.equal(state.subscriptions[0].seriesStatus, "completed");
+  assert.equal(state.subscriptions[0].seriesStatusOverride, "completed");
+  assert.deepEqual(calls, [ROOT_ID]);
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  const refreshed = await harness.service.checkSubscription(
+    added.subscriptionId,
+    { notify: false, discover: false },
+  );
+  assert.equal(refreshed.skipped, undefined);
+  assert.equal(refreshed.completionRechecked, true);
+  assert.equal(refreshed.reactivatedFromCompleted, true);
+  assert.deepEqual(calls, [ROOT_ID, ROOT_ID]);
+
+  state = await harness.store.read();
+  const subscription = state.subscriptions[0];
+  assert.equal(subscription.seriesStatus, "updating");
+  assert.equal(subscription.seriesStatusOverride, null);
+  assert.equal(subscription.completedAt, null);
+  assert.equal(subscription.seriesCompletionVerifiedAt, null);
+  assert.equal(subscription.autoCompletedAt, null);
+  assert.equal(subscription.hasUnreadUpdate, true);
+  assert.equal(
+    state.events.filter((event) => event.type === "episode").length,
+    1,
+  );
+});
+
 test("a newly unpublished season clears a previously announced completion", async () => {
   let album = {
     publishedSeriesIds: [ROOT_ID],
@@ -1471,6 +1940,10 @@ test("a newly unpublished season clears a previously announced completion", asyn
   assert.equal(state.subscriptions[0].seriesStatus, "completed");
   assert.ok(state.subscriptions[0].completedAt);
 
+  await harness.service.updateSubscriptionStatus(
+    subscriptionId,
+    "updating",
+  );
   const healthyFetchDetail = harness.service.fetchDetail;
   harness.service.fetchDetail = async () => {
     throw new Error("临时网络失败");
@@ -1480,7 +1953,7 @@ test("a newly unpublished season clears a previously announced completion", asyn
     forceDiscovery: true,
   });
   state = await harness.store.read();
-  assert.equal(state.subscriptions[0].seriesStatus, "unknown");
+  assert.equal(state.subscriptions[0].seriesStatus, "updating");
   assert.ok(state.subscriptions[0].completedAt);
 
   harness.service.fetchDetail = healthyFetchDetail;
@@ -1498,7 +1971,7 @@ test("a newly unpublished season clears a previously announced completion", asyn
   state = await harness.store.read();
   const subscription = state.subscriptions[0];
   assert.equal(subscription.seriesStatus, "updating");
-  assert.match(subscription.seriesStatusReason, /尚未完结/);
+  assert.match(subscription.seriesStatusReason, /手动标记为更新中/);
   assert.equal(subscription.seriesCompletionAnnounced, false);
   assert.equal(subscription.completedAt, null);
   assert.equal(subscription.seriesCompletionVerifiedAt, null);
@@ -1643,6 +2116,10 @@ test("a newly discovered season starts a new completion cycle", async () => {
   let state = await harness.store.read();
   assert.equal(state.subscriptions[0].seriesStatus, "completed");
 
+  await harness.service.updateSubscriptionStatus(
+    subscriptionId,
+    "updating",
+  );
   albumSeriesIds.push(NEXT_ID);
   harness.details.set(
     NEXT_ID,
@@ -1664,6 +2141,11 @@ test("a newly discovered season starts a new completion cycle", async () => {
   assert.equal(state.subscriptions[0].seriesCompletionAnnounced, false);
   assert.equal(state.subscriptions[0].completedAt, null);
   assert.equal(state.subscriptions[0].seriesCompletionVerifiedAt, null);
+  await harness.service.updateSubscriptionStatus(subscriptionId, "auto");
+  assert.equal(
+    (await harness.store.read()).subscriptions[0].seriesStatusOverride,
+    null,
+  );
 
   harness.details.set(
     NEXT_ID,
@@ -2215,7 +2697,7 @@ test("a batch check sends one summary with the latest change for every series", 
 
   assert.equal(harness.notifications.length, 1);
   const message = harness.notifications[0].message;
-  assert.equal(message.title, "红果追更 · 2 个系列有更新");
+  assert.equal(message.title, "短剧助手 · 2 个系列有更新");
   assert.match(message.body, /检查时间：2026-10-27 16:05/);
   assert.match(message.body, /季上线：2026-10-17 00:04/);
   assert.match(message.body, /检测到更新：2026-10-27 16:05/);
@@ -2226,6 +2708,105 @@ test("a batch check sends one summary with the latest change for every series", 
       .split("\n")
       .filter((line) => /^\d+\. /u.test(line)).length,
     2,
+  );
+});
+
+test("batch discovery aligns series that share the same new-season release", async () => {
+  let now = new Date("2026-10-27T08:05:00.000Z");
+  const thirdId = "7694653385668037661";
+  const albumIdsBySeries = new Map([
+    [ROOT_ID, [ROOT_ID]],
+    [OTHER_ID, [OTHER_ID]],
+  ]);
+  const albumCalls = [];
+  const harness = await createHarness({
+    now: () => now,
+    discoveryIntervalMs: 6 * 60 * 60_000,
+    fetchAlbumSeries: async (seriesId) => {
+      albumCalls.push(seriesId);
+      return albumIdsBySeries.get(seriesId) || [];
+    },
+  });
+  harness.details.set(
+    OTHER_ID,
+    detail({
+      seriesId: OTHER_ID,
+      title: "另一部短剧",
+      groupId: GROUP_B,
+      episodeCount: 4,
+    }),
+  );
+  await addAndEnableBark(harness);
+  await harness.service.addSubscription(OTHER_ID);
+
+  let state = await harness.store.read();
+  const rootSubscriptionId = state.subscriptions.find(
+    (subscription) => subscription.primarySeriesId === ROOT_ID,
+  ).id;
+  const otherSubscriptionId = state.subscriptions.find(
+    (subscription) => subscription.primarySeriesId === OTHER_ID,
+  ).id;
+
+  await harness.store.mutate((currentState) => {
+    const rootSubscription = currentState.subscriptions.find(
+      (subscription) => subscription.id === rootSubscriptionId,
+    );
+    const otherSubscription = currentState.subscriptions.find(
+      (subscription) => subscription.id === otherSubscriptionId,
+    );
+    rootSubscription.discovery.lastRunAt = "2026-10-27T01:59:00.000Z";
+    otherSubscription.discovery.lastRunAt = "2026-10-27T07:59:00.000Z";
+  });
+
+  albumIdsBySeries.set(ROOT_ID, [ROOT_ID, NEXT_ID]);
+  albumIdsBySeries.set(OTHER_ID, [OTHER_ID, thirdId]);
+  harness.details.set(
+    NEXT_ID,
+    detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧第二季",
+      groupId: GROUP_A,
+      episodeCount: 6,
+      firstVisibleTime: "2026-10-27T00:04:00.000Z",
+    }),
+  );
+  harness.details.set(
+    thirdId,
+    detail({
+      seriesId: thirdId,
+      title: "另一部短剧第二季",
+      groupId: GROUP_B,
+      episodeCount: 8,
+      firstVisibleTime: "2026-10-27T00:04:00.000Z",
+    }),
+  );
+
+  const result = await harness.service.checkSubscriptions(
+    [rootSubscriptionId, otherSubscriptionId],
+    { discover: true },
+  );
+
+  assert.equal(result.discoveredSeasons, 2);
+  assert.deepEqual(albumCalls.sort(), [OTHER_ID, ROOT_ID].sort());
+  assert.equal(harness.notifications.length, 1);
+  assert.match(
+    harness.notifications[0].message.body,
+    /《测试短剧》第二季 · 新季 6 集/,
+  );
+  assert.match(
+    harness.notifications[0].message.body,
+    /《另一部短剧》第二季 · 新季 8 集/,
+  );
+
+  state = await harness.store.read();
+  assert.deepEqual(
+    state.subscriptions
+      .filter((subscription) =>
+        [rootSubscriptionId, otherSubscriptionId].includes(subscription.id),
+      )
+      .map((subscription) => subscription.discovery.lastRunAt)
+      .sort(),
+    [now.toISOString(), now.toISOString()],
   );
 });
 
@@ -2259,7 +2840,7 @@ test("a batch check shows only the latest discovered season in one series", asyn
 
   assert.equal(harness.notifications.length, 1);
   const message = harness.notifications[0].message;
-  assert.equal(message.title, "红果追更 · 1 个系列有更新");
+  assert.equal(message.title, "短剧助手 · 1 个系列有更新");
   assert.match(message.body, /《烛九阴》第八季 · 新季 149 集/);
   assert.match(message.body, /季上线：2026-10-21 00:04/);
   assert.match(message.body, /检测到新季：2026-10-27 16:00/);

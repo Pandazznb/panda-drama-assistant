@@ -1,6 +1,9 @@
+name: panda-drama-assistant
+
 services:
-  hongguo-reminder:
-    image: pandazzz/hongguo-reminder:latest
+  panda-drama-assistant:
+    image: pandazzz/panda-drama-assistant:latest
+    container_name: panda-drama-assistant
     build:
       context: .
     ports:
@@ -22,3 +25,4 @@ services:
 
 volumes:
   hongguo-data:
+    name: hongguo-data

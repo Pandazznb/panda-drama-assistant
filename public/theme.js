@@ -1,6 +1,27 @@
 (() => {
   const STORAGE_KEY = "hongguo-theme";
   const THEME_CHOICES = new Set(["auto", "light", "dark"]);
+  const THEME_SEQUENCE = ["auto", "light", "dark"];
+  const THEME_META = {
+    auto: {
+      label: "自动",
+      description: "自动（跟随系统）",
+      icon: "#icon-auto",
+      next: "白天",
+    },
+    light: {
+      label: "白天",
+      description: "白天",
+      icon: "#icon-sun",
+      next: "黑夜",
+    },
+    dark: {
+      label: "黑夜",
+      description: "黑夜",
+      icon: "#icon-moon",
+      next: "自动",
+    },
+  };
   const THEME_COLORS = {
     light: "#f7f8fa",
     dark: "#0f1216",
@@ -32,11 +53,21 @@
   }
 
   function updateControls() {
-    for (const button of document.querySelectorAll("[data-theme-choice]")) {
+    const meta = THEME_META[preference];
+    for (const button of document.querySelectorAll("[data-theme-toggle]")) {
+      button.dataset.themePreference = preference;
       button.setAttribute(
-        "aria-pressed",
-        String(button.dataset.themeChoice === preference),
+        "aria-label",
+        `当前主题：${meta.description}。点击切换为${meta.next}主题`,
       );
+      button.title = `当前：${meta.description}，点击切换为${meta.next}`;
+      button
+        .querySelector("[data-theme-icon]")
+        ?.setAttribute("href", meta.icon);
+      const label = button.querySelector("[data-theme-label]");
+      if (label) {
+        label.textContent = meta.label;
+      }
     }
   }
 
@@ -78,16 +109,14 @@
   }
 
   function initializeControls() {
-    const switcher = document.querySelector(".theme-switcher");
-    if (!switcher) {
-      return;
+    for (const button of document.querySelectorAll("[data-theme-toggle]")) {
+      button.addEventListener("click", () => {
+        const currentIndex = THEME_SEQUENCE.indexOf(preference);
+        const nextPreference =
+          THEME_SEQUENCE[(currentIndex + 1) % THEME_SEQUENCE.length];
+        setPreference(nextPreference);
+      });
     }
-    switcher.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-theme-choice]");
-      if (button) {
-        setPreference(button.dataset.themeChoice);
-      }
-    });
     updateControls();
   }
 

@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { fetch as undiciFetch, ProxyAgent } from "undici";
 import {
+  APP_NAME,
   BARK_API_ORIGIN,
   DINGTALK_API_ORIGIN,
   NTFY_API_ORIGIN,
@@ -34,7 +35,7 @@ const WECOM_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
 const DINGTALK_ACCESS_TOKEN_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
 const DINGTALK_SECRET_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
 const PROXY_PROTOCOLS = new Set(["http:", "https:"]);
-const WEBHOOK_MESSAGE_PREFIX = "【红果追更】";
+const WEBHOOK_MESSAGE_PREFIX = `【${APP_NAME}】`;
 
 export const NOTIFICATION_CHANNELS = Object.freeze([
   "bark",

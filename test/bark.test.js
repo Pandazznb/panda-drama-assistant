@@ -24,7 +24,7 @@ test("Bark request is fixed to api.day.app and encodes the key path", () => {
     body: "正文",
   });
   assert.equal(request.endpoint, "https://api.day.app/abc_DEF-123");
-  assert.equal(request.payload.group, "红果追更");
+  assert.equal(request.payload.group, "短剧助手");
   assert.equal(request.payload.level, "active");
 });
 

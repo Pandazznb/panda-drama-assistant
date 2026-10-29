@@ -1,24 +1,28 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  DEFAULT_CHECK_CRON,
   DEFAULT_DISCOVERY_REMINDER_CRON,
   DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES,
-  DEFAULT_INTERVAL_MINUTES,
   DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
+  DEFAULT_STALE_COMPLETION_DAYS,
   EPISODE_NOTIFICATION_WINDOW_OPTIONS,
   EVENT_TYPE,
   MAX_DISCOVERY_REMINDER_DURATION_MINUTES,
-  MAX_INTERVAL_MINUTES,
-  MIN_INTERVAL_MINUTES,
+  MAX_STALE_COMPLETION_DAYS,
+  MIN_STALE_COMPLETION_DAYS,
 } from "./constants.js";
 import {
   isValidCronExpression,
+  legacyIntervalMinutesToCron,
+  nextCronOccurrence,
   normalizeCronExpression,
 } from "./cron.js";
 import {
   createDefaultNotificationSettings,
   normalizeNotificationSettings,
 } from "./notifications.js";
+import { EventLogStore } from "./event-log.js";
 import {
   deriveSeriesStatus,
   deriveSubscriptionIdentity,
@@ -37,21 +41,23 @@ import {
   toSafeInteger,
 } from "./utils.js";
 
-const STATE_VERSION = 7;
+const STATE_VERSION = 10;
 const SERIES_COMPLETION_RULE_VERSION = 2;
-const MAX_EVENTS = 100;
+export const MAX_EVENTS = 100;
 
 export function createDefaultState() {
   return {
     version: STATE_VERSION,
     settings: {
       notifications: createDefaultNotificationSettings(),
-      intervalMinutes: DEFAULT_INTERVAL_MINUTES,
+      checkCron: DEFAULT_CHECK_CRON,
+      staleCompletionDays: DEFAULT_STALE_COMPLETION_DAYS,
       episodeNotificationWindowMinutes:
         DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
       discoveryReminderDurationMinutes:
         DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES,
       discoveryReminderCron: DEFAULT_DISCOVERY_REMINDER_CRON,
+      nextCheckAt: null,
       lastCheckAt: null,
       lastCheckResult: null,
     },
@@ -78,11 +84,31 @@ function normalizeDiscoveryReminderDuration(value) {
   );
 }
 
+function normalizeStaleCompletionDays(value) {
+  return clampInteger(
+    value,
+    MIN_STALE_COMPLETION_DAYS,
+    MAX_STALE_COMPLETION_DAYS,
+    DEFAULT_STALE_COMPLETION_DAYS,
+  );
+}
+
 function normalizeDiscoveryReminderCron(value) {
   const expression = normalizeCronExpression(value);
   return isValidCronExpression(expression)
     ? expression
     : DEFAULT_DISCOVERY_REMINDER_CRON;
+}
+
+function normalizeCheckCron(value, legacyIntervalMinutes) {
+  const expression = normalizeCronExpression(value);
+  if (isValidCronExpression(expression)) {
+    return expression;
+  }
+  return (
+    legacyIntervalMinutesToCron(legacyIntervalMinutes) ||
+    DEFAULT_CHECK_CRON
+  );
 }
 
 function normalizeEvent(event) {
@@ -367,6 +393,42 @@ function normalizeSubscription(subscription) {
     discoveryError: lastDiscoveryIssue || null,
     unpublishedSeasonCount,
   });
+  const storedSeriesStatusOverride = [
+    "updating",
+    "completed",
+    "unknown",
+  ].includes(subscription.seriesStatusOverride)
+    ? subscription.seriesStatusOverride
+    : null;
+  const autoCompletedAt = parseTimestamp(subscription.autoCompletedAt)
+    ? new Date(parseTimestamp(subscription.autoCompletedAt)).toISOString()
+    : null;
+  const seriesStatusOverride = autoCompletedAt
+    ? null
+    : storedSeriesStatusOverride;
+  const seriesStatusOverrideAt =
+    seriesStatusOverride &&
+    parseTimestamp(subscription.seriesStatusOverrideAt)
+      ? new Date(
+          parseTimestamp(subscription.seriesStatusOverrideAt),
+        ).toISOString()
+      : null;
+  const autoCompletionReason = autoCompletedAt
+    ? normalizeWhitespace(subscription.autoCompletionReason || "")
+    : "";
+  const manualStatusReason = {
+    updating: "已手动标记为更新中，将继续自动检查。",
+    completed: "已手动标记为已完结，已停止自动检查。",
+    unknown: "已手动标记为状态未知，将继续自动检查。",
+  }[seriesStatusOverride];
+  const seriesStatus =
+    seriesStatusOverride ||
+    (autoCompletedAt ? "completed" : derivedStatus.status);
+  const seriesStatusReason =
+    manualStatusReason ||
+    (autoCompletedAt
+      ? autoCompletionReason || "超过设定的无更新期限，已自动标记为完结。"
+      : derivedStatus.reason);
 
   return {
     id: String(subscription.id),
@@ -381,12 +443,16 @@ function normalizeSubscription(subscription) {
     firstSeasonId: identity.firstSeasonId,
     firstSeasonTitle: identity.firstSeasonTitle,
     coverUrl: String(subscription.coverUrl || primary?.coverUrl || ""),
-    seriesStatus: derivedStatus.status,
-    seriesStatusReason: derivedStatus.reason,
+    seriesStatus,
+    seriesStatusReason,
+    seriesStatusOverride,
+    seriesStatusOverrideAt,
     completedAt:
       hasVerifiedCompletionCycle && subscription.completedAt
         ? String(subscription.completedAt)
         : null,
+    autoCompletedAt,
+    autoCompletionReason: autoCompletionReason || null,
     seriesCompletionAnnounced:
       hasVerifiedCompletionCycle &&
       subscription.seriesCompletionAnnounced === true,
@@ -436,8 +502,30 @@ export function normalizeState(input) {
   if (!isPlainObject(input)) {
     return fallback;
   }
-
   const inputVersion = Number(input.version);
+  const checkCron = normalizeCheckCron(
+    input.settings?.checkCron,
+    input.settings?.intervalMinutes,
+  );
+  const lastCheckAt =
+    parseTimestamp(input.settings?.lastCheckAt) === null
+      ? null
+      : new Date(
+          parseTimestamp(input.settings.lastCheckAt),
+        ).toISOString();
+  const storedNextCheckAt =
+    Number.isFinite(inputVersion) && inputVersion >= STATE_VERSION
+      ? parseTimestamp(input.settings?.nextCheckAt)
+      : null;
+  const derivedNextCheckAt =
+    lastCheckAt === null
+      ? null
+      : nextCronOccurrence(checkCron, new Date(lastCheckAt)).toISOString();
+  const nextCheckAt =
+    storedNextCheckAt === null
+      ? derivedNextCheckAt
+      : new Date(storedNextCheckAt).toISOString();
+
   const needsCompletionCleanup =
     !Number.isFinite(inputVersion) ||
     inputVersion < SERIES_COMPLETION_RULE_VERSION;
@@ -546,11 +634,9 @@ export function normalizeState(input) {
         input.settings?.notifications,
         input.settings?.barkKey,
       ),
-      intervalMinutes: clampInteger(
-        input.settings?.intervalMinutes,
-        MIN_INTERVAL_MINUTES,
-        MAX_INTERVAL_MINUTES,
-        DEFAULT_INTERVAL_MINUTES,
+      checkCron,
+      staleCompletionDays: normalizeStaleCompletionDays(
+        input.settings?.staleCompletionDays,
       ),
       episodeNotificationWindowMinutes: normalizeEpisodeNotificationWindow(
         input.settings?.episodeNotificationWindowMinutes,
@@ -562,9 +648,8 @@ export function normalizeState(input) {
       discoveryReminderCron: normalizeDiscoveryReminderCron(
         input.settings?.discoveryReminderCron,
       ),
-      lastCheckAt: input.settings?.lastCheckAt
-        ? String(input.settings.lastCheckAt)
-        : null,
+      nextCheckAt,
+      lastCheckAt,
       lastCheckResult: ["success", "partial", "error"].includes(
         input.settings?.lastCheckResult,
       )
@@ -602,8 +687,17 @@ async function atomicWriteJson(filePath, value) {
 }
 
 export class JsonStateStore {
-  constructor(filePath) {
+  constructor(
+    filePath,
+    {
+      eventLogDirectory = path.join(path.dirname(filePath), "logs"),
+      maxEventLogFileBytes,
+    } = {},
+  ) {
     this.filePath = filePath;
+    this.eventLog = new EventLogStore(eventLogDirectory, {
+      maxFileBytes: maxEventLogFileBytes,
+    });
     this.state = createDefaultState();
     this.initialized = false;
     this.queue = Promise.resolve();
@@ -630,6 +724,8 @@ export class JsonStateStore {
       await this.persist();
     }
 
+    await this.eventLog.init();
+    await this.eventLog.appendEvents([...this.state.events].reverse());
     this.initialized = true;
     return this.read();
   }
@@ -673,10 +769,25 @@ export class JsonStateStore {
       }
 
       const draft = deepClone(this.state);
+      const previousEventIds = new Set(
+        this.state.events.map((event) => event.id),
+      );
       const result = await mutator(draft);
       const normalized = normalizeState(draft);
+      const newEvents = normalized.events
+        .filter((event) => !previousEventIds.has(event.id))
+        .reverse();
       this.state = normalized;
       await this.persist();
+      if (newEvents.length) {
+        try {
+          await this.eventLog.appendEvents(newEvents);
+        } catch (error) {
+          console.error(
+            `事件日志写入失败：${error?.message || "未知错误"}`,
+          );
+        }
+      }
       return result;
     });
 

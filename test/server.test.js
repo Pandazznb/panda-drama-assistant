@@ -111,10 +111,41 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     /img-src[^;]*blob:/,
   );
   const page = await pageResponse.text();
-  assert.match(page, /红果追更/);
-  assert.match(page, /data-theme-choice="auto"/);
-  assert.match(page, /data-theme-choice="light"/);
-  assert.match(page, /data-theme-choice="dark"/);
+  assert.match(page, /短剧助手/);
+  assert.equal((page.match(/data-theme-toggle/g) || []).length, 1);
+  assert.doesNotMatch(page, /data-theme-choice=/);
+  assert.match(page, /href="\/api\/logs\/file"/);
+  assert.match(page, /target="_blank"/);
+  assert.match(page, /aria-label="在新标签页打开全部日志文件"/);
+  assert.match(page, /显示全部/);
+  assert.match(page, /id="watchlist-search-input"/);
+  assert.match(page, /aria-label="正在追更的短剧搜索结果"/);
+  assert.match(page, /搜索剧名、全拼或首字母/);
+  assert.match(page, /id="open-add-dialog"/);
+  assert.match(page, /id="add-dialog"/);
+  assert.match(page, /id="share-input-clear"/);
+  assert.match(page, /id="watchlist-search-clear"/);
+  assert.match(
+    page,
+    /href="\/assets\/panda-drama-assistant-icon\.svg"/,
+  );
+
+  const iconResponse = await fetch(
+    `${harness.origin}/assets/panda-drama-assistant-icon.svg`,
+  );
+  assert.equal(iconResponse.status, 200);
+  assert.match(iconResponse.headers.get("content-type"), /^image\/svg\+xml/);
+  assert.match(await iconResponse.text(), /短剧助手图标/);
+
+  const appIconResponse = await fetch(
+    `${harness.origin}/assets/panda-drama-assistant-icon.png`,
+  );
+  assert.equal(appIconResponse.status, 200);
+  assert.equal(appIconResponse.headers.get("content-type"), "image/png");
+  assert.equal(
+    Buffer.from(await appIconResponse.arrayBuffer()).subarray(1, 4).toString(),
+    "PNG",
+  );
 
   const themeResponse = await fetch(`${harness.origin}/theme.js`);
   assert.equal(themeResponse.status, 200);
@@ -122,13 +153,15 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     themeResponse.headers.get("content-type"),
     /^text\/javascript/,
   );
-  assert.match(await themeResponse.text(), /prefers-color-scheme: dark/);
+  const themeScript = await themeResponse.text();
+  assert.match(themeScript, /prefers-color-scheme: dark/);
+  assert.match(themeScript, /\["auto", "light", "dark"\]/);
 
   const stateResponse = await fetch(`${harness.origin}/api/state`);
   assert.equal(stateResponse.status, 200);
   const state = await stateResponse.json();
   assert.deepEqual(state.subscriptions, []);
-  assert.equal(state.settings.intervalMinutes, 30);
+  assert.equal(state.settings.checkCron, "*/30 * * * *");
   assert.equal(state.settings.episodeNotificationWindowMinutes, 0);
   assert.equal(state.settings.discoveryReminderDurationMinutes, 0);
   assert.equal(state.settings.discoveryReminderCron, "0 */6 * * *");
@@ -136,13 +169,115 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.equal(state.settings.notifications.enabledCount, 0);
 });
 
-test("settings API saves custom intervals and all notification channels without leaking secrets", async (t) => {
+test("HTTP app serves the full log page and paginated event log API", async (t) => {
+  const harness = await startHarness(t);
+
+  const pageResponse = await fetch(`${harness.origin}/logs`);
+  assert.equal(pageResponse.status, 200);
+  const page = await pageResponse.text();
+  assert.match(page, /全部动态/);
+  assert.match(page, /id="logs-load-more"/);
+  assert.equal((page.match(/data-theme-toggle/g) || []).length, 1);
+  assert.doesNotMatch(page, /data-theme-choice=/);
+
+  const scriptResponse = await fetch(`${harness.origin}/logs.js`);
+  assert.equal(scriptResponse.status, 200);
+  assert.match(
+    scriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+
+  const emptyResponse = await fetch(`${harness.origin}/api/logs`);
+  const emptyPage = await emptyResponse.json();
+  assert.equal(emptyPage.total, 0);
+  assert.deepEqual(emptyPage.events, []);
+  assert.equal(emptyPage.hasMore, false);
+
+  await harness.eventLog.appendEvents([
+    {
+      id: "server-event-1",
+      type: "episode",
+      message: "较早记录",
+      createdAt: "2026-10-30T01:00:00.000Z",
+    },
+    {
+      id: "server-event-2",
+      type: "season",
+      message: "中间记录",
+      createdAt: "2026-10-30T02:00:00.000Z",
+    },
+    {
+      id: "server-event-3",
+      type: "completed",
+      message: "最新记录",
+      createdAt: "2026-10-30T03:00:00.000Z",
+    },
+  ]);
+
+  const firstResponse = await fetch(
+    `${harness.origin}/api/logs?offset=0&limit=2`,
+  );
+  assert.equal(firstResponse.status, 200);
+  const firstPage = await firstResponse.json();
+  assert.equal(firstPage.total, 3);
+  assert.equal(firstPage.hasMore, true);
+  assert.equal(firstPage.nextOffset, 2);
+  assert.equal(firstPage.limit, 2);
+  assert.deepEqual(
+    firstPage.events.map((event) => event.id),
+    ["server-event-3", "server-event-2"],
+  );
+  assert.deepEqual(firstPage.storage, {
+    policy: "daily-size",
+    maxFileBytes: 1024 * 1024,
+    timeZone: "Asia/Shanghai",
+  });
+
+  const secondResponse = await fetch(
+    `${harness.origin}/api/logs?offset=2&limit=2`,
+  );
+  const secondPage = await secondResponse.json();
+  assert.equal(secondPage.hasMore, false);
+  assert.equal(secondPage.nextOffset, null);
+  assert.deepEqual(
+    secondPage.events.map((event) => event.id),
+    ["server-event-1"],
+  );
+
+  const cappedResponse = await fetch(
+    `${harness.origin}/api/logs?offset=0&limit=1000`,
+  );
+  const cappedPage = await cappedResponse.json();
+  assert.equal(cappedPage.limit, 500);
+
+  const fileResponse = await fetch(
+    `${harness.origin}/api/logs/file`,
+  );
+  assert.equal(fileResponse.status, 200);
+  assert.match(
+    fileResponse.headers.get("content-type"),
+    /^text\/plain/,
+  );
+  assert.equal(
+    fileResponse.headers.get("content-disposition"),
+    'inline; filename="hongguo-events-all.jsonl"',
+  );
+  assert.equal(fileResponse.headers.get("cache-control"), "no-store");
+  const fileContent = await fileResponse.text();
+  assert.match(fileContent, /server-event-1/);
+  assert.match(fileContent, /server-event-2/);
+  assert.match(fileContent, /server-event-3/);
+  assert.doesNotMatch(fileContent, /hongguo-server-/);
+});
+
+test("settings API saves a custom Cron schedule and all notification channels without leaking secrets", async (t) => {
   const harness = await startHarness(t);
   const response = await fetch(`${harness.origin}/api/settings`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      intervalMinutes: 10080,
+      checkCron: "0 0 * * 0",
+      staleCompletionDays: 120,
       episodeNotificationWindowMinutes: 60,
       discoveryReminderDurationMinutes: 1440,
       discoveryReminderCron: "0 */8 * * *",
@@ -180,7 +315,8 @@ test("settings API saves custom intervals and all notification channels without 
   });
   assert.equal(response.status, 200);
   const payload = await response.json();
-  assert.equal(payload.settings.intervalMinutes, 10080);
+  assert.equal(payload.settings.checkCron, "0 0 * * 0");
+  assert.equal(payload.settings.staleCompletionDays, 120);
   assert.equal(payload.settings.episodeNotificationWindowMinutes, 60);
   assert.equal(payload.settings.discoveryReminderDurationMinutes, 1440);
   assert.equal(payload.settings.discoveryReminderCron, "0 */8 * * *");
@@ -212,7 +348,8 @@ test("settings API saves custom intervals and all notification channels without 
 
   const stateResponse = await fetch(`${harness.origin}/api/state`);
   const state = await stateResponse.json();
-  assert.equal(state.settings.intervalMinutes, 10080);
+  assert.equal(state.settings.checkCron, "0 0 * * 0");
+  assert.equal(state.settings.staleCompletionDays, 120);
   assert.equal(state.settings.episodeNotificationWindowMinutes, 60);
   assert.equal(state.settings.discoveryReminderDurationMinutes, 1440);
   assert.equal(state.settings.discoveryReminderCron, "0 */8 * * *");
@@ -227,7 +364,9 @@ test("settings API saves custom intervals and all notification channels without 
   assert.equal(JSON.stringify(state).includes("proxy-pass"), false);
 
   const onDisk = JSON.parse(await fs.readFile(harness.stateFile, "utf8"));
-  assert.equal(onDisk.version, 7);
+  assert.equal(onDisk.version, 10);
+  assert.equal(onDisk.settings.checkCron, "0 0 * * 0");
+  assert.equal(onDisk.settings.staleCompletionDays, 120);
   assert.equal(onDisk.settings.discoveryReminderDurationMinutes, 1440);
   assert.equal(onDisk.settings.discoveryReminderCron, "0 */8 * * *");
   assert.deepEqual(onDisk.settings.notifications.proxy, {
@@ -247,12 +386,24 @@ test("settings API rejects invalid discovery reminder values", async (t) => {
   const harness = await startHarness(t);
   for (const [body, code] of [
     [
+      { staleCompletionDays: 0 },
+      "INVALID_STALE_COMPLETION_DAYS",
+    ],
+    [
+      { staleCompletionDays: 3651 },
+      "INVALID_STALE_COMPLETION_DAYS",
+    ],
+    [
       { discoveryReminderDurationMinutes: 43_201 },
       "INVALID_DISCOVERY_REMINDER_DURATION",
     ],
     [
       { discoveryReminderCron: "60 * * * *" },
       "INVALID_DISCOVERY_REMINDER_CRON",
+    ],
+    [
+      { checkCron: "60 * * * *" },
+      "INVALID_CHECK_CRON",
     ],
   ]) {
     const response = await fetch(`${harness.origin}/api/settings`, {
@@ -264,6 +415,86 @@ test("settings API rejects invalid discovery reminder values", async (t) => {
     const payload = await response.json();
     assert.equal(payload.error.code, code);
   }
+});
+
+test("status API switches and restores manual series status", async (t) => {
+  const harness = await startHarness(t);
+  const calls = [];
+  harness.service.updateSubscriptionStatus = async (subscriptionId, status) => {
+    calls.push({ subscriptionId, status });
+    return {
+      id: subscriptionId,
+      title: "测试短剧",
+      seriesStatusOverride: status === "auto" ? null : status,
+    };
+  };
+
+  let response = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/status`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "completed" }),
+    },
+  );
+  assert.equal(response.status, 200);
+  let payload = await response.json();
+  assert.equal(payload.result.seriesStatusOverride, "completed");
+  assert.match(payload.message, /已停止检查/);
+
+  response = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/status`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "auto" }),
+    },
+  );
+  assert.equal(response.status, 200);
+  payload = await response.json();
+  assert.equal(payload.result.seriesStatusOverride, null);
+  assert.match(payload.message, /恢复为自动判断/);
+  assert.deepEqual(calls, [
+    { subscriptionId: "sub_test", status: "completed" },
+    { subscriptionId: "sub_test", status: "auto" },
+  ]);
+});
+
+test("status API rejects an invalid status before updating the service", async (t) => {
+  const harness = await startHarness(t);
+  const calls = [];
+  harness.service.updateSubscriptionStatus = async (subscriptionId, status) => {
+    calls.push({ subscriptionId, status });
+    throw new Error("should not be called");
+  };
+
+  const response = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/status`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "paused" }),
+    },
+  );
+  assert.equal(response.status, 400);
+  const payload = await response.json();
+  assert.equal(payload.error.code, "INVALID_SERIES_STATUS");
+  assert.deepEqual(calls, []);
+});
+
+test("status API returns 404 for an unknown subscription", async (t) => {
+  const harness = await startHarness(t);
+  const response = await fetch(
+    `${harness.origin}/api/subscriptions/sub_missing/status`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: "updating" }),
+    },
+  );
+  assert.equal(response.status, 404);
+  const payload = await response.json();
+  assert.equal(payload.error.code, "SUBSCRIPTION_NOT_FOUND");
 });
 
 test("notification test API explains when no channel is enabled", async (t) => {
@@ -280,6 +511,47 @@ test("notification test API explains when no channel is enabled", async (t) => {
   const payload = await response.json();
   assert.equal(payload.error.code, "NO_NOTIFICATION_CHANNEL");
   assert.match(payload.error.message, /还没有启用/);
+});
+
+test("single-series check API forces completed-series verification", async (t) => {
+  const harness = await startHarness(t);
+  const calls = [];
+  harness.service.checkSubscription = async (subscriptionId, options) => {
+    calls.push({ subscriptionId, options });
+    return {
+      subscriptionId,
+      seasonsChecked: 1,
+      updatedSeasons: 1,
+      discoveredSeasons: 0,
+      errors: 0,
+      completionRechecked: true,
+      reactivatedFromCompleted: true,
+    };
+  };
+
+  const response = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/check`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.match(payload.message, /强制检查完成/);
+  assert.match(payload.message, /恢复为未完结/);
+  assert.deepEqual(calls, [
+    {
+      subscriptionId: "sub_test",
+      options: {
+        notify: true,
+        discover: true,
+        forceDiscovery: true,
+        forceCompletedCheck: true,
+      },
+    },
+  ]);
 });
 
 test("batch check API reports completed series as skipped", async (t) => {
@@ -337,6 +609,35 @@ test("watched API marks a subscription as viewed", async (t) => {
   assert.equal(payload.ok, true);
   assert.equal(payload.result.id, "sub_test");
   assert.equal(payload.message, "已将《测试短剧》标记为已观看。");
+  assert.deepEqual(calls, ["sub_test"]);
+});
+
+test("watched API can restore a subscription to unread", async (t) => {
+  const harness = await startHarness(t);
+  const calls = [];
+  harness.service.markSubscriptionUnwatched = async (subscriptionId) => {
+    calls.push(subscriptionId);
+    return {
+      id: subscriptionId,
+      title: "测试短剧",
+      hasUnreadUpdate: true,
+      lastWatchedAt: "2026-10-27T08:00:00.000Z",
+    };
+  };
+
+  const response = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/watched`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ watched: false }),
+    },
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.ok, true);
+  assert.equal(payload.result.hasUnreadUpdate, true);
+  assert.equal(payload.message, "已将《测试短剧》恢复为有更新。");
   assert.deepEqual(calls, ["sub_test"]);
 });
 

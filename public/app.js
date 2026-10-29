@@ -1,8 +1,12 @@
 const elements = {
+  mainContent: document.querySelector("#main-content"),
+  openAddDialog: document.querySelector("#open-add-dialog"),
+  addDialog: document.querySelector("#add-dialog"),
   addForm: document.querySelector("#add-form"),
   addSubmit: document.querySelector("#add-submit"),
   seriesSearchField: document.querySelector("#series-search-field"),
   shareInput: document.querySelector("#share-input"),
+  shareInputClear: document.querySelector("#share-input-clear"),
   shareFeedback: document.querySelector("#share-feedback"),
   seriesSearchPanel: document.querySelector("#series-search-panel"),
   seriesSearchStatus: document.querySelector("#series-search-status"),
@@ -10,9 +14,18 @@ const elements = {
   subscriptionList: document.querySelector("#subscription-list"),
   watchlistTitle: document.querySelector("#watchlist-title"),
   watchlistSummary: document.querySelector("#watchlist-summary"),
+  watchlistSearch: document.querySelector("#watchlist-search"),
+  watchlistSearchInput: document.querySelector("#watchlist-search-input"),
+  watchlistSearchClear: document.querySelector("#watchlist-search-clear"),
+  watchlistSearchPanel: document.querySelector("#watchlist-search-panel"),
+  watchlistSearchStatus: document.querySelector("#watchlist-search-status"),
+  watchlistSearchList: document.querySelector("#watchlist-search-list"),
   checkAll: document.querySelector("#check-all"),
   checkIndicator: document.querySelector("#check-indicator"),
+  openEvents: document.querySelector("#open-events"),
+  eventCount: document.querySelector("#event-count"),
   eventList: document.querySelector("#event-list"),
+  eventsDialog: document.querySelector("#events-dialog"),
   statSeries: document.querySelector("#stat-series"),
   statSeasons: document.querySelector("#stat-seasons"),
   statLastCheck: document.querySelector("#stat-last-check"),
@@ -21,6 +34,8 @@ const elements = {
   screenshotDialog: document.querySelector("#screenshot-import-dialog"),
   screenshotContent: document.querySelector("#screenshot-import-content"),
   screenshotFiles: document.querySelector("#screenshot-files"),
+  screenshotPickerLabel: document.querySelector("#screenshot-picker-label"),
+  screenshotPickerStatus: document.querySelector("#screenshot-picker-status"),
   screenshotSelection: document.querySelector("#screenshot-selection"),
   screenshotFileCount: document.querySelector("#screenshot-file-count"),
   screenshotFileList: document.querySelector("#screenshot-file-list"),
@@ -124,7 +139,8 @@ const elements = {
       clear: document.querySelector("#clear-dingtalk"),
     },
   },
-  intervalMinutes: document.querySelector("#interval-minutes"),
+  checkCron: document.querySelector("#check-cron"),
+  staleCompletionDays: document.querySelector("#stale-completion-days"),
   episodeNotificationWindow: document.querySelector(
     "#episode-notification-window",
   ),
@@ -150,11 +166,19 @@ const elements = {
   seasonContext: document.querySelector("#season-context"),
   seasonGroupId: document.querySelector("#season-group-id"),
   seasonSubmit: document.querySelector("#season-submit"),
+  statusDialog: document.querySelector("#status-dialog"),
+  statusForm: document.querySelector("#status-form"),
+  statusContext: document.querySelector("#status-context"),
+  statusFeedback: document.querySelector("#status-feedback"),
+  statusSubmit: document.querySelector("#status-submit"),
   deleteDialog: document.querySelector("#delete-dialog"),
   deleteForm: document.querySelector("#delete-form"),
   deleteContext: document.querySelector("#delete-context"),
   deleteFeedback: document.querySelector("#delete-feedback"),
   deleteSubmit: document.querySelector("#delete-submit"),
+  scrollControls: document.querySelector("#scroll-controls"),
+  scrollToTop: document.querySelector("#scroll-to-top"),
+  scrollToBottom: document.querySelector("#scroll-to-bottom"),
   toast: document.querySelector("#toast"),
   pageProgress: document.querySelector("#page-progress"),
 };
@@ -162,6 +186,10 @@ const elements = {
 const appState = {
   dashboard: null,
   activeSubscriptionId: null,
+  expandedSubscriptionIds: new Set(),
+  statusGlowObserver: null,
+  scrollControlsFrame: null,
+  scrollControlsResizeObserver: null,
   loading: false,
   toastTimer: null,
   screenshotFiles: [],
@@ -173,6 +201,14 @@ const appState = {
   screenshotSequence: 0,
   screenshotRunId: 0,
   screenshotReturnFocus: null,
+  addDialogReturnFocus: null,
+  watchlistSearch: {
+    activeIndex: -1,
+    open: false,
+    query: "",
+    results: [],
+    selectedId: null,
+  },
   seriesSearch: {
     activeIndex: -1,
     controller: null,
@@ -188,6 +224,13 @@ const appState = {
 
 const SERIES_SEARCH_DELAY_MS = 320;
 const SERIES_SEARCH_MAX_QUERY_LENGTH = 30;
+const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const DASHBOARD_REQUEST_TIMEOUT_MS = 12_000;
+const SETTINGS_REQUEST_TIMEOUT_MS = 15_000;
+const SCREENSHOT_ANALYZE_TIMEOUT_MS = 70_000;
+const SCREENSHOT_IMPORT_TIMEOUT_MS = 180_000;
+const LONG_ACTION_TIMEOUT_MS = 120_000;
+const CHECK_ALL_TIMEOUT_MS = 300_000;
 
 const notificationChannelOrder = [
   "bark",
@@ -217,6 +260,8 @@ const discoveryReminderUnitMinutes = Object.freeze({
   days: 1440,
 });
 const APP_TIME_ZONE = "Asia/Shanghai";
+const MAX_RECENT_EVENTS = 100;
+const MAX_WATCHLIST_SEARCH_CANDIDATES = 8;
 
 const icon = (name, className = "icon") =>
   `<svg class="${className}" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-${name}"></use></svg>`;
@@ -321,7 +366,7 @@ function statusMarkup(status) {
     status === "completed"
       ? "check"
       : status === "updating"
-        ? "bell"
+        ? "layers"
         : "alert";
   return `<span class="status status--${escapeHtml(status)}">${icon(
     iconName,
@@ -331,15 +376,32 @@ function statusMarkup(status) {
 function updateStatusMarkup(subscription) {
   const hasUnreadUpdate = subscription.hasUnreadUpdate === true;
   const label = hasUnreadUpdate ? "有更新" : "已观看";
+  const hint = hasUnreadUpdate ? "点按标记已看" : "点按恢复提醒";
   const iconName = hasUnreadUpdate ? "bell" : "eye";
-  const title = subscription.lastWatchedAt
-    ? `最后标记已看：${formatDate(subscription.lastWatchedAt)}`
+  const lastWatchedNote = subscription.lastWatchedAt
+    ? `；最后标记已看：${formatDate(subscription.lastWatchedAt)}`
     : "";
-  return `<span class="status status--${
-    hasUnreadUpdate ? "unread" : "watched"
-  }"${title ? ` title="${escapeHtml(title)}"` : ""}>${icon(
-    iconName,
-  )}${label}</span>`;
+  const title = hasUnreadUpdate
+    ? `将《${subscriptionDisplayTitle(subscription)}》标记为已观看${lastWatchedNote}`
+    : `将《${subscriptionDisplayTitle(subscription)}》恢复为有更新${lastWatchedNote}`;
+  return `
+    <button
+      class="status status-toggle status--${
+        hasUnreadUpdate ? "unread" : "watched"
+      }"
+      type="button"
+      data-action="watched"
+      data-watched="${hasUnreadUpdate}"
+      title="${escapeHtml(title)}"
+      aria-label="${escapeHtml(title)}"
+    >
+      <span class="status-toggle__icon">${icon(iconName)}</span>
+      <span class="status-toggle__copy">
+        <span class="status-toggle__label" data-button-label>${label}</span>
+        <span class="status-toggle__hint">${hint}</span>
+      </span>
+    </button>
+  `;
 }
 
 function subscriptionDisplayTitle(subscription) {
@@ -349,6 +411,320 @@ function subscriptionDisplayTitle(subscription) {
     subscription?.title ||
     "未命名短剧"
   );
+}
+
+function normalizeWatchlistSearchValue(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .replaceAll("ü", "v")
+    .replace(/[\s·・'’]+/g, "");
+}
+
+function watchlistSearchTerms(value) {
+  return String(value ?? "")
+    .split(/\s+/)
+    .map(normalizeWatchlistSearchValue)
+    .filter(Boolean);
+}
+
+function watchlistSubsequenceScore(query, target, baseScore) {
+  if (query.length < 2 || target.length < query.length) {
+    return 0;
+  }
+  let queryIndex = 0;
+  let firstMatch = -1;
+  let lastMatch = -1;
+  for (let index = 0; index < target.length; index += 1) {
+    if (target[index] !== query[queryIndex]) {
+      continue;
+    }
+    if (firstMatch < 0) {
+      firstMatch = index;
+    }
+    lastMatch = index;
+    queryIndex += 1;
+    if (queryIndex === query.length) {
+      const span = lastMatch - firstMatch + 1;
+      return Math.max(
+        1,
+        baseScore -
+          (target.length - query.length) * 2 -
+          (span - query.length) * 5,
+      );
+    }
+  }
+  return 0;
+}
+
+function watchlistFieldScore(field, query, scores) {
+  let best = 0;
+  for (const term of watchlistSearchTerms(field)) {
+    if (term === query) {
+      best = Math.max(best, scores.exact);
+    } else if (term.startsWith(query)) {
+      best = Math.max(best, scores.prefix);
+    } else if (term.includes(query)) {
+      best = Math.max(best, scores.contains);
+    }
+  }
+  return best;
+}
+
+function watchlistSubscriptionScore(subscription, query) {
+  const title = normalizeWatchlistSearchValue(
+    subscriptionDisplayTitle(subscription),
+  );
+  const searchText =
+    subscription.searchText || normalizeWatchlistSearchValue(title);
+  const searchPinyin =
+    subscription.searchPinyin || normalizeWatchlistSearchValue(title);
+  const searchInitials =
+    subscription.searchInitials || normalizeWatchlistSearchValue(title);
+
+  let score = Math.max(
+    watchlistFieldScore(title, query, {
+      exact: 1200,
+      prefix: 1100,
+      contains: 1000,
+    }),
+    watchlistFieldScore(searchText, query, {
+      exact: 980,
+      prefix: 940,
+      contains: 900,
+    }),
+    watchlistFieldScore(searchPinyin, query, {
+      exact: 900,
+      prefix: 850,
+      contains: 800,
+    }),
+    watchlistFieldScore(searchInitials, query, {
+      exact: 760,
+      prefix: 720,
+      contains: 680,
+    }),
+  );
+
+  for (const term of watchlistSearchTerms(searchText)) {
+    score = Math.max(
+      score,
+      watchlistSubsequenceScore(query, term, 480),
+    );
+  }
+  for (const term of watchlistSearchTerms(searchPinyin)) {
+    score = Math.max(
+      score,
+      watchlistSubsequenceScore(query, term, 430),
+    );
+  }
+  for (const term of watchlistSearchTerms(searchInitials)) {
+    score = Math.max(
+      score,
+      watchlistSubsequenceScore(query, term, 400),
+    );
+  }
+  return score;
+}
+
+function watchlistSearchMatches(subscriptions) {
+  const search = appState.watchlistSearch;
+  const query = normalizeWatchlistSearchValue(search.query);
+  if (!query) {
+    return subscriptions.map((subscription) => ({
+      score: 0,
+      subscription,
+    }));
+  }
+
+  if (search.selectedId) {
+    const selected = subscriptions.find(
+      (subscription) => subscription.id === search.selectedId,
+    );
+    if (selected) {
+      return [{ score: 0, subscription: selected }];
+    }
+    search.selectedId = null;
+  }
+
+  return subscriptions
+    .map((subscription) => ({
+      score: watchlistSubscriptionScore(subscription, query),
+      subscription,
+    }))
+    .filter((match) => match.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return (
+        (latestSubscriptionUpdate(right.subscription)?.timestamp || 0) -
+        (latestSubscriptionUpdate(left.subscription)?.timestamp || 0)
+      );
+    });
+}
+
+function setWatchlistSearchOpen(open) {
+  const search = appState.watchlistSearch;
+  const shouldOpen =
+    Boolean(open) && Boolean(normalizeWatchlistSearchValue(search.query));
+  search.open = shouldOpen;
+  elements.watchlistSearchPanel.hidden = !shouldOpen;
+  elements.watchlistSearchInput.setAttribute(
+    "aria-expanded",
+    String(shouldOpen),
+  );
+  if (!shouldOpen) {
+    elements.watchlistSearchInput.removeAttribute("aria-activedescendant");
+  }
+}
+
+function setWatchlistSearchActive(index, { scroll = false } = {}) {
+  const search = appState.watchlistSearch;
+  const options = [
+    ...elements.watchlistSearchList.querySelectorAll("[role='option']"),
+  ];
+  if (!options.length) {
+    search.activeIndex = -1;
+    elements.watchlistSearchInput.removeAttribute("aria-activedescendant");
+    return;
+  }
+  const requestedIndex = Number(index);
+  const nextIndex = Number.isFinite(requestedIndex)
+    ? (requestedIndex + options.length) % options.length
+    : 0;
+  search.activeIndex = nextIndex;
+  options.forEach((option, optionIndex) => {
+    const active = optionIndex === nextIndex;
+    option.dataset.active = active ? "true" : "false";
+    option.setAttribute("aria-selected", String(active));
+  });
+  elements.watchlistSearchInput.setAttribute(
+    "aria-activedescendant",
+    options[nextIndex].id,
+  );
+  if (scroll) {
+    options[nextIndex].scrollIntoView({ block: "nearest" });
+  }
+}
+
+function renderWatchlistSearchCandidate(subscription, index) {
+  const displayTitle = subscriptionDisplayTitle(subscription);
+  const latestSeason =
+    subscription.seasons?.find(
+      (season) => season.seriesId === subscription.latestSeasonId,
+    ) || subscription.seasons?.[0];
+  const latestUpdate = latestSubscriptionUpdate(subscription);
+  const coverUrl = safeHttpsUrl(subscription.coverUrl);
+  const cover = coverUrl
+    ? `<img class="watchlist-search-result__cover" src="${escapeHtml(
+        coverUrl,
+      )}" alt="" loading="lazy">`
+    : `<span class="watchlist-search-result__placeholder" aria-hidden="true">${icon(
+        "tv",
+      )}</span>`;
+  const meta = [
+    latestSeason?.title ? `最新 ${latestSeason.title}` : "季信息未知",
+    latestUpdate
+      ? formatDateTime(latestUpdate.value)
+      : "更新时间未知",
+  ].join(" · ");
+
+  return `
+    <li
+      class="watchlist-search-result"
+      id="watchlist-search-option-${index}"
+      role="option"
+      aria-selected="false"
+      data-active="false"
+      data-watchlist-search-index="${index}"
+      title="只显示《${escapeHtml(displayTitle)}》"
+    >
+      ${cover}
+      <span class="watchlist-search-result__body">
+        <span class="watchlist-search-result__title">${escapeHtml(
+          displayTitle,
+        )}</span>
+        <span class="watchlist-search-result__meta">${escapeHtml(
+          meta,
+        )}</span>
+      </span>
+      ${icon("chevron-right", "icon watchlist-search-result__arrow")}
+    </li>
+  `;
+}
+
+function renderWatchlistSearchCandidates(matches) {
+  const search = appState.watchlistSearch;
+  const query = normalizeWatchlistSearchValue(search.query);
+  elements.watchlistSearchClear.hidden = !search.query;
+  if (!query) {
+    search.activeIndex = -1;
+    search.results = [];
+    elements.watchlistSearchStatus.textContent = "";
+    elements.watchlistSearchList.replaceChildren();
+    elements.watchlistSearchList.hidden = true;
+    setWatchlistSearchOpen(false);
+    return;
+  }
+
+  search.results = matches
+    .slice(0, MAX_WATCHLIST_SEARCH_CANDIDATES)
+    .map((match) => match.subscription);
+  if (!search.results.length) {
+    search.activeIndex = -1;
+    elements.watchlistSearchStatus.textContent =
+      "没有找到匹配的追更短剧，请换个剧名、全拼或首字母。";
+    elements.watchlistSearchList.replaceChildren();
+    elements.watchlistSearchList.hidden = true;
+    setWatchlistSearchOpen(search.open);
+    return;
+  }
+
+  elements.watchlistSearchStatus.textContent =
+    matches.length > search.results.length
+      ? `找到 ${matches.length} 个系列，优先显示前 ${search.results.length} 个。`
+      : `找到 ${matches.length} 个系列。`;
+  elements.watchlistSearchList.innerHTML = search.results
+    .map(renderWatchlistSearchCandidate)
+    .join("");
+  elements.watchlistSearchList.hidden = false;
+  if (search.activeIndex >= search.results.length) {
+    search.activeIndex = -1;
+  }
+  setWatchlistSearchOpen(search.open);
+  if (search.open && search.activeIndex >= 0) {
+    setWatchlistSearchActive(search.activeIndex);
+  }
+}
+
+function selectWatchlistSearchCandidate(index) {
+  const search = appState.watchlistSearch;
+  const subscription = search.results[Number(index)];
+  if (!subscription) {
+    return;
+  }
+  const title = subscriptionDisplayTitle(subscription);
+  search.query = title;
+  search.selectedId = subscription.id;
+  search.activeIndex = -1;
+  search.open = false;
+  elements.watchlistSearchInput.value = title;
+  renderDashboard();
+  elements.watchlistSearchInput.focus({ preventScroll: true });
+}
+
+function clearWatchlistSearch({ focus = true } = {}) {
+  const search = appState.watchlistSearch;
+  search.query = "";
+  search.selectedId = null;
+  search.activeIndex = -1;
+  search.open = false;
+  search.results = [];
+  elements.watchlistSearchInput.value = "";
+  renderDashboard();
+  if (focus) {
+    elements.watchlistSearchInput.focus({ preventScroll: true });
+  }
 }
 
 function sourceLabel(source) {
@@ -387,30 +763,68 @@ function hasEnabledNotifications(settings) {
 }
 
 async function requestJson(path, options = {}) {
-  const { headers = {}, ...requestOptions } = options;
-  const response = await fetch(path, {
-    ...requestOptions,
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json",
-      ...headers,
-    },
-  });
-  let payload = {};
+  const {
+    headers = {},
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    signal: callerSignal,
+    ...requestOptions
+  } = options;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout =
+    Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, timeoutMs)
+      : null;
+  const abortFromCaller = () => controller.abort();
+  if (callerSignal?.aborted) {
+    controller.abort();
+  } else {
+    callerSignal?.addEventListener("abort", abortFromCaller, {
+      once: true,
+    });
+  }
+
   try {
-    payload = await response.json();
-  } catch {
-    // The status code still gives the caller a useful failure path.
-  }
-  if (!response.ok) {
-    const error = new Error(
-      payload?.error?.message || `请求失败（HTTP ${response.status}）。`,
-    );
-    error.code = payload?.error?.code || "REQUEST_FAILED";
-    error.status = response.status;
+    const response = await fetch(path, {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        ...headers,
+      },
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch {
+      // The status code still gives the caller a useful failure path.
+    }
+    if (!response.ok) {
+      const error = new Error(
+        payload?.error?.message || `请求失败（HTTP ${response.status}）。`,
+      );
+      error.code = payload?.error?.code || "REQUEST_FAILED";
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (timedOut) {
+      const timeoutError = new Error("请求超时，请检查网络后重试。");
+      timeoutError.code = "REQUEST_TIMEOUT";
+      throw timeoutError;
+    }
     throw error;
+  } finally {
+    if (timeout !== null) {
+      clearTimeout(timeout);
+    }
+    callerSignal?.removeEventListener("abort", abortFromCaller);
   }
-  return payload;
 }
 
 function setPageBusy(isBusy) {
@@ -441,19 +855,57 @@ function showToast(message, type = "success") {
   }, 4200);
 }
 
+function updateScrollControls() {
+  appState.scrollControlsFrame = null;
+  const scroller = document.scrollingElement || document.documentElement;
+  const maxScrollTop = Math.max(
+    0,
+    scroller.scrollHeight - window.innerHeight,
+  );
+  const scrollTop = Math.max(0, scroller.scrollTop);
+  const isScrollable = maxScrollTop > 8;
+
+  elements.scrollControls.hidden = !isScrollable;
+  if (!isScrollable) {
+    return;
+  }
+
+  elements.scrollToTop.disabled = scrollTop <= 2;
+  elements.scrollToBottom.disabled = scrollTop >= maxScrollTop - 2;
+}
+
+function scheduleScrollControlsUpdate() {
+  if (appState.scrollControlsFrame !== null) {
+    return;
+  }
+  appState.scrollControlsFrame = window.requestAnimationFrame(
+    updateScrollControls,
+  );
+}
+
+function scrollPageTo(position) {
+  const reduceMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  window.scrollTo({
+    top: position,
+    behavior: reduceMotion ? "auto" : "smooth",
+  });
+}
+
 function setButtonBusy(button, busy, busyLabel = "处理中…") {
   if (!button) {
     return;
   }
+  const label =
+    button.querySelector("[data-button-label]") ||
+    button.querySelector("span:last-child");
   if (busy) {
     if (!button.dataset.idleLabel) {
-      button.dataset.idleLabel =
-        button.querySelector("span:last-child")?.textContent ||
-        button.textContent.trim();
+      button.dataset.idleLabel = label?.textContent || button.textContent.trim();
     }
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
-    const label = button.querySelector("span:last-child");
     if (label) {
       label.textContent = busyLabel;
     } else {
@@ -463,7 +915,6 @@ function setButtonBusy(button, busy, busyLabel = "处理中…") {
   }
   button.disabled = false;
   button.removeAttribute("aria-busy");
-  const label = button.querySelector("span:last-child");
   if (label && button.dataset.idleLabel) {
     label.textContent = button.dataset.idleLabel;
   }
@@ -503,6 +954,10 @@ function currentSeriesSearchSelection() {
     return null;
   }
   return selected;
+}
+
+function updateSeriesSearchClear() {
+  elements.shareInputClear.hidden = !elements.shareInput.value;
 }
 
 function updateAddButtonMode() {
@@ -651,6 +1106,7 @@ function resetSeriesSearch({ clearInput = false } = {}) {
   if (clearInput) {
     elements.shareInput.value = "";
   }
+  updateSeriesSearchClear();
   setFieldError(elements.shareInput, false);
   setFormFeedback(elements.shareFeedback);
   updateAddButtonMode();
@@ -765,6 +1221,7 @@ function selectSeriesCandidate(index) {
   search.selected = candidate;
   search.activeIndex = candidateIndex;
   elements.shareInput.value = candidate.title;
+  updateSeriesSearchClear();
   setFieldError(elements.shareInput, false);
   setFormFeedback(
     elements.shareFeedback,
@@ -834,6 +1291,198 @@ function renderSeasonTimes(season) {
   `;
 }
 
+function latestSubscriptionUpdate(subscription) {
+  return (subscription?.seasons || [])
+    .flatMap((season) => [
+      {
+        value: season.lastEpisodeChangedAt,
+        timestamp: Date.parse(season.lastEpisodeChangedAt || ""),
+      },
+      {
+        value: season.firstVisibleTime,
+        timestamp: Date.parse(season.firstVisibleTime || ""),
+      },
+    ])
+    .filter(({ value, timestamp }) => value && Number.isFinite(timestamp))
+    .sort((left, right) => right.timestamp - left.timestamp)[0] || null;
+}
+
+function renderLatestSubscriptionUpdate(subscription) {
+  const latest = latestSubscriptionUpdate(subscription);
+  return `
+    <span class="subscription-row__latest-update">
+      ${icon("clock")}
+      <span>最新更新</span>
+      ${
+        latest
+          ? `<time datetime="${escapeHtml(
+              new Date(latest.timestamp).toISOString(),
+            )}">${escapeHtml(formatDateTime(latest.value))}</time>`
+          : "<span>暂无记录</span>"
+      }
+    </span>
+  `;
+}
+
+function sortSubscriptionsByLatestUpdate(subscriptions) {
+  return [...subscriptions].sort((left, right) => {
+    const leftLatest = latestSubscriptionUpdate(left);
+    const rightLatest = latestSubscriptionUpdate(right);
+    return (
+      (rightLatest?.timestamp || 0) - (leftLatest?.timestamp || 0) ||
+      String(subscriptionDisplayTitle(left)).localeCompare(
+        subscriptionDisplayTitle(right),
+        "zh-CN",
+      )
+    );
+  });
+}
+
+function datePartsInAppTimeZone(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return Object.fromEntries(
+    new Intl.DateTimeFormat("zh-CN", {
+      timeZone: APP_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+}
+
+function subscriptionUpdateGroup(subscription, now = new Date()) {
+  const latest = latestSubscriptionUpdate(subscription);
+  const parts = datePartsInAppTimeZone(
+    latest ? new Date(latest.timestamp) : null,
+  );
+  if (!parts) {
+    return {
+      key: "unknown",
+      label: "时间未知",
+    };
+  }
+
+  const key = `${parts.year}-${parts.month}-${parts.day}`;
+  const todayParts = datePartsInAppTimeZone(now);
+  const yesterdayParts = datePartsInAppTimeZone(
+    new Date(now.getTime() - 24 * 60 * 60 * 1000),
+  );
+  const todayKey = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
+  const yesterdayKey = `${yesterdayParts.year}-${yesterdayParts.month}-${yesterdayParts.day}`;
+  if (key === todayKey) {
+    return { key, label: "今天" };
+  }
+  if (key === yesterdayKey) {
+    return { key, label: "昨天" };
+  }
+  return {
+    key,
+    label:
+      parts.year === todayParts.year
+        ? `${Number(parts.month)}月${Number(parts.day)}日`
+        : `${parts.year}年${Number(parts.month)}月${Number(parts.day)}日`,
+  };
+}
+
+function groupSubscriptionsByLatestUpdate(subscriptions) {
+  const groups = [];
+  const groupsByKey = new Map();
+  for (const subscription of sortSubscriptionsByLatestUpdate(subscriptions)) {
+    const group = subscriptionUpdateGroup(subscription);
+    let entry = groupsByKey.get(group.key);
+    if (!entry) {
+      entry = {
+        ...group,
+        subscriptions: [],
+      };
+      groupsByKey.set(group.key, entry);
+      groups.push(entry);
+    }
+    entry.subscriptions.push(subscription);
+  }
+  return groups;
+}
+
+function renderSubscriptionGroups(subscriptions) {
+  return groupSubscriptionsByLatestUpdate(subscriptions)
+    .map((group, index) => {
+      const headingId = `subscription-group-${index}`;
+      return `
+        <section class="subscription-group" aria-labelledby="${headingId}">
+          <h3 class="subscription-group__heading" id="${headingId}">
+            <span>${escapeHtml(group.label)}</span>
+            <span class="subscription-group__count">${group.subscriptions.length} 部</span>
+          </h3>
+          <div class="subscription-group__items">
+            ${group.subscriptions.map(renderSubscription).join("")}
+          </div>
+        </section>
+      `;
+    })
+    .join("");
+}
+
+function seasonDetailUrl(season) {
+  const storedUrl = safeHttpsUrl(season?.detailUrl);
+  if (storedUrl) {
+    return storedUrl;
+  }
+  const seriesId = String(season?.seriesId || "").trim();
+  return /^\d{8,25}$/.test(seriesId)
+    ? `https://hongguoduanju.com/detail?series_id=${encodeURIComponent(
+        seriesId,
+      )}`
+    : "";
+}
+
+function renderSeasonItem(season) {
+  const detailUrl = seasonDetailUrl(season);
+  const content = `
+    <span class="season-item__title">
+      <span>${escapeHtml(season.title)}</span>
+      ${detailUrl ? icon("external") : ""}
+    </span>
+    <span class="season-item__meta">
+      ${season.highWaterEpisodeCount} 集 · ${escapeHtml(
+        sourceLabel(season.source),
+      )}
+    </span>
+    ${renderSeasonTimes(season)}
+    ${
+      season.lastError
+        ? `<span class="season-item__error">${escapeHtml(
+            season.lastError,
+          )}</span>`
+        : ""
+    }
+  `;
+  if (!detailUrl) {
+    return `<div class="season-item">${content}</div>`;
+  }
+  const linkLabel = `打开《${season.title}》官方详情`;
+  return `
+    <a
+      class="season-item season-item--link"
+      href="${escapeHtml(detailUrl)}"
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label="${escapeHtml(linkLabel)}"
+      title="${escapeHtml(linkLabel)}"
+    >
+      ${content}
+    </a>
+  `;
+}
+
 function renderSeasonDetails(seasons, latestSeason) {
   const otherSeasons = seasons.filter(
     (season) => season.seriesId !== latestSeason.seriesId,
@@ -846,28 +1495,7 @@ function renderSeasonDetails(seasons, latestSeason) {
     <details class="season-details">
       <summary>查看其余 ${otherSeasons.length} 个已确认季</summary>
       <div class="season-list">
-        ${otherSeasons
-          .map(
-            (season) => `
-              <div class="season-item">
-                <span class="season-item__title">${escapeHtml(season.title)}</span>
-                <span class="season-item__meta">
-                  ${season.highWaterEpisodeCount} 集 · ${escapeHtml(
-                    sourceLabel(season.source),
-                  )}
-                </span>
-                ${renderSeasonTimes(season)}
-                ${
-                  season.lastError
-                    ? `<span class="season-item__error">${escapeHtml(
-                        season.lastError,
-                      )}</span>`
-                    : ""
-                }
-              </div>
-            `,
-          )
-          .join("")}
+        ${otherSeasons.map(renderSeasonItem).join("")}
       </div>
     </details>
   `;
@@ -879,20 +1507,7 @@ function renderSubscription(subscription) {
     subscription.seasons.find(
       (season) => season.seriesId === subscription.latestSeasonId,
     ) || subscription.seasons[0];
-  const firstSeason = subscription.seasons.find(
-    (season) => season.seriesId === subscription.firstSeasonId,
-  );
-  const titleUrl = safeHttpsUrl(
-    firstSeason?.detailUrl || latestSeason?.detailUrl,
-  );
   const latestSeasonUrl = safeHttpsUrl(latestSeason?.detailUrl);
-  const titleMarkup = titleUrl
-    ? `<a href="${escapeHtml(
-        titleUrl,
-      )}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-        displayTitle,
-      )}${icon("external")}</a>`
-    : escapeHtml(displayTitle);
   const latestSeasonTitleMarkup = latestSeason
     ? latestSeasonUrl
       ? `<a class="latest-season__title" href="${escapeHtml(
@@ -908,36 +1523,55 @@ function renderSubscription(subscription) {
   const showSubscriptionError =
     subscription.lastError &&
     subscription.lastError.trim() !== statusReason;
-  const watchedLabel = subscription.hasUnreadUpdate ? "已看" : "已观看";
-  const watchedTitle = subscription.hasUnreadUpdate
-    ? `将《${displayTitle}》标记为已观看`
-    : subscription.lastWatchedAt
-      ? `最后标记已看：${formatDate(subscription.lastWatchedAt)}`
-      : "当前没有待观看的新更新";
+  const detailsId = `subscription-details-${subscription.id}`;
+  const isExpanded = appState.expandedSubscriptionIds.has(subscription.id);
+  const toggleLabel = `${isExpanded ? "收起" : "展开"}《${displayTitle}》详情`;
 
   return `
     <article class="subscription-row" data-subscription-id="${escapeHtml(
       subscription.id,
     )}">
       ${renderCover(subscription.coverUrl, displayTitle)}
-      <div class="subscription-row__body">
+      <div class="subscription-row__summary">
         <div class="subscription-row__header">
-          <h3 class="subscription-row__title">${titleMarkup}</h3>
-          <button
-            class="subscription-delete-button"
-            type="button"
-            data-action="delete"
-            aria-label="删除《${escapeHtml(displayTitle)}》"
-            title="删除追更"
-          >
-            ${icon("trash")}
-          </button>
+          <h3 class="subscription-row__title">
+            <button
+              class="subscription-row__toggle"
+              type="button"
+              data-action="toggle-details"
+              aria-expanded="${isExpanded}"
+              aria-controls="${escapeHtml(detailsId)}"
+              aria-label="${escapeHtml(toggleLabel)}"
+              title="${escapeHtml(toggleLabel)}"
+            >
+              <span>${escapeHtml(displayTitle)}</span>
+              ${icon("chevron-down")}
+            </button>
+          </h3>
+          ${renderLatestSubscriptionUpdate(subscription)}
+          ${
+            latestSeason
+              ? `
+                <span class="subscription-row__season">
+                  <span class="subscription-row__season-label">最新季</span>
+                  ${latestSeasonTitleMarkup}
+                  <span class="subscription-row__episode-count">${latestSeason.highWaterEpisodeCount} 集</span>
+                </span>
+              `
+              : ""
+          }
         </div>
         <div class="status-group">
           ${statusMarkup(subscription.seriesStatus)}
           <span class="status status--count">${subscription.seasonCount} 季已确认</span>
-          ${updateStatusMarkup(subscription)}
         </div>
+        ${updateStatusMarkup(subscription)}
+      </div>
+      <div
+        class="subscription-row__details"
+        id="${escapeHtml(detailsId)}"
+        ${isExpanded ? "" : "hidden"}
+      >
         ${
           latestSeason
             ? `
@@ -987,14 +1621,22 @@ function renderSubscription(subscription) {
             ${icon("list-plus")}<span>追加同系列季</span>
           </button>
           <button
-            class="text-button text-button--watched${subscription.hasUnreadUpdate ? "" : " is-inactive"}"
+            class="text-button subscription-status-button"
             type="button"
-            data-action="watched"
-            aria-label="${escapeHtml(watchedTitle)}"
-            title="${escapeHtml(watchedTitle)}"
-            ${subscription.hasUnreadUpdate ? "" : "disabled"}
+            data-action="status"
+            aria-label="切换《${escapeHtml(displayTitle)}》的系列状态"
+            title="切换系列状态"
           >
-            ${icon(subscription.hasUnreadUpdate ? "check" : "eye")}<span>${watchedLabel}</span>
+            ${icon("activity")}<span>切换状态</span>
+          </button>
+          <button
+            class="text-button text-button--danger subscription-delete-button"
+            type="button"
+            data-action="delete"
+            aria-label="删除《${escapeHtml(displayTitle)}》"
+            title="删除追更"
+          >
+            ${icon("trash")}<span>删除</span>
           </button>
         </div>
       </div>
@@ -1008,6 +1650,23 @@ function renderEmptyState() {
       <span class="empty-state__icon">${icon("inbox")}</span>
       <h3>还没有追更条目</h3>
       <p>在上方粘贴一条红果分享链接，首次添加只会记录当前集数，不会立即提醒。</p>
+    </div>
+  `;
+}
+
+function renderWatchlistSearchEmptyState() {
+  elements.subscriptionList.innerHTML = `
+    <div class="empty-state empty-state--search">
+      <span class="empty-state__icon">${icon("search")}</span>
+      <h3>没有找到匹配的短剧</h3>
+      <p>可以尝试更短的剧名、全拼或拼音首字母。</p>
+      <button
+        class="button button--secondary"
+        type="button"
+        data-action="clear-watchlist-search"
+      >
+        清除搜索
+      </button>
     </div>
   `;
 }
@@ -1041,14 +1700,23 @@ function eventDeliveryLabel(event, settings) {
 }
 
 function renderEvents(events) {
+  const displayedEvents = events.slice(0, MAX_RECENT_EVENTS);
+  const displayedEventCount = displayedEvents.length;
+  elements.eventCount.textContent = String(displayedEventCount);
+  elements.eventCount.hidden = displayedEventCount === 0;
+  elements.openEvents.setAttribute(
+    "aria-label",
+    displayedEventCount
+      ? `最近动态，共 ${displayedEventCount} 条`
+      : "最近动态，暂无记录",
+  );
   if (!events.length) {
     elements.eventList.innerHTML =
       '<p class="muted-copy">还没有动态。更新、完结和检查异常会显示在这里。</p>';
     return;
   }
 
-  elements.eventList.innerHTML = events
-    .slice(0, 24)
+  elements.eventList.innerHTML = displayedEvents
     .map(
       (event) => `
         <article class="event-item event-item--${escapeHtml(event.type)}">
@@ -1084,33 +1752,70 @@ function renderEvents(events) {
     .join("");
 }
 
+function observeStatusGlowButtons() {
+  const buttons = [
+    ...elements.subscriptionList.querySelectorAll(
+      ".status-toggle.status--unread",
+    ),
+  ];
+  appState.statusGlowObserver?.disconnect();
+  if (!buttons.length) {
+    return;
+  }
+  if (typeof IntersectionObserver !== "function") {
+    buttons.forEach((button) => button.classList.add("is-glow-visible"));
+    return;
+  }
+  appState.statusGlowObserver ||= new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        entry.target.classList.toggle(
+          "is-glow-visible",
+          entry.isIntersecting,
+        );
+      }
+    },
+    { threshold: 0.2 },
+  );
+  buttons.forEach((button) => appState.statusGlowObserver.observe(button));
+}
+
 function renderDashboard() {
   const dashboard = appState.dashboard;
   if (!dashboard) {
     return;
   }
 
-  const subscriptions = dashboard.subscriptions || [];
-  const seasonCount = subscriptions.reduce(
+  const allSubscriptions = sortSubscriptionsByLatestUpdate(
+    dashboard.subscriptions || [],
+  );
+  const searchMatches = watchlistSearchMatches(allSubscriptions);
+  const subscriptions = sortSubscriptionsByLatestUpdate(
+    searchMatches.map((match) => match.subscription),
+  );
+  const searching = Boolean(
+    normalizeWatchlistSearchValue(appState.watchlistSearch.query),
+  );
+  const seasonCount = allSubscriptions.reduce(
     (sum, item) => sum + item.seasonCount,
     0,
   );
-  elements.statSeries.textContent = String(subscriptions.length);
+  elements.statSeries.textContent = String(allSubscriptions.length);
   elements.statSeasons.textContent = String(seasonCount);
   elements.statLastCheck.textContent = formatRelativeTime(
     dashboard.settings.lastCheckAt,
   );
-  const nextCheckLabel = dashboard.app?.nextCheckAt
-    ? `，下次检查${formatRelativeTime(dashboard.app.nextCheckAt)}`
+  const pendingSummary = dashboard.settings.pendingNotificationCount
+    ? ` · ${dashboard.settings.pendingNotificationCount} 条待汇总`
     : "";
-  elements.watchlistSummary.textContent = subscriptions.length
-    ? `${subscriptions.length} 部短剧，${seasonCount} 个已确认季，每 ${
-        dashboard.settings.intervalMinutes
-      } 分钟检查${nextCheckLabel}${
-        dashboard.settings.pendingNotificationCount
-          ? `，${dashboard.settings.pendingNotificationCount} 条待汇总`
-          : ""
-      }`
+  elements.watchlistSummary.textContent = allSubscriptions.length
+    ? `${
+        searching
+          ? `找到 ${subscriptions.length} 部 · 共 ${allSubscriptions.length} 部短剧`
+          : `${allSubscriptions.length} 部短剧`
+      } · ${seasonCount} 个已确认季 · 按 ${
+        dashboard.settings.checkCron || "*/30 * * * *"
+      } 检查${pendingSummary}`
     : "用分享链接开始追更";
   elements.notificationState.textContent = notificationStateLabel(
     dashboard.settings,
@@ -1119,16 +1824,20 @@ function renderDashboard() {
   elements.checkAll.disabled =
     appState.loading ||
     dashboard.app.checking ||
-    subscriptions.length === 0;
+    allSubscriptions.length === 0;
 
-  if (!subscriptions.length) {
+  if (!allSubscriptions.length) {
     renderEmptyState();
+  } else if (!subscriptions.length) {
+    renderWatchlistSearchEmptyState();
   } else {
-    elements.subscriptionList.innerHTML = subscriptions
-      .map(renderSubscription)
-      .join("");
+    elements.subscriptionList.innerHTML =
+      renderSubscriptionGroups(subscriptions);
   }
+  renderWatchlistSearchCandidates(searchMatches);
+  observeStatusGlowButtons();
   renderEvents(dashboard.events || []);
+  scheduleScrollControlsUpdate();
 }
 
 async function loadDashboard({ silent = false } = {}) {
@@ -1136,14 +1845,17 @@ async function loadDashboard({ silent = false } = {}) {
     setPageBusy(true);
   }
   try {
-    appState.dashboard = await requestJson("/api/state", { method: "GET" });
+    appState.dashboard = await requestJson("/api/state", {
+      method: "GET",
+      timeoutMs: DASHBOARD_REQUEST_TIMEOUT_MS,
+    });
     renderDashboard();
   } catch (error) {
     if (!appState.dashboard) {
       elements.subscriptionList.innerHTML = `
         <div class="empty-state">
           <span class="empty-state__icon">${icon("alert")}</span>
-          <h3>无法读取追更列表</h3>
+          <h3>无法读取我的追更</h3>
           <p>${escapeHtml(error.message)}</p>
         </div>
       `;
@@ -1176,10 +1888,13 @@ function dialogFocusableElements(dialog) {
 }
 
 for (const dialog of [
+  elements.addDialog,
   elements.screenshotDialog,
   elements.settingsDialog,
   elements.seasonDialog,
+  elements.statusDialog,
   elements.deleteDialog,
+  elements.eventsDialog,
 ]) {
   dialog.addEventListener("keydown", (event) => {
     if (event.key !== "Tab") {
@@ -1615,6 +2330,21 @@ function updateScreenshotControls() {
 
   elements.screenshotFiles.disabled =
     running || appState.screenshotFiles.length >= MAX_SCREENSHOTS;
+  elements.screenshotPickerLabel.textContent = hasFiles
+    ? appState.screenshotFiles.length >= MAX_SCREENSHOTS
+      ? "已达上限"
+      : "继续选择"
+    : "选择截图";
+  elements.screenshotPickerStatus.textContent = appState.screenshotPreparing
+    ? "正在读取并准备图片…"
+    : appState.screenshotFiles.length >= MAX_SCREENSHOTS
+      ? `已添加 ${MAX_SCREENSHOTS} 张，达到本次上限`
+      : hasFiles
+        ? `已添加 ${appState.screenshotFiles.length} 张，可继续选择`
+        : "可一次选择多张图片";
+  elements.screenshotFiles
+    .closest(".screenshot-file-field")
+    ?.classList.toggle("is-disabled", elements.screenshotFiles.disabled);
   elements.analyzeScreenshots.disabled = running || !hasFiles;
   elements.importScreenshots.hidden =
     !appState.screenshotItems.length || appState.screenshotFinished;
@@ -1629,14 +2359,37 @@ function updateScreenshotControls() {
     running || stats.selectedCount === 0 || appState.screenshotFinished;
   elements.screenshotContent.setAttribute("aria-busy", String(running));
 
+  const analyzeBusy =
+    appState.screenshotPreparing || appState.screenshotAnalyzing;
+  elements.analyzeScreenshots.dataset.state = analyzeBusy
+    ? appState.screenshotAnalyzing
+      ? "running"
+      : "busy"
+    : appState.screenshotItems.length
+      ? "rerun"
+      : hasFiles && !running
+        ? "ready"
+        : "idle";
+  elements.analyzeScreenshots.setAttribute(
+    "aria-busy",
+    String(analyzeBusy),
+  );
+
+  const analyzeLabel =
+    elements.analyzeScreenshots.querySelector("[data-button-label]");
+  if (analyzeLabel) {
+    analyzeLabel.textContent = appState.screenshotAnalyzing
+      ? "正在识别…"
+      : appState.screenshotPreparing
+        ? "正在准备…"
+        : appState.screenshotItems.length
+          ? "重新识别"
+          : hasFiles
+            ? `识别 ${appState.screenshotFiles.length} 张截图`
+            : "识别截图";
+  }
+
   if (!running) {
-    const analyzeLabel =
-      elements.analyzeScreenshots.querySelector("span:last-child");
-    if (analyzeLabel) {
-      analyzeLabel.textContent = appState.screenshotItems.length
-        ? "重新识别"
-        : "识别截图";
-    }
     const importLabel =
       elements.importScreenshots.querySelector("span:last-child");
     if (importLabel) {
@@ -2167,7 +2920,10 @@ function warmupScreenshotOcr() {
   }
   screenshotWarmupPromise = requestJson(
     "/api/screenshot-import/warmup",
-    { method: "POST" },
+    {
+      method: "POST",
+      timeoutMs: SCREENSHOT_ANALYZE_TIMEOUT_MS,
+    },
   )
     .catch(() => null)
     .finally(() => {
@@ -2229,6 +2985,7 @@ async function analyzeScreenshots() {
             "content-type": file.mimeType || file.blob.type,
           },
           body: file.blob,
+          timeoutMs: SCREENSHOT_ANALYZE_TIMEOUT_MS,
         });
         if (runId !== appState.screenshotRunId) {
           return;
@@ -2462,6 +3219,7 @@ async function importSelectedScreenshots() {
     const payload = await requestJson("/api/screenshot-import/import", {
       method: "POST",
       body: JSON.stringify({ seriesIds }),
+      timeoutMs: SCREENSHOT_IMPORT_TIMEOUT_MS,
     });
     const result = payload.result || {};
     const outcomeBySeriesId = new Map(
@@ -2652,6 +3410,24 @@ function selectedSubscription() {
   );
 }
 
+elements.openAddDialog.addEventListener("click", () => {
+  appState.addDialogReturnFocus = document.activeElement;
+  resetSeriesSearch({ clearInput: true });
+  openDialog(elements.addDialog);
+  requestAnimationFrame(() => {
+    elements.shareInput.focus({ preventScroll: true });
+  });
+});
+
+elements.addDialog.addEventListener("close", () => {
+  const returnFocus = appState.addDialogReturnFocus;
+  appState.addDialogReturnFocus = null;
+  resetSeriesSearch({ clearInput: true });
+  requestAnimationFrame(() => {
+    (returnFocus || elements.openAddDialog).focus({ preventScroll: true });
+  });
+});
+
 elements.addForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const search = appState.seriesSearch;
@@ -2686,6 +3462,7 @@ elements.addForm.addEventListener("submit", async (event) => {
     payload = await requestJson("/api/subscriptions", {
       method: "POST",
       body: JSON.stringify({ input: selected?.seriesId || input }),
+      timeoutMs: LONG_ACTION_TIMEOUT_MS,
     });
   } catch (error) {
     setFieldError(elements.shareInput, true);
@@ -2697,6 +3474,7 @@ elements.addForm.addEventListener("submit", async (event) => {
   }
   if (payload) {
     resetSeriesSearch({ clearInput: true });
+    closeDialog(elements.addDialog);
     showToast(payload.message);
     await loadDashboard({ silent: true });
   }
@@ -2794,6 +3572,11 @@ elements.shareInput.addEventListener("focus", () => {
   }
 });
 
+elements.shareInputClear.addEventListener("click", () => {
+  resetSeriesSearch({ clearInput: true });
+  elements.shareInput.focus({ preventScroll: true });
+});
+
 elements.seriesSearchList.addEventListener("mousedown", (event) => {
   if (event.target.closest("[data-series-search-index]")) {
     event.preventDefault();
@@ -2807,11 +3590,119 @@ elements.seriesSearchList.addEventListener("click", (event) => {
   }
 });
 
+elements.watchlistSearchInput.addEventListener("input", () => {
+  const search = appState.watchlistSearch;
+  search.query = elements.watchlistSearchInput.value;
+  search.selectedId = null;
+  search.activeIndex = -1;
+  search.open = Boolean(normalizeWatchlistSearchValue(search.query));
+  renderDashboard();
+});
+
+elements.watchlistSearchInput.addEventListener("focus", () => {
+  const search = appState.watchlistSearch;
+  if (
+    normalizeWatchlistSearchValue(search.query) &&
+    !search.open
+  ) {
+    setWatchlistSearchOpen(true);
+  }
+});
+
+elements.watchlistSearchInput.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) {
+    return;
+  }
+  const search = appState.watchlistSearch;
+  const hasQuery = Boolean(normalizeWatchlistSearchValue(search.query));
+
+  if (event.key === "Escape") {
+    if (search.open) {
+      event.preventDefault();
+      search.activeIndex = -1;
+      setWatchlistSearchOpen(false);
+    }
+    return;
+  }
+
+  if (event.key === "Tab") {
+    if (search.open) {
+      setWatchlistSearchOpen(false);
+    }
+    return;
+  }
+
+  if (
+    (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+    hasQuery
+  ) {
+    event.preventDefault();
+    if (!search.open) {
+      setWatchlistSearchOpen(true);
+    }
+    if (!search.results.length) {
+      return;
+    }
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex =
+      search.activeIndex < 0
+        ? direction > 0
+          ? 0
+          : search.results.length - 1
+        : search.activeIndex + direction;
+    setWatchlistSearchActive(nextIndex, { scroll: true });
+    return;
+  }
+
+  if (event.key === "Enter" && hasQuery && search.results.length) {
+    event.preventDefault();
+    selectWatchlistSearchCandidate(
+      search.activeIndex >= 0 ? search.activeIndex : 0,
+    );
+  }
+});
+
+elements.watchlistSearchClear.addEventListener("click", () => {
+  clearWatchlistSearch();
+});
+
+elements.watchlistSearchList.addEventListener("mousedown", (event) => {
+  if (event.target.closest("[data-watchlist-search-index]")) {
+    event.preventDefault();
+  }
+});
+
+elements.watchlistSearchList.addEventListener("mouseover", (event) => {
+  const option = event.target.closest("[data-watchlist-search-index]");
+  if (option) {
+    setWatchlistSearchActive(
+      Number(option.dataset.watchlistSearchIndex),
+    );
+  }
+});
+
+elements.watchlistSearchList.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-watchlist-search-index]");
+  if (option) {
+    selectWatchlistSearchCandidate(
+      Number(option.dataset.watchlistSearchIndex),
+    );
+  }
+});
+
 document.addEventListener("pointerdown", (event) => {
   const search = appState.seriesSearch;
   if (search.open && !elements.seriesSearchField.contains(event.target)) {
     cancelSeriesSearchRequest();
     hideSeriesSearchPanel();
+  }
+  const watchlistSearch = appState.watchlistSearch;
+  if (
+    watchlistSearch.open &&
+    !elements.watchlistSearch.contains(event.target)
+  ) {
+    watchlistSearch.activeIndex = -1;
+    setWatchlistSearchOpen(false);
   }
 });
 
@@ -2820,12 +3711,36 @@ elements.subscriptionList.addEventListener("click", async (event) => {
   if (!button) {
     return;
   }
+  if (button.dataset.action === "clear-watchlist-search") {
+    clearWatchlistSearch();
+    return;
+  }
   const row = button.closest("[data-subscription-id]");
   const subscriptionId = row?.dataset.subscriptionId;
   const subscription = appState.dashboard?.subscriptions?.find(
     (item) => item.id === subscriptionId,
   );
   if (!subscription) {
+    return;
+  }
+
+  if (button.dataset.action === "toggle-details") {
+    const nextExpanded = button.getAttribute("aria-expanded") !== "true";
+    const details = document.getElementById(button.getAttribute("aria-controls"));
+    button.setAttribute("aria-expanded", String(nextExpanded));
+    if (nextExpanded) {
+      appState.expandedSubscriptionIds.add(subscriptionId);
+    } else {
+      appState.expandedSubscriptionIds.delete(subscriptionId);
+    }
+    if (details) {
+      details.hidden = !nextExpanded;
+    }
+    const toggleLabel = `${nextExpanded ? "收起" : "展开"}《${subscriptionDisplayTitle(
+      subscription,
+    )}》详情`;
+    button.setAttribute("aria-label", toggleLabel);
+    button.title = toggleLabel;
     return;
   }
 
@@ -2838,6 +3753,7 @@ elements.subscriptionList.addEventListener("click", async (event) => {
         {
           method: "POST",
           body: "{}",
+          timeoutMs: LONG_ACTION_TIMEOUT_MS,
         },
       );
       showToast(payload.message);
@@ -2866,22 +3782,44 @@ elements.subscriptionList.addEventListener("click", async (event) => {
     return;
   }
 
-  if (button.dataset.action === "watched") {
-    if (!subscription.hasUnreadUpdate) {
-      return;
+  if (button.dataset.action === "status") {
+    appState.activeSubscriptionId = subscriptionId;
+    elements.statusContext.textContent = `《${subscriptionDisplayTitle(
+      subscription,
+    )}》当前为 ${
+      subscription.seriesStatus === "completed"
+        ? "已完结"
+        : subscription.seriesStatus === "updating"
+          ? "更新中"
+          : "状态未知"
+    }，请选择新的检查状态。`;
+    const selectedStatus = subscription.seriesStatusOverride || "auto";
+    const selectedInput = elements.statusForm.querySelector(
+      `input[name="seriesStatus"][value="${selectedStatus}"]`,
+    );
+    if (selectedInput) {
+      selectedInput.checked = true;
     }
-    setButtonBusy(button, true, "标记中…");
+    setFormFeedback(elements.statusFeedback);
+    openDialog(elements.statusDialog);
+    selectedInput?.focus();
+    return;
+  }
+
+  if (button.dataset.action === "watched") {
+    const watched = button.dataset.watched === "true";
+    setButtonBusy(button, true, watched ? "标记中…" : "恢复中…");
     try {
       const payload = await requestJson(
         `/api/subscriptions/${encodeURIComponent(subscriptionId)}/watched`,
         {
           method: "POST",
-          body: "{}",
+          body: JSON.stringify({ watched }),
         },
       );
       showToast(payload.message);
       await loadDashboard({ silent: true });
-      focusSubscriptionAction(subscriptionId, "check");
+      focusSubscriptionAction(subscriptionId, "watched");
     } catch (error) {
       showToast(error.message, "error");
       setButtonBusy(button, false);
@@ -2908,6 +3846,7 @@ elements.checkAll.addEventListener("click", async () => {
     const payload = await requestJson("/api/check", {
       method: "POST",
       body: "{}",
+      timeoutMs: CHECK_ALL_TIMEOUT_MS,
     });
     showToast(payload.message);
     await loadDashboard({ silent: true });
@@ -3084,7 +4023,7 @@ function setNotificationChannelMetadata(notifications, { resetValues = false } =
   );
   ntfyChannel.topic.placeholder = ntfy.topicHint
     ? `已保存 ${ntfy.topicHint}，留空保持不变`
-    : "例如 hongguo-reminder-8f3a";
+    : "例如 drama-assistant-8f3a";
   ntfyChannel.token.placeholder = ntfy.tokenConfigured
     ? `已保存 ${ntfy.tokenHint || "token"}，留空保持不变`
     : "留空表示不鉴权";
@@ -3149,7 +4088,11 @@ elements.openSettings.addEventListener("click", () => {
       notifications[channelKey]?.enabled,
     );
   }
-  elements.intervalMinutes.value = String(settings?.intervalMinutes || 30);
+  elements.checkCron.value =
+    settings?.checkCron || "*/30 * * * *";
+  elements.staleCompletionDays.value = String(
+    settings?.staleCompletionDays ?? 90,
+  );
   elements.episodeNotificationWindow.value = String(
     settings?.episodeNotificationWindowMinutes ?? 0,
   );
@@ -3159,14 +4102,19 @@ elements.openSettings.addEventListener("click", () => {
   elements.discoveryReminderCron.value =
     settings?.discoveryReminderCron || "0 */6 * * *";
   setNotificationChannelMetadata(notifications, { resetValues: true });
-  setFieldError(elements.intervalMinutes, false);
+  setFieldError(elements.checkCron, false);
+  setFieldError(elements.staleCompletionDays, false);
   setFieldError(elements.episodeNotificationWindow, false);
   setFieldError(elements.discoveryReminderDuration, false);
   setFieldError(elements.discoveryReminderCron, false);
   setFieldError(elements.proxySettings.url, false);
   setFormFeedback(elements.settingsFeedback);
   openDialog(elements.settingsDialog);
-  elements.intervalMinutes.focus();
+  elements.checkCron.focus();
+});
+
+elements.openEvents.addEventListener("click", () => {
+  openDialog(elements.eventsDialog);
 });
 
 elements.settingsForm.addEventListener("click", (event) => {
@@ -3179,6 +4127,11 @@ elements.settingsForm.addEventListener("click", (event) => {
     return;
   }
   setSecretInputVisibility(input, input.type === "password");
+});
+
+elements.checkCron.addEventListener("input", () => {
+  setFieldError(elements.checkCron, false);
+  setFormFeedback(elements.settingsFeedback);
 });
 
 elements.proxySettings.enabled.addEventListener("change", () => {
@@ -3257,15 +4210,22 @@ for (const channelKey of notificationChannelOrder) {
 }
 
 function settingsPayload() {
-  const intervalMinutes = Number(elements.intervalMinutes.value);
+  const checkCron = elements.checkCron.value.trim().replace(/\s+/g, " ");
+  if (checkCron.split(" ").filter(Boolean).length !== 5) {
+    throw settingsValidationError(
+      "自动检查计划需要使用 5 段 Cron 表达式。",
+      elements.checkCron,
+    );
+  }
+  const staleCompletionDays = Number(elements.staleCompletionDays.value);
   if (
-    !Number.isInteger(intervalMinutes) ||
-    intervalMinutes < 5 ||
-    intervalMinutes > 10080
+    !Number.isInteger(staleCompletionDays) ||
+    staleCompletionDays < 1 ||
+    staleCompletionDays > 3650
   ) {
     throw settingsValidationError(
-      "检查间隔需要在 5 到 10080 分钟之间。",
-      elements.intervalMinutes,
+      "无更新自动完结期限需要在 1 到 3650 天之间。",
+      elements.staleCompletionDays,
     );
   }
   const episodeNotificationWindowMinutes = Number(
@@ -3457,7 +4417,8 @@ function settingsPayload() {
   }
 
   return {
-    intervalMinutes,
+    checkCron,
+    staleCompletionDays,
     episodeNotificationWindowMinutes,
     discoveryReminderDurationMinutes,
     discoveryReminderCron,
@@ -3525,23 +4486,34 @@ async function saveSettings({ closeAfter = true } = {}) {
     const result = await requestJson("/api/settings", {
       method: "PATCH",
       body: JSON.stringify(payload),
+      timeoutMs: SETTINGS_REQUEST_TIMEOUT_MS,
     });
-    await loadDashboard({ silent: true });
+    const savedSettings = result.settings || {};
     setProxySettingsMetadata(
-      appState.dashboard?.settings?.notifications?.proxy,
+      savedSettings.notifications?.proxy,
       { resetValues: true },
     );
     setNotificationChannelMetadata(
-      appState.dashboard?.settings?.notifications,
+      savedSettings.notifications,
       { resetValues: true },
     );
     setDiscoveryReminderDuration(
-      appState.dashboard?.settings
-        ?.discoveryReminderDurationMinutes || 0,
+      savedSettings.discoveryReminderDurationMinutes || 0,
     );
+    elements.staleCompletionDays.value = String(
+      savedSettings.staleCompletionDays ?? 90,
+    );
+    elements.checkCron.value =
+      savedSettings.checkCron || "*/30 * * * *";
     elements.discoveryReminderCron.value =
-      appState.dashboard?.settings?.discoveryReminderCron ||
-      "0 */6 * * *";
+      savedSettings.discoveryReminderCron || "0 */6 * * *";
+    if (appState.dashboard) {
+      appState.dashboard.settings = {
+        ...appState.dashboard.settings,
+        ...savedSettings,
+      };
+      renderDashboard();
+    }
     setFormFeedback(
       elements.settingsFeedback,
       result.message || "设置已保存。",
@@ -3551,12 +4523,20 @@ async function saveSettings({ closeAfter = true } = {}) {
     if (closeAfter) {
       closeDialog(elements.settingsDialog);
     }
+    void loadDashboard({ silent: true });
     return true;
   } catch (error) {
-    setFormFeedback(elements.settingsFeedback, error.message);
-    if (error.code === "INVALID_INTERVAL") {
-      setFieldError(elements.intervalMinutes, true);
-      elements.intervalMinutes.focus();
+    const message =
+      error.code === "REQUEST_TIMEOUT"
+        ? "保存请求超时，设置可能已经保存，请刷新页面确认。"
+        : error.message;
+    setFormFeedback(elements.settingsFeedback, message);
+    if (error.code === "INVALID_CHECK_CRON") {
+      setFieldError(elements.checkCron, true);
+      elements.checkCron.focus();
+    } else if (error.code === "INVALID_STALE_COMPLETION_DAYS") {
+      setFieldError(elements.staleCompletionDays, true);
+      elements.staleCompletionDays.focus();
     } else if (error.code === "INVALID_NOTIFICATION_WINDOW") {
       setFieldError(elements.episodeNotificationWindow, true);
       elements.episodeNotificationWindow.focus();
@@ -3597,6 +4577,7 @@ elements.testNotifications.addEventListener("click", async () => {
     const payload = await requestJson("/api/notifications/test", {
       method: "POST",
       body: "{}",
+      timeoutMs: SCREENSHOT_ANALYZE_TIMEOUT_MS,
     });
     setFormFeedback(
       elements.settingsFeedback,
@@ -3644,6 +4625,7 @@ elements.seasonForm.addEventListener("submit", async (event) => {
       {
         method: "POST",
         body: JSON.stringify({ input }),
+        timeoutMs: LONG_ACTION_TIMEOUT_MS,
       },
     );
     closeDialog(elements.seasonDialog);
@@ -3656,6 +4638,43 @@ elements.seasonForm.addEventListener("submit", async (event) => {
     elements.seasonShareInput.focus();
   } finally {
     setButtonBusy(elements.seasonSubmit, false);
+  }
+});
+
+elements.statusForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!appState.activeSubscriptionId) {
+    return;
+  }
+  const status =
+    elements.statusForm.querySelector(
+      'input[name="seriesStatus"]:checked',
+    )?.value || "";
+  if (!["auto", "updating", "completed", "unknown"].includes(status)) {
+    setFormFeedback(elements.statusFeedback, "请选择要切换的系列状态。");
+    return;
+  }
+
+  setFormFeedback(elements.statusFeedback);
+  setButtonBusy(elements.statusSubmit, true, "保存中…");
+  try {
+    const payload = await requestJson(
+      `/api/subscriptions/${encodeURIComponent(
+        appState.activeSubscriptionId,
+      )}/status`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      },
+    );
+    closeDialog(elements.statusDialog);
+    showToast(payload.message);
+    await loadDashboard({ silent: true });
+    focusSubscriptionAction(appState.activeSubscriptionId, "status");
+  } catch (error) {
+    setFormFeedback(elements.statusFeedback, error.message);
+  } finally {
+    setButtonBusy(elements.statusSubmit, false);
   }
 });
 
@@ -3682,6 +4701,28 @@ elements.deleteForm.addEventListener("submit", async (event) => {
   }
 });
 
+elements.scrollToTop.addEventListener("click", () => {
+  scrollPageTo(0);
+});
+
+elements.scrollToBottom.addEventListener("click", () => {
+  const scroller = document.scrollingElement || document.documentElement;
+  scrollPageTo(scroller.scrollHeight);
+});
+
+window.addEventListener("scroll", scheduleScrollControlsUpdate, {
+  passive: true,
+});
+window.addEventListener("resize", scheduleScrollControlsUpdate);
+
+if (typeof ResizeObserver === "function") {
+  appState.scrollControlsResizeObserver = new ResizeObserver(
+    scheduleScrollControlsUpdate,
+  );
+  appState.scrollControlsResizeObserver.observe(document.body);
+  appState.scrollControlsResizeObserver.observe(elements.mainContent);
+}
+
 document.addEventListener("click", (event) => {
   const closeButton = event.target.closest("[data-close-dialog]");
   if (closeButton) {
@@ -3703,4 +4744,5 @@ for (const input of elements.settingsForm.querySelectorAll("input")) {
 }
 
 resetSeriesSearch();
+scheduleScrollControlsUpdate();
 void loadDashboard();

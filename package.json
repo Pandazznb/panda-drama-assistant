@@ -1,9 +1,9 @@
 {
-  "name": "hongguo-reminder",
-  "version": "1.0.0",
+  "name": "panda-drama-assistant",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "红果短剧分享链接追更与多渠道通知工具",
+  "description": "熊猫 · 短剧助手：追踪短剧新季、新集并通过多渠道发送提醒",
   "scripts": {
     "start": "node server.js",
     "test": "node --test"
@@ -15,6 +15,7 @@
     "@tesseract.js-data/chi_sim": "^1.0.0",
     "@tesseract.js-data/eng": "^1.0.0",
     "cron-parser": "^5.10.2",
+    "pinyin-pro": "^3.29.5",
     "sharp": "^0.35.5",
     "tesseract.js": "^7.0.0",
     "undici": "^6.29.1"

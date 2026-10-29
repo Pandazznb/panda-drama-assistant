@@ -3,6 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  APP_NAME,
   DEFAULT_HOST,
   DEFAULT_PORT,
 } from "./src/constants.js";
@@ -17,6 +18,8 @@ const MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 const STATIC_FILES = new Map([
   ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
+  ["/logs", { file: "logs.html", type: "text/html; charset=utf-8" }],
+  ["/logs.html", { file: "logs.html", type: "text/html; charset=utf-8" }],
   ["/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
   [
     "/theme.js",
@@ -25,6 +28,18 @@ const STATIC_FILES = new Map([
   [
     "/app.js",
     { file: "app.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/logs.js",
+    { file: "logs.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/assets/panda-drama-assistant-icon.svg",
+    { file: "assets/panda-drama-assistant-icon.svg", type: "image/svg+xml" },
+  ],
+  [
+    "/assets/panda-drama-assistant-icon.png",
+    { file: "assets/panda-drama-assistant-icon.png", type: "image/png" },
   ],
 ]);
 
@@ -47,6 +62,21 @@ function sendJson(response, statusCode, body) {
     "cache-control": "no-store",
   });
   response.end(JSON.stringify(body));
+}
+
+function sendLogFile(response, statusCode, file) {
+  const content = Buffer.isBuffer(file.content)
+    ? file.content
+    : Buffer.from(file.content, "utf8");
+  const fileName = String(file.fileName || "hongguo-events-all.jsonl")
+    .replace(/[^A-Za-z0-9._-]/g, "_");
+  response.writeHead(statusCode, {
+    ...securityHeaders("text/plain; charset=utf-8"),
+    "cache-control": "no-store",
+    "content-disposition": `inline; filename="${fileName}"`,
+    "content-length": content.length,
+  });
+  response.end(content);
 }
 
 function sendError(response, error) {
@@ -221,7 +251,7 @@ async function serveStatic(pathname, response) {
 
 function subscriptionRoute(pathname) {
   const match = pathname.match(
-    /^\/api\/subscriptions\/([^/]+)(?:\/(seasons|check|watched))?$/,
+    /^\/api\/subscriptions\/([^/]+)(?:\/(seasons|check|watched|status))?$/,
   );
   if (!match) {
     return null;
@@ -232,11 +262,54 @@ function subscriptionRoute(pathname) {
   };
 }
 
-export function createRequestHandler(service, screenshotImport) {
+export function createRequestHandler(service, screenshotImport, eventLog) {
   return async (request, response) => {
     try {
       const url = new URL(request.url || "/", "http://localhost");
       const pathname = url.pathname;
+
+      if (request.method === "GET" && pathname === "/api/logs") {
+        const offset = Math.max(
+          0,
+          Number.parseInt(url.searchParams.get("offset") || "0", 10) ||
+            0,
+        );
+        const requestedLimit =
+          Number.parseInt(url.searchParams.get("limit") || "200", 10) ||
+          200;
+        const limit = Math.min(500, Math.max(1, requestedLimit));
+        const page = await eventLog.readPage({ offset, limit });
+        sendJson(response, 200, {
+          ok: true,
+          ...page,
+          offset,
+          limit,
+          hasMore: offset + page.events.length < page.total,
+          nextOffset:
+            offset + page.events.length < page.total
+              ? offset + page.events.length
+              : null,
+          storage: {
+            policy: "daily-size",
+            maxFileBytes: page.maxFileBytes,
+            timeZone: page.timeZone,
+          },
+        });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/logs/file") {
+        const file = await eventLog.readAllFiles();
+        if (!file) {
+          sendLogFile(response, 404, {
+            fileName: "hongguo-events-all.jsonl",
+            content: "暂无日志记录。\n",
+          });
+          return;
+        }
+        sendLogFile(response, 200, file);
+        return;
+      }
 
       if (request.method === "GET" && pathname === "/api/state") {
         sendJson(response, 200, await service.getDashboard());
@@ -456,25 +529,81 @@ export function createRequestHandler(service, screenshotImport) {
             notify: true,
             discover: true,
             forceDiscovery: true,
+            forceCompletedCheck: true,
           });
+          const skippedMessage =
+            result.skipped === "completed"
+              ? "该系列已完结，已跳过检查。"
+              : null;
           sendJson(response, 200, {
             ok: true,
             result,
             message:
-              result.errors > 0
+              skippedMessage ||
+              (result.reactivatedFromCompleted
+                ? "强制检查完成：发现新更新，系列已从已完结恢复为未完结。"
+                : null) ||
+              (result.errors > 0
                 ? `检查完成，但有 ${result.errors} 个季失败。`
-                : `检查完成：${result.updatedSeasons} 个剧集有新更新。`,
+                : `检查完成：${result.updatedSeasons} 个剧集有新更新。`),
+          });
+          return;
+        }
+
+        if (
+          request.method === "PATCH" &&
+          subRoute.action === "status"
+        ) {
+          const body = await readJsonBody(request);
+          if (
+            !Object.hasOwn(body, "status") ||
+            ![
+              null,
+              "auto",
+              "updating",
+              "completed",
+              "unknown",
+            ].includes(body.status)
+          ) {
+            const error = new Error(
+              "系列状态必须是自动判断、更新中、已完结或状态未知。",
+            );
+            error.statusCode = 400;
+            error.code = "INVALID_SERIES_STATUS";
+            throw error;
+          }
+          const result = await service.updateSubscriptionStatus(
+            subRoute.id,
+            body.status,
+          );
+          const message =
+            result.seriesStatusOverride === "completed"
+              ? `已将《${result.title}》标记为已完结，已停止检查。`
+              : result.seriesStatusOverride === "updating"
+                ? `已将《${result.title}》标记为更新中，将继续检查。`
+                : result.seriesStatusOverride === "unknown"
+                  ? `已将《${result.title}》标记为状态未知，将继续检查。`
+                  : `已将《${result.title}》恢复为自动判断系列状态。`;
+          sendJson(response, 200, {
+            ok: true,
+            result,
+            message,
           });
           return;
         }
 
         if (request.method === "POST" && subRoute.action === "watched") {
-          await readJsonBody(request);
-          const result = await service.markSubscriptionWatched(subRoute.id);
+          const body = await readJsonBody(request);
+          const watched = body?.watched !== false;
+          const result = watched
+            ? await service.markSubscriptionWatched(subRoute.id)
+            : await service.markSubscriptionUnwatched(subRoute.id);
           sendJson(response, 200, {
             ok: true,
             result,
-            message: `已将《${result.title}》标记为已观看。`,
+            message: watched
+              ? `已将《${result.title}》标记为已观看。`
+              : `已将《${result.title}》恢复为有更新。`,
           });
           return;
         }
@@ -514,9 +643,15 @@ export async function createApplication({
   await store.init();
   const service = new ReminderService({ store });
   const server = http.createServer(
-    createRequestHandler(service, screenshotImport),
+    createRequestHandler(service, screenshotImport, store.eventLog),
   );
-  return { store, service, screenshotImport, server };
+  return {
+    store,
+    service,
+    screenshotImport,
+    eventLog: store.eventLog,
+    server,
+  };
 }
 
 async function main() {
@@ -531,7 +666,7 @@ async function main() {
 
   server.listen(port, host, async () => {
     await service.start();
-    console.log(`红果追更已启动：http://${host}:${port}`);
+    console.log(`${APP_NAME}已启动：http://${host}:${port}`);
   });
 
   let shuttingDown = false;

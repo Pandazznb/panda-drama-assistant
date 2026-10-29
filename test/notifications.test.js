@@ -262,7 +262,7 @@ test("notification requests stay on their fixed API origins", () => {
   });
   assert.equal(new URL(wecom.endpoint).origin, "https://qyapi.weixin.qq.com");
   assert.equal(wecom.payload.msgtype, "text");
-  assert.match(wecom.payload.text.content, /【红果追更】/);
+  assert.match(wecom.payload.text.content, /【短剧助手】/);
 
   const timestamp = 1_700_000_000_000;
   const dingtalk = buildDingTalkRequest(

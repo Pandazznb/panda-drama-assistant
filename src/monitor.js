@@ -1,19 +1,22 @@
 import {
+  APP_NAME,
   CANDIDATE_RECHECK_MS,
+  DEFAULT_CHECK_CRON,
   DEFAULT_DISCOVERY_REMINDER_CRON,
-  DEFAULT_INTERVAL_MINUTES,
   DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES,
   DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
+  DEFAULT_STALE_COMPLETION_DAYS,
   DISCOVERY_INTERVAL_MS,
   EPISODE_NOTIFICATION_WINDOW_OPTIONS,
   EVENT_TYPE,
   MAX_DISCOVERY_REMINDER_DURATION_MINUTES,
-  MAX_INTERVAL_MINUTES,
-  MIN_INTERVAL_MINUTES,
+  MAX_STALE_COMPLETION_DAYS,
+  MIN_STALE_COMPLETION_DAYS,
   SERIES_STATUS,
 } from "./constants.js";
 import {
   isValidCronExpression,
+  legacyIntervalMinutesToCron,
   nextCronOccurrence,
   normalizeCronExpression,
 } from "./cron.js";
@@ -39,7 +42,8 @@ import {
   seriesVerificationComplete,
   titleWithoutSeason,
 } from "./series.js";
-import { appendEvent } from "./store.js";
+import { buildSubscriptionSearchIndex } from "./search-index.js";
+import { appendEvent, MAX_EVENTS } from "./store.js";
 import {
   createId,
   normalizeWhitespace,
@@ -51,6 +55,7 @@ const MAX_SEASONS_PER_SERIES = 64;
 const NETWORK_CONCURRENCY = 3;
 const NOTIFICATION_RETRY_MS = 15 * 60 * 1000;
 const NOTIFICATION_TIME_ZONE = "Asia/Shanghai";
+const MAX_SCHEDULER_DELAY_MS = 2_147_000_000;
 const SUMMARY_EVENT_TYPES = new Set([
   EVENT_TYPE.EPISODE,
   EVENT_TYPE.SEASON,
@@ -71,13 +76,170 @@ function isRecent(timestamp, durationMs, nowMs) {
   return Number.isFinite(parsed) && nowMs - parsed < durationMs;
 }
 
+function isDiscoveryDue(
+  subscription,
+  discoveryIntervalMs,
+  nowMs,
+  forceDiscovery = false,
+) {
+  return (
+    forceDiscovery ||
+    !isRecent(
+      subscription?.discovery?.lastRunAt,
+      discoveryIntervalMs,
+      nowMs,
+    )
+  );
+}
+
+function resolveScheduledCheckMs(settings, nowMs) {
+  const storedNextCheckMs = Date.parse(settings.nextCheckAt || "");
+  if (Number.isFinite(storedNextCheckMs)) {
+    return storedNextCheckMs;
+  }
+  const lastCheckMs = Date.parse(settings.lastCheckAt || "");
+  const anchorMs = Number.isFinite(lastCheckMs) ? lastCheckMs : nowMs;
+  return nextCronOccurrence(
+    settings.checkCron || DEFAULT_CHECK_CRON,
+    new Date(anchorMs),
+  ).getTime();
+}
+
+function nextCheckAtAfterRun(scheduledMs, checkCron, completedMs) {
+  if (scheduledMs > completedMs) {
+    return scheduledMs;
+  }
+  return nextCronOccurrence(checkCron, new Date(completedMs)).getTime();
+}
+
 function isKnownCompletedSeries(subscription) {
+  if (Number.isFinite(Date.parse(subscription?.autoCompletedAt || ""))) {
+    return true;
+  }
+  if (subscription?.seriesStatusOverride) {
+    return subscription.seriesStatusOverride === SERIES_STATUS.COMPLETED;
+  }
   return (
     subscription?.seriesStatus === SERIES_STATUS.COMPLETED ||
     Number.isFinite(Date.parse(subscription?.completedAt || "")) ||
     Number.isFinite(
       Date.parse(subscription?.seriesCompletionVerifiedAt || ""),
     )
+  );
+}
+
+function batchNeedsDiscoveryAlignment(
+  subscriptions,
+  discoveryIntervalMs,
+  nowMs,
+  { discover = true, forceDiscovery = false } = {},
+) {
+  if (!discover) {
+    return false;
+  }
+  return subscriptions.some(
+    (subscription) =>
+      !isKnownCompletedSeries(subscription) &&
+      isDiscoveryDue(
+        subscription,
+        discoveryIntervalMs,
+        nowMs,
+        forceDiscovery,
+      ),
+  );
+}
+
+function latestContentActivityMs(subscription) {
+  const contentTimes = (subscription?.seasons || [])
+    .flatMap((season) => [
+      season.lastEpisodeChangedAt,
+      season.firstVisibleTime,
+    ])
+    .map((value) => Date.parse(value || ""))
+    .filter(Number.isFinite);
+  if (contentTimes.length) {
+    return Math.max(...contentTimes);
+  }
+
+  const createdAtMs = Date.parse(subscription?.createdAt || "");
+  if (Number.isFinite(createdAtMs)) {
+    return createdAtMs;
+  }
+  const addedTimes = (subscription?.seasons || [])
+    .map((season) => Date.parse(season.addedAt || ""))
+    .filter(Number.isFinite);
+  return addedTimes.length ? Math.min(...addedTimes) : null;
+}
+
+function shouldAutomaticallyComplete(subscription, staleDays, nowMs) {
+  const hasActiveManualStatus = [
+    SERIES_STATUS.UPDATING,
+    SERIES_STATUS.UNKNOWN,
+  ].includes(subscription?.seriesStatusOverride);
+  if (
+    Number.isFinite(Date.parse(subscription?.autoCompletedAt || "")) ||
+    (!hasActiveManualStatus &&
+      (Number.isFinite(Date.parse(subscription?.completedAt || "")) ||
+        Number.isFinite(
+          Date.parse(subscription?.seriesCompletionVerifiedAt || ""),
+        )))
+  ) {
+    return null;
+  }
+  const latestActivityMs = latestContentActivityMs(subscription);
+  if (
+    !Number.isFinite(latestActivityMs) ||
+    nowMs - latestActivityMs < staleDays * 24 * 60 * 60 * 1000
+  ) {
+    return null;
+  }
+  return { latestActivityMs };
+}
+
+function clearAutomaticCompletion(subscription) {
+  subscription.autoCompletedAt = null;
+  subscription.autoCompletionReason = null;
+}
+
+function clearSeriesCompletionState(subscription) {
+  clearAutomaticCompletion(subscription);
+  subscription.seriesStatusOverride = null;
+  subscription.seriesStatusOverrideAt = null;
+  subscription.seriesCompletionAnnounced = false;
+  subscription.completedAt = null;
+  subscription.seriesCompletionVerifiedAt = null;
+}
+
+function clearQueuedNotificationsForSubscription(state, subscriptionId) {
+  const affectedEventIds = new Set();
+  for (const pending of state.pendingNotifications) {
+    if (pending.subscriptionId === subscriptionId) {
+      for (const eventId of pending.eventIds || []) {
+        affectedEventIds.add(eventId);
+      }
+    }
+  }
+  for (const reminder of state.discoveryReminders) {
+    if (reminder.subscriptionId === subscriptionId) {
+      for (const eventId of reminder.eventIds || []) {
+        affectedEventIds.add(eventId);
+      }
+    }
+  }
+  for (const event of state.events) {
+    if (
+      event.subscriptionId === subscriptionId &&
+      affectedEventIds.has(event.id)
+    ) {
+      event.notificationDueAt = null;
+      event.notificationError = null;
+    }
+  }
+  state.pendingNotifications = state.pendingNotifications.filter(
+    (pending) => pending.subscriptionId !== subscriptionId,
+  );
+  state.discoveryReminders = state.discoveryReminders.filter(
+    (reminder) => reminder.subscriptionId !== subscriptionId,
   );
 }
 
@@ -89,6 +251,14 @@ function statusLabel(status) {
     return "更新中";
   }
   return "状态未知";
+}
+
+function manualSeriesStatusReason(status) {
+  return {
+    updating: "已手动标记为更新中，将继续自动检查。",
+    completed: "已手动标记为已完结，已停止自动检查。",
+    unknown: "已手动标记为状态未知，将继续自动检查。",
+  }[status];
 }
 
 function seasonSortValue(season) {
@@ -479,7 +649,7 @@ function batchCheckMessage(state, events) {
   }
 
   return {
-    title: `红果追更 · ${lines.length} 个系列有更新`,
+    title: `${APP_NAME} · ${lines.length} 个系列有更新`,
     body: `检查时间：${formatNotificationTime(latestEventTime(allEvents))}\n\n${lines.join("\n")}`,
   };
 }
@@ -874,7 +1044,7 @@ export class ReminderService {
       const existing = findSeasonReference(state, detail.seriesId);
       if (existing) {
         const error = new ReminderError(
-          "这部剧已经在追更列表中。",
+          "这部剧已经在我的追更中。",
           "SUBSCRIPTION_EXISTS",
           409,
         );
@@ -919,6 +1089,7 @@ export class ReminderService {
         subscription.discovery.unpublishedSeasonCount = 0;
         subscription.discovery.albumSeasonCount = null;
         subscription.discovery.albumItemCount = null;
+        clearAutomaticCompletion(subscription);
         if (
           hasNewerSeason(
             subscription.seasons.slice(0, -1),
@@ -948,9 +1119,13 @@ export class ReminderService {
             detail.status === SERIES_STATUS.UPDATING
               ? "已确认季度中有季度仍在更新。"
               : "已确认季度均已完结，等待官方多季列表及最高季“完结篇”标识核验。",
+          seriesStatusOverride: null,
+          seriesStatusOverrideAt: null,
           completedAt: null,
           seriesCompletionVerifiedAt: null,
           seriesCompletionAnnounced: false,
+          autoCompletedAt: null,
+          autoCompletionReason: null,
           hasUnreadUpdate: false,
           lastWatchedAt: null,
           createdAt: timestamp,
@@ -1086,6 +1261,7 @@ export class ReminderService {
       current.discovery.unpublishedSeasonCount = 0;
       current.discovery.albumSeasonCount = null;
       current.discovery.albumItemCount = null;
+      clearAutomaticCompletion(current);
       if (newerSeason) {
         current.seriesCompletionAnnounced = false;
         current.completedAt = null;
@@ -1155,7 +1331,63 @@ export class ReminderService {
     });
   }
 
+  async setSubscriptionWatchState(subscriptionId, watched) {
+    return this.store.mutate((state) => {
+      const subscription = state.subscriptions.find(
+        (item) => item.id === subscriptionId,
+      );
+      if (!subscription) {
+        throw new ReminderError(
+          "追更条目不存在。",
+          "SUBSCRIPTION_NOT_FOUND",
+          404,
+        );
+      }
+
+      if (watched) {
+        clearQueuedNotificationsForSubscription(state, subscriptionId);
+        subscription.hasUnreadUpdate = false;
+        subscription.lastWatchedAt = this.now().toISOString();
+      }
+
+      if (!watched) {
+        subscription.hasUnreadUpdate = true;
+      }
+
+      return {
+        id: subscription.id,
+        title:
+          subscription.displayTitle ||
+          subscription.firstSeasonTitle ||
+          subscription.title,
+        hasUnreadUpdate: subscription.hasUnreadUpdate,
+        lastWatchedAt: subscription.lastWatchedAt || null,
+      };
+    });
+  }
+
   async markSubscriptionWatched(subscriptionId) {
+    return this.setSubscriptionWatchState(subscriptionId, true);
+  }
+
+  async markSubscriptionUnwatched(subscriptionId) {
+    return this.setSubscriptionWatchState(subscriptionId, false);
+  }
+
+  async updateSubscriptionStatus(subscriptionId, status) {
+    const normalizedStatus =
+      status === null || status === "auto" ? null : String(status || "");
+    if (
+      normalizedStatus !== null &&
+      !["updating", "completed", "unknown"].includes(normalizedStatus)
+    ) {
+      throw new ReminderError(
+        "系列状态必须是自动判断、更新中、已完结或状态未知。",
+        "INVALID_SERIES_STATUS",
+        400,
+      );
+    }
+
     const timestamp = this.now().toISOString();
     return this.store.mutate((state) => {
       const subscription = state.subscriptions.find(
@@ -1169,39 +1401,15 @@ export class ReminderService {
         );
       }
 
-      const affectedEventIds = new Set();
-      for (const pending of state.pendingNotifications) {
-        if (pending.subscriptionId === subscriptionId) {
-          for (const eventId of pending.eventIds || []) {
-            affectedEventIds.add(eventId);
-          }
-        }
+      subscription.seriesStatusOverride = normalizedStatus;
+      subscription.seriesStatusOverrideAt = normalizedStatus
+        ? timestamp
+        : null;
+      subscription.updatedAt = timestamp;
+      clearAutomaticCompletion(subscription);
+      if (normalizedStatus === SERIES_STATUS.COMPLETED) {
+        clearQueuedNotificationsForSubscription(state, subscriptionId);
       }
-      for (const reminder of state.discoveryReminders) {
-        if (reminder.subscriptionId === subscriptionId) {
-          for (const eventId of reminder.eventIds || []) {
-            affectedEventIds.add(eventId);
-          }
-        }
-      }
-      for (const event of state.events) {
-        if (
-          event.subscriptionId === subscriptionId &&
-          affectedEventIds.has(event.id)
-        ) {
-          event.notificationDueAt = null;
-          event.notificationError = null;
-        }
-      }
-
-      state.pendingNotifications = state.pendingNotifications.filter(
-        (pending) => pending.subscriptionId !== subscriptionId,
-      );
-      state.discoveryReminders = state.discoveryReminders.filter(
-        (reminder) => reminder.subscriptionId !== subscriptionId,
-      );
-      subscription.hasUnreadUpdate = false;
-      subscription.lastWatchedAt = timestamp;
 
       return {
         id: subscription.id,
@@ -1209,29 +1417,61 @@ export class ReminderService {
           subscription.displayTitle ||
           subscription.firstSeasonTitle ||
           subscription.title,
-        lastWatchedAt: timestamp,
+        seriesStatus:
+          normalizedStatus ||
+          subscription.seriesStatus ||
+          SERIES_STATUS.UNKNOWN,
+        seriesStatusReason:
+          manualSeriesStatusReason(normalizedStatus) ||
+          subscription.seriesStatusReason ||
+          null,
+        seriesStatusOverride: normalizedStatus,
+        seriesStatusOverrideAt:
+          subscription.seriesStatusOverrideAt,
       };
     });
   }
 
   async updateSettings({
     notifications,
+    checkCron,
     intervalMinutes,
+    staleCompletionDays,
     episodeNotificationWindowMinutes,
     discoveryReminderDurationMinutes,
     discoveryReminderCron,
   }) {
-    let normalizedInterval;
-    if (intervalMinutes !== undefined) {
-      normalizedInterval = Number(intervalMinutes);
+    let normalizedCheckCron;
+    if (checkCron !== undefined) {
+      normalizedCheckCron = normalizeCronExpression(checkCron);
+      if (!isValidCronExpression(normalizedCheckCron, this.now())) {
+        throw new ReminderError(
+          "自动检查计划需要使用有效的 5 段 Cron 表达式。",
+          "INVALID_CHECK_CRON",
+          400,
+        );
+      }
+    } else if (intervalMinutes !== undefined) {
+      normalizedCheckCron = legacyIntervalMinutesToCron(intervalMinutes);
+      if (!normalizedCheckCron) {
+        throw new ReminderError(
+          "旧版检查间隔无法转换为 Cron，请设置有效的 5 段 Cron 表达式。",
+          "INVALID_CHECK_CRON",
+          400,
+        );
+      }
+    }
+    let normalizedStaleCompletionDays;
+    if (staleCompletionDays !== undefined) {
+      normalizedStaleCompletionDays = Number(staleCompletionDays);
       if (
-        !Number.isInteger(normalizedInterval) ||
-        normalizedInterval < MIN_INTERVAL_MINUTES ||
-        normalizedInterval > MAX_INTERVAL_MINUTES
+        !Number.isInteger(normalizedStaleCompletionDays) ||
+        normalizedStaleCompletionDays < MIN_STALE_COMPLETION_DAYS ||
+        normalizedStaleCompletionDays > MAX_STALE_COMPLETION_DAYS
       ) {
         throw new ReminderError(
-          `检查间隔需要在 ${MIN_INTERVAL_MINUTES} 到 ${MAX_INTERVAL_MINUTES} 分钟之间。`,
-          "INVALID_INTERVAL",
+          `未更新自动完结天数需要在 ${MIN_STALE_COMPLETION_DAYS} 到 ${MAX_STALE_COMPLETION_DAYS} 天之间。`,
+          "INVALID_STALE_COMPLETION_DAYS",
           400,
         );
       }
@@ -1286,6 +1526,7 @@ export class ReminderService {
     }
 
     const settings = await this.store.mutate((state) => {
+      const previousCheckCron = state.settings.checkCron;
       const previousWindow =
         state.settings.episodeNotificationWindowMinutes;
       const previousDiscoveryDuration =
@@ -1298,8 +1539,18 @@ export class ReminderService {
           notifications,
         );
       }
-      if (normalizedInterval !== undefined) {
-        state.settings.intervalMinutes = normalizedInterval;
+      if (normalizedCheckCron !== undefined) {
+        state.settings.checkCron = normalizedCheckCron;
+        if (normalizedCheckCron !== previousCheckCron) {
+          state.settings.nextCheckAt = nextCronOccurrence(
+            normalizedCheckCron,
+            this.now(),
+          ).toISOString();
+        }
+      }
+      if (normalizedStaleCompletionDays !== undefined) {
+        state.settings.staleCompletionDays =
+          normalizedStaleCompletionDays;
       }
       if (normalizedNotificationWindow !== undefined) {
         state.settings.episodeNotificationWindowMinutes =
@@ -1377,7 +1628,11 @@ export class ReminderService {
         );
       }
       return {
-        intervalMinutes: state.settings.intervalMinutes,
+        checkCron: state.settings.checkCron,
+        staleCompletionDays:
+          state.settings.staleCompletionDays ||
+          DEFAULT_STALE_COMPLETION_DAYS,
+        nextCheckAt: state.settings.nextCheckAt,
         episodeNotificationWindowMinutes:
           state.settings.episodeNotificationWindowMinutes ||
           DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
@@ -1394,16 +1649,18 @@ export class ReminderService {
     });
 
     if (
-      (normalizedInterval !== undefined ||
+      (normalizedCheckCron !== undefined ||
+        normalizedStaleCompletionDays !== undefined ||
         normalizedNotificationWindow !== undefined ||
         notifications !== undefined ||
         normalizedDiscoveryDuration !== undefined ||
         normalizedDiscoveryCron !== undefined) &&
       !this.stopped
     ) {
-      await this.flushDiscoveryReminders();
-      await this.flushDueNotifications();
       await this.reschedule();
+      void this.flushDiscoveryReminders()
+        .then(() => this.flushDueNotifications())
+        .catch(() => {});
     }
     return settings;
   }
@@ -1411,9 +1668,9 @@ export class ReminderService {
   async sendTestNotification() {
     const state = await this.store.read();
     const result = await this.sendNotifications(state.settings.notifications, {
-      title: "红果追更连接成功",
+      title: `${APP_NAME}连接成功`,
       body: "后续发现新集、新季或完结时，会发送提醒。",
-      group: "红果追更",
+      group: APP_NAME,
     });
     return {
       ...result,
@@ -1436,6 +1693,13 @@ export class ReminderService {
         (sum, season) => sum + (season.highWaterEpisodeCount || 0),
         0,
       );
+      const latestContentActivity = latestContentActivityMs(subscription);
+      const searchIndex = buildSubscriptionSearchIndex([
+        subscription.displayTitle,
+        subscription.firstSeasonTitle,
+        subscription.title,
+        ...subscription.seasons.map((season) => season.title),
+      ]);
       return {
         id: subscription.id,
         title: subscription.displayTitle || subscription.title,
@@ -1452,7 +1716,14 @@ export class ReminderService {
         seriesGroupId: subscription.seriesGroupId,
         seriesStatus: subscription.seriesStatus,
         seriesStatusReason: subscription.seriesStatusReason,
+        seriesStatusOverride: subscription.seriesStatusOverride,
+        seriesStatusOverrideAt: subscription.seriesStatusOverrideAt,
         completedAt: subscription.completedAt,
+        autoCompletedAt: subscription.autoCompletedAt,
+        autoCompletionReason: subscription.autoCompletionReason,
+        latestContentActivityAt: Number.isFinite(latestContentActivity)
+          ? new Date(latestContentActivity).toISOString()
+          : null,
         seriesCompletionAnnounced:
           subscription.seriesCompletionAnnounced,
         hasUnreadUpdate: subscription.hasUnreadUpdate === true,
@@ -1464,6 +1735,7 @@ export class ReminderService {
         seasonCount: seasons.length,
         highWaterEpisodeCount: currentEpisodeCount,
         latestSeasonId: latestSeason?.seriesId || null,
+        ...searchIndex,
         seasons: seasons.map((season) => ({
           seriesId: season.seriesId,
           title: season.title,
@@ -1488,16 +1760,20 @@ export class ReminderService {
 
     return {
       app: {
-        name: "红果追更",
+        name: APP_NAME,
         checking: this.checking,
-        nextCheckAt: this.nextCheckAt,
+        nextCheckAt:
+          this.nextCheckAt || state.settings.nextCheckAt || null,
       },
       settings: {
         notifications: describeNotificationSettings(
           state.settings.notifications,
         ),
-        intervalMinutes:
-          state.settings.intervalMinutes || DEFAULT_INTERVAL_MINUTES,
+        checkCron: state.settings.checkCron || DEFAULT_CHECK_CRON,
+        staleCompletionDays:
+          state.settings.staleCompletionDays ||
+          DEFAULT_STALE_COMPLETION_DAYS,
+        nextCheckAt: state.settings.nextCheckAt,
         episodeNotificationWindowMinutes:
           state.settings.episodeNotificationWindowMinutes ||
           DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
@@ -1521,7 +1797,7 @@ export class ReminderService {
         lastCheckResult: state.settings.lastCheckResult,
       },
       subscriptions,
-      events: state.events.slice(0, 40),
+      events: state.events.slice(0, MAX_EVENTS),
     };
   }
 
@@ -1542,6 +1818,7 @@ export class ReminderService {
         const notificationEvents = [];
         const result = await this.checkOne(subscriptionId, {
           ...options,
+          forceCompletedCheck: options.forceCompletedCheck ?? true,
           notificationMode: "manual",
           eventSink: notificationEvents,
         });
@@ -1571,6 +1848,16 @@ export class ReminderService {
               .filter(Boolean),
           ),
         ];
+        const snapshot = await this.store.read();
+        const selectedSubscriptions = snapshot.subscriptions.filter(
+          (subscription) => uniqueIds.includes(subscription.id),
+        );
+        const alignDiscovery = batchNeedsDiscoveryAlignment(
+          selectedSubscriptions,
+          this.discoveryIntervalMs,
+          this.now().getTime(),
+          options,
+        );
         const entries = await mapWithConcurrency(
           uniqueIds,
           NETWORK_CONCURRENCY,
@@ -1579,6 +1866,7 @@ export class ReminderService {
               const notificationEvents = [];
               const result = await this.checkOne(subscriptionId, {
                 ...options,
+                forceAlbumDiscovery: alignDiscovery,
                 notificationMode: "aggregated",
                 skipCompleted: options.skipCompleted ?? true,
                 eventSink: notificationEvents,
@@ -1654,6 +1942,12 @@ export class ReminderService {
       this.checking = true;
       try {
         const snapshot = await this.store.read();
+        const alignDiscovery = batchNeedsDiscoveryAlignment(
+          snapshot.subscriptions,
+          this.discoveryIntervalMs,
+          this.now().getTime(),
+          options,
+        );
         const results = [];
         const notificationEvents = [];
         for (const subscription of snapshot.subscriptions) {
@@ -1662,6 +1956,7 @@ export class ReminderService {
               notify: options.notify ?? true,
               discover: options.discover ?? true,
               forceDiscovery: options.forceDiscovery ?? false,
+              forceAlbumDiscovery: alignDiscovery,
               skipCompleted: options.skipCompleted ?? true,
               notificationMode: "aggregated",
               eventSink: notificationEvents,
@@ -1706,8 +2001,23 @@ export class ReminderService {
   }
 
   async recordCheckRun(result) {
+    const completedAt = this.now();
+    const completedAtIso = completedAt.toISOString();
     await this.store.mutate((state) => {
-      state.settings.lastCheckAt = this.now().toISOString();
+      const checkCron =
+        state.settings.checkCron || DEFAULT_CHECK_CRON;
+      const scheduledMs = resolveScheduledCheckMs(
+        state.settings,
+        completedAt.getTime(),
+      );
+      state.settings.lastCheckAt = completedAtIso;
+      state.settings.nextCheckAt = new Date(
+        nextCheckAtAfterRun(
+          scheduledMs,
+          checkCron,
+          completedAt.getTime(),
+        ),
+      ).toISOString();
       state.settings.lastCheckResult =
         result.errors === 0
           ? "success"
@@ -1723,7 +2033,9 @@ export class ReminderService {
       notify = true,
       discover = true,
       forceDiscovery = false,
-      skipCompleted = false,
+      forceAlbumDiscovery = false,
+      forceCompletedCheck = false,
+      skipCompleted = true,
       notificationMode = "aggregated",
       eventSink = null,
       markUnread = true,
@@ -1736,7 +2048,8 @@ export class ReminderService {
     if (!subscription) {
       throw new ReminderError("追更条目不存在。", "SUBSCRIPTION_NOT_FOUND", 404);
     }
-    if (skipCompleted && isKnownCompletedSeries(subscription)) {
+    const wasCompleted = isKnownCompletedSeries(subscription);
+    if (skipCompleted && wasCompleted && !forceCompletedCheck) {
       return {
         subscriptionId,
         skipped: "completed",
@@ -1748,14 +2061,55 @@ export class ReminderService {
       };
     }
 
-    const timestamp = this.now().toISOString();
-    const nowMs = this.now().getTime();
+    const checkedAt = this.now();
+    const staleDays =
+      snapshot.settings.staleCompletionDays ||
+      DEFAULT_STALE_COMPLETION_DAYS;
+    const automaticCompletion =
+      wasCompleted && forceCompletedCheck
+        ? null
+        : shouldAutomaticallyComplete(
+            subscription,
+            staleDays,
+            checkedAt.getTime(),
+          );
+    if (automaticCompletion) {
+      const timestamp = checkedAt.toISOString();
+      await this.store.mutate((state) => {
+        const current = state.subscriptions.find(
+          (item) => item.id === subscriptionId,
+        );
+        if (!current) {
+          return;
+        }
+        current.autoCompletedAt = timestamp;
+        current.autoCompletionReason = `超过 ${staleDays} 天未检测到新季或新集，已自动标记为完结。`;
+        current.seriesStatusOverride = null;
+        current.seriesStatusOverrideAt = null;
+        current.updatedAt = timestamp;
+        clearQueuedNotificationsForSubscription(state, subscriptionId);
+      });
+      return {
+        subscriptionId,
+        skipped: "completed",
+        autoCompleted: true,
+        seasonsChecked: 0,
+        updatedSeasons: 0,
+        discoveredSeasons: 0,
+        errors: 0,
+        discoveryError: null,
+      };
+    }
+
+    const timestamp = checkedAt.toISOString();
+    const nowMs = checkedAt.getTime();
     const seasons = [...subscription.seasons];
     const shouldDiscover =
       discover &&
       (forceDiscovery ||
-        !isRecent(
-          subscription.discovery?.lastRunAt,
+        forceAlbumDiscovery ||
+        isDiscoveryDue(
+          subscription,
           this.discoveryIntervalMs,
           nowMs,
         ));
@@ -1936,6 +2290,7 @@ export class ReminderService {
         );
 
         if (detail.episodeCount > previousHighWater) {
+          clearAutomaticCompletion(current);
           updatedSeasons += 1;
           season.lastEpisodeChangedAt = timestamp;
           const event = appendEvent(state, {
@@ -1998,6 +2353,7 @@ export class ReminderService {
           result.candidate.source === "album" ? "album" : "recommendation",
           timestamp,
         );
+        clearAutomaticCompletion(current);
         const seasonsBefore = [...current.seasons];
         current.seasons.push(newSeason);
         if (hasNewerSeason(seasonsBefore, current.seasons)) {
@@ -2031,6 +2387,14 @@ export class ReminderService {
         current.seriesCompletionAnnounced = false;
         current.completedAt = null;
         current.seriesCompletionVerifiedAt = null;
+      }
+
+      const completionInvalidated =
+        wasCompleted &&
+        forceCompletedCheck &&
+        (updatedSeasons > 0 || discoveredNewerSeason);
+      if (completionInvalidated) {
+        clearSeriesCompletionState(current);
       }
 
       let discoveryIssue = null;
@@ -2085,13 +2449,23 @@ export class ReminderService {
       }
       observedDiscoveryIssue = discoveryIssue;
       const identity = applySubscriptionIdentity(current);
-      const status = deriveSeriesStatus(current.seasons, {
+      let status = deriveSeriesStatus(current.seasons, {
         confirmedSeriesIds: current.discovery.confirmedSeriesIds,
         discoveryError: discoveryIssue,
         seasonErrors: errors,
         unpublishedSeasonCount:
           current.discovery.unpublishedSeasonCount,
       });
+      if (
+        completionInvalidated &&
+        status.status === SERIES_STATUS.COMPLETED
+      ) {
+        status = {
+          status: SERIES_STATUS.UPDATING,
+          reason:
+            "强制检查发现新集或新季，系列已恢复为未完结，将继续自动检查。",
+        };
+      }
       current.seriesStatus = status.status;
       current.seriesStatusReason = status.reason;
       if (status.status === SERIES_STATUS.COMPLETED) {
@@ -2147,6 +2521,11 @@ export class ReminderService {
       discoveredSeasons,
       errors,
       discoveryError: observedDiscoveryIssue,
+      completionRechecked: wasCompleted && forceCompletedCheck,
+      reactivatedFromCompleted:
+        wasCompleted &&
+        forceCompletedCheck &&
+        (updatedSeasons > 0 || discoveredNewerSeason),
     };
   }
 
@@ -2180,7 +2559,7 @@ export class ReminderService {
     try {
       const result = await this.sendNotifications(notificationSettings, {
         ...message,
-        group: "红果追更",
+        group: APP_NAME,
       });
       notified = result.delivered > 0;
       if (result.failed > 0) {
@@ -2268,7 +2647,7 @@ export class ReminderService {
           state.settings.notifications,
           {
             ...message,
-            group: "红果追更",
+            group: APP_NAME,
           },
         );
         notified = result.delivered > 0;
@@ -2366,7 +2745,7 @@ export class ReminderService {
           state.settings.notifications,
           {
             ...message,
-            group: "红果追更",
+            group: APP_NAME,
           },
         );
         notified = result.delivered > 0;
@@ -2459,13 +2838,14 @@ export class ReminderService {
       return;
     }
     const state = await this.store.read();
-    const intervalMs =
-      (state.settings.intervalMinutes || DEFAULT_INTERVAL_MINUTES) * 60_000;
-    const lastCheckMs = Date.parse(state.settings.lastCheckAt || "");
     const nowMs = this.now().getTime();
-    const checkTarget = Number.isFinite(lastCheckMs)
-      ? lastCheckMs + intervalMs
-      : nowMs + intervalMs;
+    const checkTarget = resolveScheduledCheckMs(state.settings, nowMs);
+    if (state.settings.nextCheckAt !== new Date(checkTarget).toISOString()) {
+      await this.store.mutate((currentState) => {
+        currentState.settings.nextCheckAt =
+          new Date(checkTarget).toISOString();
+      });
+    }
     const pendingDueTargets =
       enabledNotificationChannels(state.settings.notifications).length > 0
         ? state.pendingNotifications
@@ -2493,7 +2873,10 @@ export class ReminderService {
       ...pendingDueTargets,
       ...discoveryReminderTargets,
     );
-    const delay = Math.max(1_000, target - nowMs);
+    const delay = Math.max(
+      1_000,
+      Math.min(target - nowMs, MAX_SCHEDULER_DELAY_MS),
+    );
 
     this.nextCheckAt = new Date(checkTarget).toISOString();
     this.schedulerTimer = this.timers.setTimeout(async () => {
@@ -2502,16 +2885,12 @@ export class ReminderService {
         await this.flushDiscoveryReminders();
         await this.flushDueNotifications();
         const latestState = await this.store.read();
-        const latestLastCheckMs = Date.parse(
-          latestState.settings.lastCheckAt || "",
+        const latestNowMs = this.now().getTime();
+        const latestCheckTarget = resolveScheduledCheckMs(
+          latestState.settings,
+          latestNowMs,
         );
-        const latestIntervalMs =
-          (latestState.settings.intervalMinutes ||
-            DEFAULT_INTERVAL_MINUTES) * 60_000;
-        const latestCheckTarget = Number.isFinite(latestLastCheckMs)
-          ? latestLastCheckMs + latestIntervalMs
-          : this.now().getTime() + latestIntervalMs;
-        if (this.now().getTime() >= latestCheckTarget - 500) {
+        if (latestNowMs >= latestCheckTarget - 500) {
           await this.checkAll({ notify: true, discover: true });
         }
       } catch {

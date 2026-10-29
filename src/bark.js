@@ -1,4 +1,4 @@
-import { BARK_API_ORIGIN } from "./constants.js";
+import { APP_NAME, BARK_API_ORIGIN } from "./constants.js";
 
 const MAX_BARK_KEY_LENGTH = 128;
 const MAX_TITLE_LENGTH = 64;
@@ -48,7 +48,7 @@ function truncate(value, maxLength) {
   return `${text.slice(0, maxLength - 1)}…`;
 }
 
-export function buildBarkRequest(key, { title, body, group = "红果追更" }) {
+export function buildBarkRequest(key, { title, body, group = APP_NAME }) {
   const normalizedKey = normalizeBarkKey(key);
   if (!normalizedKey) {
     throw new BarkError("还没有配置 Bark key。", "BARK_KEY_MISSING", 400);
