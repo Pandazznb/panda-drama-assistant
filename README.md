@@ -74,6 +74,13 @@ services:
   panda-drama-assistant:
     image: pandazzz/panda-drama-assistant:latest
     container_name: panda-drama-assistant
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        chown -R node:node /app/data
+        exec setpriv --reuid=node --regid=node --init-groups node server.js
     ports:
       - "3417:3417"
     environment:
@@ -89,6 +96,8 @@ services:
 docker compose pull
 docker compose up -d
 ```
+
+容器启动时会自动修正 `./data` 的目录权限，然后降权到 UID `1000` 的 `node` 用户运行，不需要手动执行 `chown`。
 
 默认访问地址为 `http://127.0.0.1:3417`。追更数据以 SQLite 保存在项目目录的 `data/state.sqlite3`，重新创建容器不会丢失。`data/` 中的运行数据不会提交到 Git。
 
