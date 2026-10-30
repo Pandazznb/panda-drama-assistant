@@ -65,7 +65,9 @@ HONGUO_STATE_FILE=/path/to/state.json
 pandazzz/panda-drama-assistant:latest
 ```
 
-使用 Docker Compose 启动：
+### Docker Compose（推荐）
+
+推荐使用 Docker Compose 部署：
 
 ```bash
 docker compose pull
@@ -88,7 +90,9 @@ docker run --rm \
   sh -c 'cp -a /from/. /to/'
 ```
 
-也可以直接使用 `docker run`：
+### docker run（备选）
+
+如需直接使用 `docker run`：
 
 ```bash
 docker run -d \
