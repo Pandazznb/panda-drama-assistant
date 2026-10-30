@@ -8,6 +8,8 @@ GitHub：<https://github.com/Pandazznb/panda-drama-assistant>
 
 Docker Hub：<https://hub.docker.com/r/pandazzz/panda-drama-assistant>
 
+![短剧助手界面截图](docs/screenshot.png)
+
 收藏截图使用本机 Tesseract OCR 识别，不会上传到第三方图片服务。识别出的剧名会通过红果官方公开搜索接口核对候选，用户确认后才加入追更。
 
 ## 功能
