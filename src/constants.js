@@ -1,7 +1,7 @@
 export const APP_NAME = "短剧助手";
 export const DEFAULT_PORT = 3417;
 export const DEFAULT_HOST = "127.0.0.1";
-export const DEFAULT_CHECK_CRON = "*/30 * * * *";
+export const DEFAULT_CHECK_CRON = "11 0,6,10,12,18 * * *";
 export const MIN_INTERVAL_MINUTES = 5;
 export const MAX_INTERVAL_MINUTES = 10_080;
 export const DEFAULT_STALE_COMPLETION_DAYS = 90;
@@ -16,9 +16,9 @@ export const EPISODE_NOTIFICATION_WINDOW_OPTIONS = Object.freeze([
   720,
   1440,
 ]);
-export const DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES = 0;
+export const DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES = 2 * 24 * 60;
 export const MAX_DISCOVERY_REMINDER_DURATION_MINUTES = 43_200;
-export const DEFAULT_DISCOVERY_REMINDER_CRON = "0 */6 * * *";
+export const DEFAULT_DISCOVERY_REMINDER_CRON = "0 */4 * * *";
 export const DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const CANDIDATE_RECHECK_MS = 24 * 60 * 60 * 1000;
 

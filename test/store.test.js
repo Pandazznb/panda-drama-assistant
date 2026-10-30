@@ -160,7 +160,10 @@ test("normalizeState keeps only valid event records and bounds settings", () => 
     subscriptions: [],
     events: [{ id: "evt_1", type: "episode", message: "更新" }],
   });
-  assert.equal(normalized.settings.checkCron, "*/30 * * * *");
+  assert.equal(
+    normalized.settings.checkCron,
+    "11 0,6,10,12,18 * * *",
+  );
   assert.deepEqual(normalized.settings.notifications.bark, {
     enabled: true,
     key: "abc_DEF",
@@ -180,7 +183,7 @@ test("normalizeState validates Cron and migrates representable legacy intervals"
     normalizeState({
       settings: { checkCron: "60 * * * *" },
     }).settings.checkCron,
-    "*/30 * * * *",
+    "11 0,6,10,12,18 * * *",
   );
   assert.equal(
     normalizeState({ settings: { intervalMinutes: 60 } }).settings
@@ -195,7 +198,7 @@ test("normalizeState validates Cron and migrates representable legacy intervals"
   assert.equal(
     normalizeState({ settings: { intervalMinutes: 45 } }).settings
       .checkCron,
-    "*/30 * * * *",
+    "11 0,6,10,12,18 * * *",
   );
 });
 
@@ -332,8 +335,24 @@ test("normalizeState bounds discovery reminder settings", () => {
       discoveryReminderCron: "bad cron",
     },
   });
-  assert.equal(invalid.settings.discoveryReminderDurationMinutes, 0);
-  assert.equal(invalid.settings.discoveryReminderCron, "0 */6 * * *");
+  assert.equal(
+    invalid.settings.discoveryReminderDurationMinutes,
+    0,
+  );
+  assert.equal(invalid.settings.discoveryReminderCron, "0 */4 * * *");
+
+  const defaults = normalizeState({});
+  assert.equal(
+    defaults.settings.discoveryReminderDurationMinutes,
+    2 * 24 * 60,
+  );
+  assert.equal(defaults.settings.discoveryReminderCron, "0 */4 * * *");
+  assert.equal(
+    normalizeState({
+      settings: { discoveryReminderDurationMinutes: 0 },
+    }).settings.discoveryReminderDurationMinutes,
+    0,
+  );
 });
 
 test("normalizeState keeps one valid pending notification per season", () => {
@@ -418,7 +437,10 @@ test("normalizeState migrates legacy Bark settings without losing the key", () =
   assert.equal(normalized.settings.notifications.telegram.enabled, false);
   assert.equal(normalized.settings.notifications.wecom.enabled, false);
   assert.equal(normalized.settings.notifications.dingtalk.enabled, false);
-  assert.equal(normalized.settings.checkCron, "*/30 * * * *");
+  assert.equal(
+    normalized.settings.checkCron,
+    "11 0,6,10,12,18 * * *",
+  );
   assert.deepEqual(normalized.settings.notifications.proxy, {
     enabled: false,
     url: "",

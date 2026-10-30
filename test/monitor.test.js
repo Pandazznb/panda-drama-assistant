@@ -343,7 +343,7 @@ test("persisted scheduling survives restart without shifting the next check", as
 
   let state = await harness.store.read();
   assert.equal(state.settings.lastCheckAt, "2026-10-27T08:00:00.000Z");
-  assert.equal(state.settings.nextCheckAt, "2026-10-27T08:30:00.000Z");
+  assert.equal(state.settings.nextCheckAt, "2026-10-27T10:11:00.000Z");
 
   now = new Date("2026-10-27T08:10:00.000Z");
   const restartedStore = new JsonStateStore(harness.statePath);
@@ -369,8 +369,8 @@ test("persisted scheduling survives restart without shifting the next check", as
   });
 
   await restartedService.start();
-  assert.equal(restartedService.nextCheckAt, "2026-10-27T08:30:00.000Z");
-  assert.equal(scheduled[0].delay, 20 * 60_000);
+  assert.equal(restartedService.nextCheckAt, "2026-10-27T10:11:00.000Z");
+  assert.equal(scheduled[0].delay, 121 * 60_000);
   restartedService.stop();
 });
 
@@ -397,7 +397,7 @@ test("saving a new check Cron reschedules in Asia/Shanghai time", async () => {
   const harness = await createHarness({ now: () => now, timers });
 
   await harness.service.start();
-  assert.equal(scheduled[0].delay, 30 * 60_000);
+  assert.equal(scheduled[0].delay, 131 * 60_000);
   await harness.service.updateSettings({ checkCron: "0 9 * * *" });
 
   const state = await harness.store.read();
@@ -476,7 +476,7 @@ test("manual checks do not shift the durable automatic schedule", async () => {
   });
   assert.equal(
     (await harness.store.read()).settings.nextCheckAt,
-    "2026-10-27T08:30:00.000Z",
+    "2026-10-27T10:11:00.000Z",
   );
 
   now = new Date("2026-10-27T08:10:00.000Z");
@@ -487,7 +487,7 @@ test("manual checks do not shift the durable automatic schedule", async () => {
 
   assert.equal(
     (await harness.store.read()).settings.nextCheckAt,
-    "2026-10-27T08:30:00.000Z",
+    "2026-10-27T10:11:00.000Z",
   );
 });
 
@@ -504,7 +504,7 @@ test("overdue checks run after restart and keep their absolute cadence", async (
     discover: false,
   });
 
-  now = new Date("2026-10-27T08:40:00.000Z");
+  now = new Date("2026-10-27T10:20:00.000Z");
   const restartedStore = new JsonStateStore(harness.statePath);
   await restartedStore.init();
   const scheduled = [];
@@ -537,10 +537,10 @@ test("overdue checks run after restart and keep their absolute cadence", async (
   await scheduled.shift().callback();
 
   const state = await restartedStore.read();
-  assert.equal(state.settings.lastCheckAt, "2026-10-27T08:40:00.000Z");
-  assert.equal(state.settings.nextCheckAt, "2026-10-27T09:00:00.000Z");
-  assert.equal(restartedService.nextCheckAt, "2026-10-27T09:00:00.000Z");
-  assert.equal(scheduled[0].delay, 20 * 60_000);
+  assert.equal(state.settings.lastCheckAt, "2026-10-27T10:20:00.000Z");
+  assert.equal(state.settings.nextCheckAt, "2026-10-27T16:11:00.000Z");
+  assert.equal(restartedService.nextCheckAt, "2026-10-27T16:11:00.000Z");
+  assert.equal(scheduled[0].delay, 351 * 60_000);
   restartedService.stop();
 });
 
@@ -1213,7 +1213,7 @@ test("Cron reminders combine series and never trigger an automatic check", async
     latestState.settings.lastCheckAt,
     "2026-10-27T08:00:00.000Z",
   );
-  assert.equal(harness.service.nextCheckAt, "2026-10-27T08:30:00.000Z");
+  assert.equal(harness.service.nextCheckAt, "2026-10-27T10:11:00.000Z");
   harness.service.stop();
 });
 
@@ -1354,7 +1354,7 @@ test("continuous reminders survive a service restart", async () => {
     state.discoveryReminders[0].nextReminderAt,
     "2026-10-27T08:20:00.000Z",
   );
-  assert.equal(restartedService.nextCheckAt, "2026-10-27T08:30:00.000Z");
+  assert.equal(restartedService.nextCheckAt, "2026-10-27T10:11:00.000Z");
   assert.equal(scheduled[0].delay, 10 * 60_000);
   restartedService.stop();
 });

@@ -231,6 +231,11 @@ const SCREENSHOT_ANALYZE_TIMEOUT_MS = 70_000;
 const SCREENSHOT_IMPORT_TIMEOUT_MS = 180_000;
 const LONG_ACTION_TIMEOUT_MS = 120_000;
 const CHECK_ALL_TIMEOUT_MS = 300_000;
+const DEFAULT_CHECK_CRON = "11 0,6,10,12,18 * * *";
+const DEFAULT_STALE_COMPLETION_DAYS = 90;
+const DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES = 0;
+const DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES = 2 * 24 * 60;
+const DEFAULT_DISCOVERY_REMINDER_CRON = "0 */4 * * *";
 
 const notificationChannelOrder = [
   "bark",
@@ -1886,7 +1891,7 @@ function renderDashboard() {
           ? `找到 ${subscriptions.length} 部 · 共 ${allSubscriptions.length} 部短剧`
           : `${allSubscriptions.length} 部短剧`
       } · ${seasonCount} 个已确认季 · 按 ${
-        dashboard.settings.checkCron || "*/30 * * * *"
+        dashboard.settings.checkCron || DEFAULT_CHECK_CRON
       } 检查${pendingSummary}`
     : "用分享链接开始追更";
   elements.notificationState.textContent = notificationStateLabel(
@@ -4186,19 +4191,20 @@ elements.openSettings.addEventListener("click", () => {
       notifications[channelKey]?.enabled,
     );
   }
-  elements.checkCron.value =
-    settings?.checkCron || "*/30 * * * *";
+  elements.checkCron.value = settings?.checkCron || DEFAULT_CHECK_CRON;
   elements.staleCompletionDays.value = String(
-    settings?.staleCompletionDays ?? 90,
+    settings?.staleCompletionDays ?? DEFAULT_STALE_COMPLETION_DAYS,
   );
   elements.episodeNotificationWindow.value = String(
-    settings?.episodeNotificationWindowMinutes ?? 0,
+    settings?.episodeNotificationWindowMinutes ??
+      DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES,
   );
   setDiscoveryReminderDuration(
-    settings?.discoveryReminderDurationMinutes || 0,
+    settings?.discoveryReminderDurationMinutes ??
+      DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES,
   );
   elements.discoveryReminderCron.value =
-    settings?.discoveryReminderCron || "0 */6 * * *";
+    settings?.discoveryReminderCron || DEFAULT_DISCOVERY_REMINDER_CRON;
   setNotificationChannelMetadata(notifications, { resetValues: true });
   setFieldError(elements.checkCron, false);
   setFieldError(elements.staleCompletionDays, false);
@@ -4596,15 +4602,17 @@ async function saveSettings({ closeAfter = true } = {}) {
       { resetValues: true },
     );
     setDiscoveryReminderDuration(
-      savedSettings.discoveryReminderDurationMinutes || 0,
+      savedSettings.discoveryReminderDurationMinutes ??
+        DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES,
     );
     elements.staleCompletionDays.value = String(
-      savedSettings.staleCompletionDays ?? 90,
+      savedSettings.staleCompletionDays ??
+        DEFAULT_STALE_COMPLETION_DAYS,
     );
-    elements.checkCron.value =
-      savedSettings.checkCron || "*/30 * * * *";
+    elements.checkCron.value = savedSettings.checkCron || DEFAULT_CHECK_CRON;
     elements.discoveryReminderCron.value =
-      savedSettings.discoveryReminderCron || "0 */6 * * *";
+      savedSettings.discoveryReminderCron ||
+      DEFAULT_DISCOVERY_REMINDER_CRON;
     if (appState.dashboard) {
       appState.dashboard.settings = {
         ...appState.dashboard.settings,

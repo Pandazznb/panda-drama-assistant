@@ -164,10 +164,17 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.equal(stateResponse.status, 200);
   const state = await stateResponse.json();
   assert.deepEqual(state.subscriptions, []);
-  assert.equal(state.settings.checkCron, "*/30 * * * *");
+  assert.equal(
+    state.settings.checkCron,
+    "11 0,6,10,12,18 * * *",
+  );
+  assert.equal(state.settings.staleCompletionDays, 90);
   assert.equal(state.settings.episodeNotificationWindowMinutes, 0);
-  assert.equal(state.settings.discoveryReminderDurationMinutes, 0);
-  assert.equal(state.settings.discoveryReminderCron, "0 */6 * * *");
+  assert.equal(
+    state.settings.discoveryReminderDurationMinutes,
+    2 * 24 * 60,
+  );
+  assert.equal(state.settings.discoveryReminderCron, "0 */4 * * *");
   assert.equal(state.settings.pendingDiscoveryReminderCount, 0);
   assert.equal(state.settings.notifications.enabledCount, 0);
 });
