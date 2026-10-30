@@ -1883,17 +1883,15 @@ function renderDashboard() {
     dashboard.settings.lastCheckAt,
   );
   const pendingSummary = dashboard.settings.pendingNotificationCount
-    ? ` · ${dashboard.settings.pendingNotificationCount} 条待汇总`
+    ? ` · 待发送提醒 ${dashboard.settings.pendingNotificationCount} 条`
     : "";
   elements.watchlistSummary.textContent = allSubscriptions.length
     ? `${
         searching
-          ? `找到 ${subscriptions.length} 部 · 共 ${allSubscriptions.length} 部短剧`
-          : `${allSubscriptions.length} 部短剧`
-      } · ${seasonCount} 个已确认季 · 按 ${
-        dashboard.settings.checkCron || DEFAULT_CHECK_CRON
-      } 检查${pendingSummary}`
-    : "用分享链接开始追更";
+          ? `找到 ${subscriptions.length} 部 · 共追更 ${allSubscriptions.length} 部`
+          : `追更 ${allSubscriptions.length} 部`
+      } · 已收录 ${seasonCount} 季 · 自动检查已开启${pendingSummary}`
+    : "粘贴红果分享内容，开始追更";
   elements.notificationState.textContent = notificationStateLabel(
     dashboard.settings,
   );

@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "panda-drama-assistant-";
-const CACHE_NAME = `${CACHE_PREFIX}shell-v1`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-v6`;
 const APP_SHELL = [
   "/",
   "/index.html",
