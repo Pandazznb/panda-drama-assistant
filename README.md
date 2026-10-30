@@ -72,9 +72,21 @@ docker compose pull
 docker compose up -d
 ```
 
-默认访问地址为 `http://127.0.0.1:3417`。追更数据以 SQLite 保存在 `hongguo-data` 命名卷中，重新创建容器不会丢失。
+默认访问地址为 `http://127.0.0.1:3417`。追更数据以 SQLite 保存在项目目录的 `data/state.sqlite3`，重新创建容器不会丢失。`data/` 中的运行数据不会提交到 Git。
 
-从旧版 JSON 存储升级时，请继续挂载原来的 `hongguo-data` 卷并保留 `HONGUO_STATE_FILE`。首次启动会把 `state.json` 导入 `state.sqlite3`，原 JSON 保留不动，因此已有追更、通知密钥和代理配置不会丢失。迁移完成后应以 SQLite 数据库为准。
+从旧版 JSON 存储升级时，请把原来的 `state.json` 放入 `data/`。首次启动会把 `state.json` 导入 `state.sqlite3`，原 JSON 保留不动，因此已有追更、通知密钥和代理配置不会丢失。迁移完成后应以 SQLite 数据库为准。
+
+如果之前使用 `hongguo-data` 命名卷，切换前需要先把卷内数据复制到 `./data`：
+
+```bash
+mkdir -p data
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v hongguo-data:/from:ro \
+  -v "$PWD/data:/to" \
+  alpine \
+  sh -c 'cp -a /from/. /to/'
+```
 
 也可以直接使用 `docker run`：
 
@@ -84,7 +96,7 @@ docker run -d \
   --restart unless-stopped \
   -p 3417:3417 \
   -e TZ=Asia/Shanghai \
-  -v hongguo-data:/app/data \
+  -v "$PWD/data:/app/data" \
   pandazzz/panda-drama-assistant:latest
 ```
 
@@ -102,7 +114,7 @@ docker compose pull
 docker compose up -d
 ```
 
-如需备份数据，应先停止容器，再备份命名卷中的 `state.sqlite3`、`state.sqlite3-wal` 和 `state.sqlite3-shm`（后两个文件可能不存在）。服务运行期间不要单独复制数据库文件，否则可能遗漏 WAL 中尚未合并的数据。不要把这些文件提交到 Git 或公开上传，其中可能包含通知密钥与代理凭据。
+如需备份数据，应先停止容器，再备份整个 `data/` 目录。服务运行期间不要单独复制数据库文件，否则可能遗漏 WAL 中尚未合并的数据。不要把这些文件提交到 Git 或公开上传，其中可能包含通知密钥与代理凭据。
 
 ## 使用
 
