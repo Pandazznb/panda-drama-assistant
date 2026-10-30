@@ -3,12 +3,6 @@ services:
     image: pandazzz/panda-drama-assistant:latest
     container_name: panda-drama-assistant
     user: "0:0"
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        chown -R node:node /app/data
-        exec setpriv --reuid=node --regid=node --init-groups node server.js
     ports:
       - "3417:3417"
     environment:
