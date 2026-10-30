@@ -181,6 +181,25 @@
                   正在检查
                 </span>
                 <button
+                  class="button button--quiet watchlist-update-filter"
+                  type="button"
+                  id="watchlist-update-filter"
+                  aria-label="筛选有更新的系列，当前没有更新"
+                  aria-pressed="false"
+                  title="当前没有有更新的系列"
+                  disabled
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-update-list"></use>
+                  </svg>
+                  <span
+                    class="watchlist-update-filter__badge"
+                    id="watchlist-update-filter-badge"
+                    aria-hidden="true"
+                    hidden
+                  ></span>
+                </button>
+                <button
                   class="button button--quiet recent-events-button"
                   type="button"
                   id="open-events"
@@ -1503,6 +1522,13 @@
       <symbol id="icon-search" viewBox="0 0 24 24">
         <circle cx="11" cy="11" r="8"></circle>
         <path d="m21 21-4.3-4.3"></path>
+      </symbol>
+      <symbol id="icon-filter" viewBox="0 0 24 24">
+        <path d="M4 5h16l-6 7v6l-4-2v-4L4 5Z"></path>
+      </symbol>
+      <symbol id="icon-update-list" viewBox="0 0 24 24">
+        <path d="M4 6h8.5M4 12h6.5M4 18h4.5"></path>
+        <path d="m14.5 9 5 3-5 3Z"></path>
       </symbol>
       <symbol id="icon-settings" viewBox="0 0 24 24">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>

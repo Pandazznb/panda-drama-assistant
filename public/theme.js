@@ -114,7 +114,14 @@
         const currentIndex = THEME_SEQUENCE.indexOf(preference);
         const nextPreference =
           THEME_SEQUENCE[(currentIndex + 1) % THEME_SEQUENCE.length];
+        clearTimeout(button.themeMotionTimer);
+        button.classList.remove("is-theme-changing");
+        void button.offsetWidth;
+        button.classList.add("is-theme-changing");
         setPreference(nextPreference);
+        button.themeMotionTimer = window.setTimeout(() => {
+          button.classList.remove("is-theme-changing");
+        }, 380);
       });
     }
     updateControls();

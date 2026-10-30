@@ -988,6 +988,7 @@ function restoreDiscoveryRemindersForSubscription(
   state,
   subscription,
   nowMs,
+  { includeEventsBeforeLastWatched = null } = {},
 ) {
   const durationMinutes = Number(
     state.settings.discoveryReminderDurationMinutes,
@@ -1006,6 +1007,7 @@ function restoreDiscoveryRemindersForSubscription(
   const cutoffMs = nowMs - durationMs;
   const lastWatchedMs = Date.parse(subscription.lastWatchedAt || "");
   const eventsBySeason = new Map();
+  const eligibleEvents = [];
 
   for (const event of state.events) {
     if (
@@ -1019,8 +1021,25 @@ function restoreDiscoveryRemindersForSubscription(
     if (
       !Number.isFinite(eventMs) ||
       eventMs < cutoffMs ||
-      eventMs > nowMs ||
-      (Number.isFinite(lastWatchedMs) && eventMs <= lastWatchedMs)
+      eventMs > nowMs
+    ) {
+      continue;
+    }
+    eligibleEvents.push({ event, eventMs });
+  }
+
+  const hasEventsAfterLastWatched =
+    Number.isFinite(lastWatchedMs) &&
+    eligibleEvents.some(({ eventMs }) => eventMs > lastWatchedMs);
+  const includeEarlierEvents =
+    includeEventsBeforeLastWatched ??
+    !hasEventsAfterLastWatched;
+
+  for (const { event, eventMs } of eligibleEvents) {
+    if (
+      Number.isFinite(lastWatchedMs) &&
+      eventMs <= lastWatchedMs &&
+      !includeEarlierEvents
     ) {
       continue;
     }
@@ -1486,7 +1505,9 @@ export class ReminderService {
   }
 
   async setSubscriptionWatchState(subscriptionId, watched) {
-    return this.store.mutate((state) => {
+    const now = this.now();
+    let restoredReminderCount = 0;
+    const result = await this.store.mutate((state) => {
       const subscription = state.subscriptions.find(
         (item) => item.id === subscriptionId,
       );
@@ -1501,11 +1522,18 @@ export class ReminderService {
       if (watched) {
         clearQueuedNotificationsForSubscription(state, subscriptionId);
         subscription.hasUnreadUpdate = false;
-        subscription.lastWatchedAt = this.now().toISOString();
+        subscription.lastWatchedAt = now.toISOString();
       }
 
       if (!watched) {
         subscription.hasUnreadUpdate = true;
+        restoredReminderCount =
+          restoreDiscoveryRemindersForSubscription(
+            state,
+            subscription,
+            now.getTime(),
+            { includeEventsBeforeLastWatched: true },
+          ).length;
       }
 
       return {
@@ -1518,6 +1546,16 @@ export class ReminderService {
         lastWatchedAt: subscription.lastWatchedAt || null,
       };
     });
+
+    if (!watched && restoredReminderCount > 0) {
+      await this.flushDiscoveryReminders();
+      await this.flushDueNotifications();
+      if (!this.stopped) {
+        await this.reschedule();
+      }
+    }
+
+    return result;
   }
 
   async markSubscriptionWatched(subscriptionId) {

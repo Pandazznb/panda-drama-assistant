@@ -20,6 +20,10 @@ const elements = {
   watchlistSearchPanel: document.querySelector("#watchlist-search-panel"),
   watchlistSearchStatus: document.querySelector("#watchlist-search-status"),
   watchlistSearchList: document.querySelector("#watchlist-search-list"),
+  watchlistUpdateFilter: document.querySelector("#watchlist-update-filter"),
+  watchlistUpdateFilterBadge: document.querySelector(
+    "#watchlist-update-filter-badge",
+  ),
   checkAll: document.querySelector("#check-all"),
   checkIndicator: document.querySelector("#check-indicator"),
   openEvents: document.querySelector("#open-events"),
@@ -192,6 +196,9 @@ const appState = {
   scrollControlsResizeObserver: null,
   loading: false,
   toastTimer: null,
+  toastHideTimer: null,
+  listMotionTimer: null,
+  hasRenderedSubscriptionList: false,
   screenshotFiles: [],
   screenshotItems: [],
   screenshotPreparing: false,
@@ -202,6 +209,7 @@ const appState = {
   screenshotRunId: 0,
   screenshotReturnFocus: null,
   addDialogReturnFocus: null,
+  watchlistUpdateFilter: false,
   watchlistSearch: {
     activeIndex: -1,
     open: false,
@@ -783,7 +791,7 @@ function selectWatchlistSearchCandidate(index) {
   search.activeIndex = -1;
   search.open = false;
   elements.watchlistSearchInput.value = title;
-  renderDashboard();
+  renderDashboard({ listMotion: "search" });
   elements.watchlistSearchInput.focus({ preventScroll: true });
 }
 
@@ -795,7 +803,7 @@ function clearWatchlistSearch({ focus = true } = {}) {
   search.open = false;
   search.results = [];
   elements.watchlistSearchInput.value = "";
-  renderDashboard();
+  renderDashboard({ listMotion: "search" });
   if (focus) {
     elements.watchlistSearchInput.focus({ preventScroll: true });
   }
@@ -921,11 +929,19 @@ function setFieldError(input, hasError) {
 
 function showToast(message, type = "success") {
   clearTimeout(appState.toastTimer);
+  clearTimeout(appState.toastHideTimer);
+  elements.toast.classList.remove("is-hiding", "is-refreshing");
   elements.toast.textContent = message;
   elements.toast.classList.toggle("toast--error", type === "error");
   elements.toast.hidden = false;
+  void elements.toast.offsetWidth;
+  elements.toast.classList.add("is-refreshing");
   appState.toastTimer = setTimeout(() => {
-    elements.toast.hidden = true;
+    elements.toast.classList.add("is-hiding");
+    appState.toastHideTimer = setTimeout(() => {
+      elements.toast.hidden = true;
+      elements.toast.classList.remove("is-hiding", "is-refreshing");
+    }, 160);
   }, 4200);
 }
 
@@ -979,6 +995,7 @@ function setButtonBusy(button, busy, busyLabel = "处理中…") {
       button.dataset.idleLabel = label?.textContent || button.textContent.trim();
     }
     button.disabled = true;
+    button.classList.add("is-busy");
     button.setAttribute("aria-busy", "true");
     if (label) {
       label.textContent = busyLabel;
@@ -988,6 +1005,7 @@ function setButtonBusy(button, busy, busyLabel = "处理中…") {
     return;
   }
   button.disabled = false;
+  button.classList.remove("is-busy");
   button.removeAttribute("aria-busy");
   if (label && button.dataset.idleLabel) {
     label.textContent = button.dataset.idleLabel;
@@ -1311,7 +1329,14 @@ function focusSubscriptionAction(subscriptionId, action) {
   const row = [...elements.subscriptionList.querySelectorAll(
     "[data-subscription-id]",
   )].find((item) => item.dataset.subscriptionId === subscriptionId);
-  row?.querySelector(`[data-action="${action}"]`)?.focus();
+  const button = row?.querySelector(`[data-action="${action}"]`);
+  button?.focus();
+  if (button) {
+    button.classList.add("is-state-changed");
+    window.setTimeout(() => {
+      button.classList.remove("is-state-changed");
+    }, 420);
+  }
 }
 
 function renderCover(coverUrl, title) {
@@ -1731,19 +1756,52 @@ function renderEmptyState() {
   `;
 }
 
-function renderWatchlistSearchEmptyState() {
+function renderWatchlistSearchEmptyState({ searching = true, updateOnly = false } = {}) {
+  const title =
+    searching && updateOnly
+      ? "没有找到既匹配又有更新的短剧"
+      : updateOnly
+        ? "没有处于有更新状态的短剧"
+        : "没有找到匹配的短剧";
+  const description =
+    searching && updateOnly
+      ? "可以清除搜索查看全部有更新的系列，或显示全部追更。"
+      : updateOnly
+        ? "更新状态可能已经变化，可以显示全部追更。"
+        : "可以尝试更短的剧名、全拼或拼音首字母。";
+  const actions = [
+    searching
+      ? `
+        <button
+          class="button button--secondary"
+          type="button"
+          data-action="clear-watchlist-search"
+        >
+          清除搜索
+        </button>
+      `
+      : "",
+    updateOnly
+      ? `
+        <button
+          class="button button--secondary"
+          type="button"
+          data-action="clear-watchlist-update-filter"
+        >
+          显示全部追更
+        </button>
+      `
+      : "",
+  ].join("");
+
   elements.subscriptionList.innerHTML = `
     <div class="empty-state empty-state--search">
-      <span class="empty-state__icon">${icon("search")}</span>
-      <h3>没有找到匹配的短剧</h3>
-      <p>可以尝试更短的剧名、全拼或拼音首字母。</p>
-      <button
-        class="button button--secondary"
-        type="button"
-        data-action="clear-watchlist-search"
-      >
-        清除搜索
-      </button>
+      <span class="empty-state__icon">${icon(
+        updateOnly ? "filter" : "search",
+      )}</span>
+      <h3>${title}</h3>
+      <p>${description}</p>
+      ${actions ? `<div class="empty-state__actions">${actions}</div>` : ""}
     </div>
   `;
 }
@@ -1834,6 +1892,9 @@ function observeStatusGlowButtons() {
     ...elements.subscriptionList.querySelectorAll(
       ".status-toggle.status--unread, .reminder-toggle.is-active",
     ),
+    ...(elements.watchlistUpdateFilter.classList.contains("has-updates")
+      ? [elements.watchlistUpdateFilter]
+      : []),
   ];
   appState.statusGlowObserver?.disconnect();
   if (!buttons.length) {
@@ -1857,7 +1918,22 @@ function observeStatusGlowButtons() {
   buttons.forEach((button) => appState.statusGlowObserver.observe(button));
 }
 
-function renderDashboard() {
+function setAnimatedText(element, value) {
+  const nextValue = String(value);
+  if (!element || element.textContent === nextValue) {
+    return;
+  }
+  clearTimeout(element.motionTimer);
+  element.textContent = nextValue;
+  element.classList.remove("is-value-changing");
+  void element.offsetWidth;
+  element.classList.add("is-value-changing");
+  element.motionTimer = window.setTimeout(() => {
+    element.classList.remove("is-value-changing");
+  }, 320);
+}
+
+function renderDashboard({ listMotion = "" } = {}) {
   const dashboard = appState.dashboard;
   if (!dashboard) {
     return;
@@ -1866,7 +1942,41 @@ function renderDashboard() {
   const allSubscriptions = sortSubscriptionsByLatestUpdate(
     dashboard.subscriptions || [],
   );
-  const searchMatches = watchlistSearchMatches(allSubscriptions);
+  const updatedSubscriptions = allSubscriptions.filter(
+    (subscription) => subscription.hasUnreadUpdate === true,
+  );
+  const hasUpdates = updatedSubscriptions.length > 0;
+  if (!hasUpdates) {
+    appState.watchlistUpdateFilter = false;
+  }
+  const filteringUpdates =
+    hasUpdates && appState.watchlistUpdateFilter === true;
+  elements.watchlistUpdateFilter.disabled = !hasUpdates;
+  elements.watchlistUpdateFilter.classList.toggle("has-updates", hasUpdates);
+  elements.watchlistUpdateFilter.classList.toggle(
+    "is-active",
+    filteringUpdates,
+  );
+  elements.watchlistUpdateFilter.setAttribute(
+    "aria-pressed",
+    String(filteringUpdates),
+  );
+  const filterLabel = hasUpdates
+    ? `${
+        filteringUpdates ? "取消筛选" : "筛选"
+      }有更新的系列，共 ${updatedSubscriptions.length} 部`
+    : "筛选有更新的系列，当前没有更新";
+  elements.watchlistUpdateFilter.setAttribute("aria-label", filterLabel);
+  elements.watchlistUpdateFilter.title = filterLabel;
+  elements.watchlistUpdateFilterBadge.textContent = String(
+    updatedSubscriptions.length,
+  );
+  elements.watchlistUpdateFilterBadge.hidden = !hasUpdates;
+
+  const visibleSubscriptions = filteringUpdates
+    ? updatedSubscriptions
+    : allSubscriptions;
+  const searchMatches = watchlistSearchMatches(visibleSubscriptions);
   const subscriptions = sortSubscriptionsByLatestUpdate(
     searchMatches.map((match) => match.subscription),
   );
@@ -1877,19 +1987,30 @@ function renderDashboard() {
     (sum, item) => sum + item.seasonCount,
     0,
   );
-  elements.statSeries.textContent = String(allSubscriptions.length);
-  elements.statSeasons.textContent = String(seasonCount);
-  elements.statLastCheck.textContent = formatRelativeTime(
-    dashboard.settings.lastCheckAt,
+  setAnimatedText(elements.statSeries, allSubscriptions.length);
+  setAnimatedText(elements.statSeasons, seasonCount);
+  setAnimatedText(
+    elements.statLastCheck,
+    formatRelativeTime(dashboard.settings.lastCheckAt),
   );
   const pendingSummary = dashboard.settings.pendingNotificationCount
     ? ` · 待发送提醒 ${dashboard.settings.pendingNotificationCount} 条`
     : "";
+  const filterSummary = filteringUpdates
+    ? `有更新 ${updatedSubscriptions.length} 部`
+    : "";
+  const listSummary = searching
+    ? `找到 ${subscriptions.length} 部${
+        filteringUpdates ? "有更新的短剧" : ""
+      }`
+    : filteringUpdates
+      ? filterSummary
+      : `追更 ${allSubscriptions.length} 部`;
   elements.watchlistSummary.textContent = allSubscriptions.length
-    ? `${
-        searching
-          ? `找到 ${subscriptions.length} 部 · 共追更 ${allSubscriptions.length} 部`
-          : `追更 ${allSubscriptions.length} 部`
+    ? `${listSummary}${
+        searching || filteringUpdates
+          ? ` · 共追更 ${allSubscriptions.length} 部`
+          : ""
       } · 已收录 ${seasonCount} 季 · 自动检查已开启${pendingSummary}`
     : "粘贴红果分享内容，开始追更";
   elements.notificationState.textContent = notificationStateLabel(
@@ -1904,10 +2025,27 @@ function renderDashboard() {
   if (!allSubscriptions.length) {
     renderEmptyState();
   } else if (!subscriptions.length) {
-    renderWatchlistSearchEmptyState();
+    renderWatchlistSearchEmptyState({
+      searching,
+      updateOnly: filteringUpdates,
+    });
   } else {
+    const shouldAnimateList =
+      Boolean(listMotion) || !appState.hasRenderedSubscriptionList;
+    clearTimeout(appState.listMotionTimer);
+    elements.subscriptionList.classList.remove("is-list-entering");
+    elements.subscriptionList.removeAttribute("data-motion");
     elements.subscriptionList.innerHTML =
       renderSubscriptionGroups(subscriptions);
+    appState.hasRenderedSubscriptionList = true;
+    if (shouldAnimateList) {
+      elements.subscriptionList.dataset.motion = listMotion || "initial";
+      elements.subscriptionList.classList.add("is-list-entering");
+      appState.listMotionTimer = window.setTimeout(() => {
+        elements.subscriptionList.classList.remove("is-list-entering");
+        elements.subscriptionList.removeAttribute("data-motion");
+      }, 650);
+    }
   }
   renderWatchlistSearchCandidates(searchMatches);
   observeStatusGlowButtons();
@@ -1945,15 +2083,69 @@ async function loadDashboard({ silent = false } = {}) {
 }
 
 function openDialog(dialog) {
+  if (!dialog) {
+    return;
+  }
+  clearTimeout(dialog.closeMotionTimer);
+  dialog.classList.remove("is-closing");
   if (!dialog.open) {
     dialog.showModal();
   }
 }
 
 function closeDialog(dialog) {
-  if (dialog.open) {
-    dialog.close();
+  if (!dialog?.open || dialog.classList.contains("is-closing")) {
+    return;
   }
+  const reduceMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  if (reduceMotion) {
+    dialog.close();
+    dialog.classList.remove("is-closing");
+    return;
+  }
+  dialog.classList.add("is-closing");
+  dialog.closeMotionTimer = window.setTimeout(() => {
+    dialog.close();
+    dialog.classList.remove("is-closing");
+  }, 160);
+}
+
+function revealSubscriptionDetails(details) {
+  if (!details) {
+    return;
+  }
+  clearTimeout(details.detailsMotionTimer);
+  details.classList.remove("is-collapsing");
+  details.hidden = false;
+  details.classList.remove("is-revealing");
+  void details.offsetWidth;
+  details.classList.add("is-revealing");
+  details.detailsMotionTimer = window.setTimeout(() => {
+    details.classList.remove("is-revealing");
+  }, 300);
+}
+
+function hideSubscriptionDetails(details) {
+  if (!details) {
+    return;
+  }
+  clearTimeout(details.detailsMotionTimer);
+  details.classList.remove("is-revealing");
+  const reduceMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  if (reduceMotion) {
+    details.classList.remove("is-collapsing");
+    details.hidden = true;
+    return;
+  }
+  details.classList.add("is-collapsing");
+  details.detailsMotionTimer = window.setTimeout(() => {
+    details.hidden = true;
+    details.classList.remove("is-collapsing");
+  }, 160);
 }
 
 function dialogFocusableElements(dialog) {
@@ -1971,6 +2163,10 @@ for (const dialog of [
   elements.deleteDialog,
   elements.eventsDialog,
 ]) {
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeDialog(dialog);
+  });
   dialog.addEventListener("keydown", (event) => {
     if (event.key !== "Tab") {
       return;
@@ -3765,6 +3961,19 @@ elements.watchlistSearchList.addEventListener("click", (event) => {
   }
 });
 
+elements.watchlistUpdateFilter.addEventListener("click", () => {
+  const hasUpdates = (appState.dashboard?.subscriptions || []).some(
+    (subscription) => subscription.hasUnreadUpdate === true,
+  );
+  if (!hasUpdates) {
+    return;
+  }
+  appState.watchlistUpdateFilter = !appState.watchlistUpdateFilter;
+  renderDashboard({
+    listMotion: appState.watchlistUpdateFilter ? "filter-on" : "filter-off",
+  });
+});
+
 document.addEventListener("pointerdown", (event) => {
   const search = appState.seriesSearch;
   if (search.open && !elements.seriesSearchField.contains(event.target)) {
@@ -3790,6 +3999,11 @@ elements.subscriptionList.addEventListener("click", async (event) => {
     clearWatchlistSearch();
     return;
   }
+  if (button.dataset.action === "clear-watchlist-update-filter") {
+    appState.watchlistUpdateFilter = false;
+    renderDashboard({ listMotion: "filter-off" });
+    return;
+  }
   const row = button.closest("[data-subscription-id]");
   const subscriptionId = row?.dataset.subscriptionId;
   const subscription = appState.dashboard?.subscriptions?.find(
@@ -3809,7 +4023,11 @@ elements.subscriptionList.addEventListener("click", async (event) => {
       appState.expandedSubscriptionIds.delete(subscriptionId);
     }
     if (details) {
-      details.hidden = !nextExpanded;
+      if (nextExpanded) {
+        revealSubscriptionDetails(details);
+      } else {
+        hideSubscriptionDetails(details);
+      }
     }
     const toggleLabel = `${nextExpanded ? "收起" : "展开"}《${subscriptionDisplayTitle(
       subscription,

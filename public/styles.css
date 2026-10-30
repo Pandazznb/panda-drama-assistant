@@ -69,6 +69,12 @@
   --ease-out-fluid: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out-fluid: cubic-bezier(0.65, 0, 0.35, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --motion-press: 110ms;
+  --motion-fast: 160ms;
+  --motion-base: 220ms;
+  --motion-enter: 280ms;
+  --motion-exit: 160ms;
+  --motion-stagger: 36ms;
   --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -1170,6 +1176,210 @@ code {
   gap: 7px;
 }
 
+.watchlist-update-filter {
+  position: relative;
+  isolation: isolate;
+  width: 36px;
+  min-width: 36px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  color: var(--color-muted);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 10px;
+  transition:
+    color var(--motion-fast) var(--ease-out-fluid),
+    background-color var(--motion-fast) var(--ease-out-fluid),
+    border-color var(--motion-fast) var(--ease-out-fluid),
+    box-shadow var(--motion-fast) var(--ease-out-fluid),
+    transform var(--motion-press) var(--ease-out-fluid);
+}
+
+.watchlist-update-filter::before {
+  position: absolute;
+  z-index: -1;
+  inset: 1px;
+  background: var(--color-update-button);
+  border-radius: inherit;
+  content: "";
+  opacity: 0;
+  transform: scale(0.82);
+  transition:
+    opacity var(--motion-fast) var(--ease-out-fluid),
+    transform var(--motion-base) var(--ease-spring);
+}
+
+.watchlist-update-filter .icon {
+  width: 17px;
+  height: 17px;
+  transition:
+    color var(--motion-fast) var(--ease-out-fluid),
+    transform var(--motion-base) var(--ease-spring);
+}
+
+.watchlist-update-filter__badge {
+  position: absolute;
+  z-index: 2;
+  top: -4px;
+  right: -4px;
+  display: grid;
+  box-sizing: border-box;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  place-items: center;
+  color: var(--color-on-accent);
+  background: var(--color-update-button);
+  border: 0;
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 1px var(--color-surface),
+    0 1px 3px rgb(0 0 0 / 28%);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  text-shadow: none;
+  pointer-events: none;
+  animation: update-filter-badge-in var(--motion-enter) var(--ease-spring) both;
+}
+
+.watchlist-update-filter__badge[hidden] {
+  display: none;
+}
+
+.watchlist-update-filter:disabled {
+  color: var(--color-muted);
+  background: transparent;
+  opacity: 0.48;
+}
+
+.watchlist-update-filter.has-updates:not(:disabled) {
+  color: var(--color-update-button);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.watchlist-update-filter.has-updates:not(:disabled)::before {
+  opacity: 0.12;
+  transform: scale(1);
+  animation: update-filter-halo 3.2s var(--ease-in-out-fluid) infinite;
+  animation-play-state: paused;
+}
+
+.watchlist-update-filter.has-updates:not(:disabled) .icon {
+  filter: drop-shadow(0 2px 5px var(--color-update-glow));
+  animation: update-filter-ready 3.2s var(--ease-in-out-fluid) infinite;
+  animation-play-state: paused;
+}
+
+.watchlist-update-filter.has-updates.is-glow-visible::before,
+.watchlist-update-filter.has-updates.is-glow-visible .icon {
+  animation-play-state: running;
+}
+
+@media (hover: hover) {
+  .watchlist-update-filter.has-updates:not(:disabled):hover {
+    background: var(--color-accent-soft);
+  }
+
+  .watchlist-update-filter.has-updates:not(:disabled):hover .icon {
+    transform: scale(1.08) rotate(-3deg);
+  }
+}
+
+.watchlist-update-filter:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.watchlist-update-filter.has-updates.is-active {
+  color: var(--color-on-accent);
+  background: var(--color-update-button);
+  border-color: var(--color-update-border);
+  box-shadow:
+    0 4px 13px var(--color-update-glow),
+    inset 0 1px 0 var(--color-update-highlight);
+}
+
+.watchlist-update-filter.has-updates.is-active::before {
+  animation: none;
+  opacity: 0;
+}
+
+.watchlist-update-filter.has-updates.is-active .icon {
+  filter: none;
+  animation: none;
+  transform: rotate(0) scale(1);
+}
+
+.watchlist-update-filter.has-updates.is-active:hover:not(:disabled) {
+  color: var(--color-on-accent);
+  background: var(--color-update-button-hover);
+  border-color: var(--color-update-border);
+}
+
+.watchlist-update-filter.has-updates.is-active .watchlist-update-filter__badge {
+  color: var(--color-update-button);
+  background: var(--color-surface);
+  box-shadow: none;
+}
+
+@keyframes update-filter-ready {
+  0%,
+  100% {
+    opacity: 0.86;
+    transform: scale(1);
+  }
+
+  84% {
+    opacity: 0.94;
+    transform: scale(1.03);
+  }
+
+  89% {
+    opacity: 1;
+    transform: scale(1.09);
+  }
+
+  94% {
+    opacity: 0.96;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes update-filter-halo {
+  0%,
+  100% {
+    opacity: 0.08;
+    transform: scale(0.94);
+  }
+
+  88% {
+    opacity: 0.2;
+    transform: scale(1.04);
+  }
+
+  94% {
+    opacity: 0.12;
+    transform: scale(1);
+  }
+}
+
+@keyframes update-filter-badge-in {
+  from {
+    opacity: 0;
+    transform: scale(0.62) translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 .recent-events-button {
   min-height: 34px;
   gap: 5px;
@@ -2192,6 +2402,17 @@ a.latest-season__title .icon {
 
 .empty-state--search .button {
   min-height: 38px;
+  margin-top: 15px;
+}
+
+.empty-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.empty-state__actions .button {
   margin-top: 15px;
 }
 
@@ -4131,6 +4352,11 @@ a.latest-season__title .icon {
     gap: 6px;
   }
 
+  .watchlist-update-filter {
+    height: 34px;
+    min-height: 34px;
+  }
+
   .recent-events-button {
     min-height: 34px;
     padding-right: 8px;
@@ -4610,6 +4836,539 @@ a.latest-season__title .icon {
   }
 }
 
+/* Motion system */
+.app-header__inner > .brand {
+  animation: page-enter var(--motion-enter) var(--ease-out-fluid) 40ms both;
+}
+
+.app-header__inner > .app-header__actions {
+  animation: page-enter var(--motion-enter) var(--ease-out-fluid) 90ms both;
+}
+
+.page > .overview {
+  animation: page-enter 420ms var(--ease-out-fluid) 110ms both;
+}
+
+.page > .workspace {
+  animation: page-enter 420ms var(--ease-out-fluid) 180ms both;
+}
+
+.page-footer {
+  animation: page-enter 360ms var(--ease-out-fluid) 260ms both;
+}
+
+.button .icon,
+.icon-button .icon,
+.text-button .icon,
+.scroll-controls__button .icon {
+  transition: transform var(--motion-base) var(--ease-spring);
+}
+
+@media (hover: hover) {
+  .button:hover:not(:disabled) > .icon,
+  .text-button:hover:not(:disabled) > .icon {
+    transform: translateY(-1px);
+  }
+
+  #open-add-dialog:hover:not(:disabled) > .icon {
+    transform: rotate(90deg);
+  }
+
+  .watchlist-search-result:hover .watchlist-search-result__arrow,
+  .watchlist-search-result[data-active="true"] .watchlist-search-result__arrow {
+    color: var(--color-accent-dark);
+    transform: translateX(2px);
+  }
+}
+
+.button:active:not(:disabled) > .icon,
+.text-button:active:not(:disabled) > .icon,
+.icon-button:active .icon,
+.scroll-controls__button:active:not(:disabled) .icon {
+  transform: scale(0.9);
+}
+
+.text-button {
+  transition:
+    color var(--motion-fast) var(--ease-out-fluid),
+    background-color var(--motion-fast) var(--ease-out-fluid),
+    transform var(--motion-press) var(--ease-out-fluid);
+}
+
+.text-button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.button.is-busy > .icon,
+.text-button.is-busy > .icon {
+  animation: control-busy var(--motion-enter) var(--ease-in-out-fluid) infinite
+    alternate;
+}
+
+#check-all.is-busy > .icon,
+.text-button[data-action="check"].is-busy > .icon {
+  animation: spin 720ms linear infinite;
+}
+
+.is-state-changed {
+  animation: state-confirmed 420ms var(--ease-out-fluid) both;
+}
+
+.series-search__icon,
+.watchlist-search__icon {
+  transition:
+    color var(--motion-fast) var(--ease-out-fluid),
+    transform var(--motion-base) var(--ease-spring);
+}
+
+.series-search__control:focus-within .series-search__icon {
+  color: var(--color-accent);
+  transform: translateY(-50%) scale(1.08);
+}
+
+.watchlist-search:focus-within .watchlist-search__icon {
+  color: var(--color-accent);
+  transform: scale(1.08);
+}
+
+.search-clear:not([hidden]) .icon {
+  animation: icon-pop var(--motion-fast) var(--ease-spring);
+}
+
+.watchlist-search__popover:not([hidden]),
+.series-search-panel:not([hidden]) {
+  transform-origin: 50% 0;
+  animation: popover-enter var(--motion-base) var(--ease-out-fluid) both;
+}
+
+.watchlist-search-result,
+.series-search-option {
+  animation: option-enter var(--motion-base) var(--ease-out-fluid) both;
+}
+
+.watchlist-search-result:nth-child(2),
+.series-search-option:nth-child(2) {
+  animation-delay: var(--motion-stagger);
+}
+
+.watchlist-search-result:nth-child(3),
+.series-search-option:nth-child(3) {
+  animation-delay: calc(var(--motion-stagger) * 2);
+}
+
+.watchlist-search-result:nth-child(4),
+.series-search-option:nth-child(4) {
+  animation-delay: calc(var(--motion-stagger) * 3);
+}
+
+.watchlist-search-result:nth-child(5),
+.series-search-option:nth-child(5) {
+  animation-delay: calc(var(--motion-stagger) * 4);
+}
+
+.watchlist-search-result:nth-child(n + 6),
+.series-search-option:nth-child(n + 6) {
+  animation-delay: calc(var(--motion-stagger) * 5);
+}
+
+.subscription-list.is-list-entering .subscription-group {
+  animation: list-item-enter var(--motion-enter) var(--ease-out-fluid) both;
+}
+
+.subscription-list.is-list-entering .subscription-row {
+  animation: list-item-enter 340ms var(--ease-out-fluid) both;
+}
+
+.subscription-list.is-list-entering .subscription-row:nth-child(2) {
+  animation-delay: var(--motion-stagger);
+}
+
+.subscription-list.is-list-entering .subscription-row:nth-child(3) {
+  animation-delay: calc(var(--motion-stagger) * 2);
+}
+
+.subscription-list.is-list-entering .subscription-row:nth-child(4) {
+  animation-delay: calc(var(--motion-stagger) * 3);
+}
+
+.subscription-list.is-list-entering .subscription-row:nth-child(5) {
+  animation-delay: calc(var(--motion-stagger) * 4);
+}
+
+.subscription-list.is-list-entering .subscription-row:nth-child(n + 6) {
+  animation-delay: calc(var(--motion-stagger) * 5);
+}
+
+.subscription-row__details.is-revealing {
+  transform-origin: 50% 0;
+  animation: details-enter var(--motion-enter) var(--ease-out-fluid) both;
+}
+
+.subscription-row__details.is-collapsing {
+  pointer-events: none;
+  animation: details-exit var(--motion-exit) var(--ease-in-out-fluid) both;
+}
+
+.season-details[open] .season-list {
+  animation: details-enter var(--motion-base) var(--ease-out-fluid) both;
+}
+
+.season-list .season-item {
+  animation: option-enter var(--motion-base) var(--ease-out-fluid) both;
+}
+
+.season-list .season-item:nth-child(2) {
+  animation-delay: var(--motion-stagger);
+}
+
+.season-list .season-item:nth-child(3) {
+  animation-delay: calc(var(--motion-stagger) * 2);
+}
+
+.season-list .season-item:nth-child(n + 4) {
+  animation-delay: calc(var(--motion-stagger) * 3);
+}
+
+.dialog[open] .dialog__panel {
+  animation: dialog-panel-enter var(--motion-enter) var(--ease-out-fluid) both;
+}
+
+.dialog[open]::backdrop {
+  animation: dialog-backdrop-enter var(--motion-base) ease-out both;
+}
+
+.dialog.is-closing .dialog__panel {
+  animation: dialog-panel-exit var(--motion-exit) var(--ease-in-out-fluid) both;
+}
+
+.dialog.is-closing::backdrop {
+  animation: dialog-backdrop-exit var(--motion-exit) ease-in both;
+}
+
+.dialog[open] .event-item {
+  animation: option-enter var(--motion-base) var(--ease-out-fluid) both;
+}
+
+.dialog[open] .event-item:nth-child(2) {
+  animation-delay: var(--motion-stagger);
+}
+
+.dialog[open] .event-item:nth-child(3) {
+  animation-delay: calc(var(--motion-stagger) * 2);
+}
+
+.dialog[open] .event-item:nth-child(n + 4) {
+  animation-delay: calc(var(--motion-stagger) * 3);
+}
+
+.notification-channel__config:not([hidden]),
+.field__feedback.is-visible,
+.empty-state,
+.screenshot-selection:not([hidden]),
+.screenshot-results:not([hidden]),
+.screenshot-outcomes:not([hidden]) {
+  animation: reveal-in var(--motion-base) var(--ease-out-fluid) both;
+}
+
+.field.has-error input {
+  animation: field-error 240ms var(--ease-out-fluid);
+}
+
+.status-choice {
+  transition:
+    color var(--motion-fast) var(--ease-out-fluid),
+    background-color var(--motion-fast) var(--ease-out-fluid),
+    border-color var(--motion-fast) var(--ease-out-fluid),
+    box-shadow var(--motion-fast) var(--ease-out-fluid),
+    transform var(--motion-press) var(--ease-out-fluid);
+}
+
+.status-choice:active {
+  transform: scale(0.988);
+}
+
+.channel-toggle__track::after {
+  transition:
+    transform 180ms var(--ease-spring),
+    background-color var(--motion-fast) var(--ease-out-fluid);
+}
+
+.channel-toggle input:checked + .channel-toggle__track::after {
+  animation: toggle-knob-pop 200ms var(--ease-spring);
+}
+
+.check-field input {
+  transition: transform var(--motion-fast) var(--ease-spring);
+}
+
+.check-field:active input {
+  transform: scale(0.88);
+}
+
+a.latest-season__title .icon,
+.season-item__title .icon {
+  transition: transform var(--motion-base) var(--ease-spring);
+}
+
+@media (hover: hover) {
+  a.latest-season__title:hover .icon,
+  .season-item__title:hover .icon {
+    transform: translate(2px, -2px);
+  }
+}
+
+.stat dd.is-value-changing {
+  animation: stat-value-change var(--motion-enter) var(--ease-spring);
+}
+
+.theme-switcher.is-theme-changing .icon {
+  animation: theme-icon-swap 360ms var(--ease-spring);
+}
+
+.toast.is-refreshing {
+  animation: toast-in 180ms ease-out;
+}
+
+.toast.is-hiding {
+  animation: toast-out var(--motion-exit) ease-in both;
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes popover-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes option-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes list-item-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes details-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes details-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes dialog-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dialog-panel-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(5px) scale(0.992);
+  }
+}
+
+@keyframes dialog-backdrop-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-backdrop-exit {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes icon-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.7) rotate(-12deg);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes control-busy {
+  from {
+    opacity: 0.54;
+    transform: scale(0.92);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes state-confirmed {
+  0% {
+    transform: scale(1);
+  }
+
+  45% {
+    transform: scale(1.035);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes field-error {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  35% {
+    transform: translateX(-3px);
+  }
+
+  70% {
+    transform: translateX(3px);
+  }
+}
+
+@keyframes stat-value-change {
+  from {
+    opacity: 0.45;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes theme-icon-swap {
+  0% {
+    opacity: 0.35;
+    transform: rotate(-24deg) scale(0.76);
+  }
+
+  70% {
+    opacity: 1;
+    transform: rotate(5deg) scale(1.06);
+  }
+
+  100% {
+    opacity: 1;
+    transform: rotate(0) scale(1);
+  }
+}
+
+@keyframes toggle-knob-pop {
+  0% {
+    transform: translateX(14px) scale(0.84);
+  }
+
+  65% {
+    transform: translateX(14px) scale(1.08);
+  }
+
+  100% {
+    transform: translateX(14px) scale(1);
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -4618,5 +5377,49 @@ a.latest-season__title .icon {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .app-header__inner > .brand,
+  .app-header__inner > .app-header__actions,
+  .page > .overview,
+  .page > .workspace,
+  .page-footer,
+  .watchlist-search__popover:not([hidden]),
+  .series-search-panel:not([hidden]),
+  .watchlist-search-result,
+  .series-search-option,
+  .subscription-list.is-list-entering .subscription-group,
+  .subscription-list.is-list-entering .subscription-row,
+  .subscription-row__details.is-revealing,
+  .subscription-row__details.is-collapsing,
+  .season-details[open] .season-list,
+  .season-list .season-item,
+  .dialog[open] .dialog__panel,
+  .dialog[open]::backdrop,
+  .dialog[open] .event-item,
+  .notification-channel__config:not([hidden]),
+  .field__feedback.is-visible,
+  .empty-state,
+  .screenshot-selection:not([hidden]),
+  .screenshot-results:not([hidden]),
+  .screenshot-outcomes:not([hidden]) {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+
+  .watchlist-update-filter.has-updates:not(:disabled) .icon,
+  .theme-switcher.is-theme-changing .icon {
+    animation: none !important;
+  }
+
+  .watchlist-update-filter.has-updates:not(:disabled)::before {
+    animation: none !important;
+    opacity: 0.12;
+    transform: none;
+  }
+
+  .channel-toggle input:checked + .channel-toggle__track::after {
+    animation: none !important;
   }
 }

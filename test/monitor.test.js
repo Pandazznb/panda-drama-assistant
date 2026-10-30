@@ -1136,6 +1136,152 @@ test("watched state can be restored to unread without losing watch history", asy
   );
 });
 
+test("restoring unread state reactivates the sustained reminder window", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 0,
+    discoveryReminderDurationMinutes: 120,
+    discoveryReminderCron: "*/10 * * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+
+  now = new Date("2026-10-27T08:05:00.000Z");
+  await harness.service.markSubscriptionWatched(subscriptionId);
+  now = new Date("2026-10-27T08:15:00.000Z");
+  await harness.service.markSubscriptionUnwatched(subscriptionId);
+
+  const state = await harness.store.read();
+  assert.equal(state.discoveryReminders.length, 1);
+  assert.equal(
+    state.discoveryReminders[0].expiresAt,
+    "2026-10-27T10:00:00.000Z",
+  );
+  assert.equal(
+    state.subscriptions[0].lastWatchedAt,
+    "2026-10-27T08:05:00.000Z",
+  );
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderActive, true);
+  assert.equal(
+    dashboard.subscriptions[0].reminderExpiresAt,
+    "2026-10-27T10:00:00.000Z",
+  );
+});
+
+test("restoring unread state does not revive an expired reminder", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 0,
+    discoveryReminderDurationMinutes: 60,
+    discoveryReminderCron: "*/10 * * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+
+  now = new Date("2026-10-27T08:05:00.000Z");
+  await harness.service.markSubscriptionWatched(subscriptionId);
+  now = new Date("2026-10-27T09:01:00.000Z");
+  await harness.service.markSubscriptionUnwatched(subscriptionId);
+
+  const state = await harness.store.read();
+  assert.equal(state.discoveryReminders.length, 0);
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderActive, false);
+  assert.equal(dashboard.subscriptions[0].reminderExpiresAt, null);
+});
+
+test("service start repairs a missing reminder for manually restored unread state", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 0,
+    discoveryReminderDurationMinutes: 120,
+    discoveryReminderCron: "*/10 * * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  now = new Date("2026-10-27T08:05:00.000Z");
+  await harness.service.markSubscriptionWatched(subscriptionId);
+  await harness.store.mutate((state) => {
+    state.subscriptions[0].hasUnreadUpdate = true;
+    state.discoveryReminders = [];
+  });
+
+  now = new Date("2026-10-27T08:10:00.000Z");
+  await harness.service.start();
+  harness.service.stop();
+
+  const state = await harness.store.read();
+  assert.equal(state.discoveryReminders.length, 1);
+  assert.equal(
+    state.discoveryReminders[0].expiresAt,
+    "2026-10-27T10:00:00.000Z",
+  );
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderActive, true);
+});
+
+test("service start does not revive an older watched update when a newer one exists", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 0,
+    discoveryReminderDurationMinutes: 120,
+    discoveryReminderCron: "*/10 * * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  now = new Date("2026-10-27T08:05:00.000Z");
+  await harness.service.markSubscriptionWatched(subscriptionId);
+
+  now = new Date("2026-10-27T08:10:00.000Z");
+  harness.details.set(ROOT_ID, detail({ episodeCount: 16 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  await harness.store.mutate((state) => {
+    state.discoveryReminders = [];
+  });
+
+  now = new Date("2026-10-27T08:11:00.000Z");
+  await harness.service.start();
+  harness.service.stop();
+
+  const state = await harness.store.read();
+  const latestEvent = state.events.find((event) =>
+    event.message.includes("第 16 集"),
+  );
+  assert.equal(state.discoveryReminders.length, 1);
+  assert.deepEqual(state.discoveryReminders[0].eventIds, [latestEvent.id]);
+  assert.equal(
+    state.discoveryReminders[0].expiresAt,
+    "2026-10-27T10:10:00.000Z",
+  );
+});
+
 test("Cron reminders combine series and never trigger an automatic check", async () => {
   let now = new Date("2026-10-27T08:00:00.000Z");
   const scheduled = [];
