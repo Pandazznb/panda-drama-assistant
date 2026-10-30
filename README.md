@@ -67,7 +67,23 @@ pandazzz/panda-drama-assistant:latest
 
 ### Docker Compose（推荐）
 
-推荐使用 Docker Compose 部署：
+推荐使用 Docker Compose 部署。项目根目录的 `docker-compose.yml` 内容如下：
+
+```yaml
+services:
+  panda-drama-assistant:
+    image: pandazzz/panda-drama-assistant:latest
+    container_name: panda-drama-assistant
+    ports:
+      - "3417:3417"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+启动服务：
 
 ```bash
 docker compose pull
