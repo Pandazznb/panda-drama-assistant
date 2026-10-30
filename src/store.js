@@ -42,7 +42,8 @@ import {
   toSafeInteger,
 } from "./utils.js";
 
-const STATE_VERSION = 10;
+const STATE_VERSION = 12;
+const STORED_NEXT_CHECK_VERSION = 10;
 const SERIES_COMPLETION_RULE_VERSION = 2;
 export const MAX_EVENTS = 100;
 
@@ -460,6 +461,10 @@ function normalizeSubscription(subscription) {
     seriesCompletionVerifiedAt:
       hasVerifiedCompletionCycle ? seriesCompletionVerifiedAt : null,
     hasUnreadUpdate: subscription.hasUnreadUpdate === true,
+    reminderEnabled: subscription.reminderEnabled !== false,
+    reminderMutedForCurrentUpdate:
+      subscription.reminderEnabled !== false &&
+      subscription.reminderMutedForCurrentUpdate === true,
     lastWatchedAt: parseTimestamp(subscription.lastWatchedAt)
       ? new Date(parseTimestamp(subscription.lastWatchedAt)).toISOString()
       : null,
@@ -515,7 +520,8 @@ export function normalizeState(input) {
           parseTimestamp(input.settings.lastCheckAt),
         ).toISOString();
   const storedNextCheckAt =
-    Number.isFinite(inputVersion) && inputVersion >= STATE_VERSION
+    Number.isFinite(inputVersion) &&
+    inputVersion >= STORED_NEXT_CHECK_VERSION
       ? parseTimestamp(input.settings?.nextCheckAt)
       : null;
   const derivedNextCheckAt =

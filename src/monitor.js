@@ -210,18 +210,11 @@ function clearSeriesCompletionState(subscription) {
   subscription.seriesCompletionVerifiedAt = null;
 }
 
-function clearQueuedNotificationsForSubscription(state, subscriptionId) {
+function clearPendingNotificationsForSubscription(state, subscriptionId) {
   const affectedEventIds = new Set();
   for (const pending of state.pendingNotifications) {
     if (pending.subscriptionId === subscriptionId) {
       for (const eventId of pending.eventIds || []) {
-        affectedEventIds.add(eventId);
-      }
-    }
-  }
-  for (const reminder of state.discoveryReminders) {
-    if (reminder.subscriptionId === subscriptionId) {
-      for (const eventId of reminder.eventIds || []) {
         affectedEventIds.add(eventId);
       }
     }
@@ -238,9 +231,53 @@ function clearQueuedNotificationsForSubscription(state, subscriptionId) {
   state.pendingNotifications = state.pendingNotifications.filter(
     (pending) => pending.subscriptionId !== subscriptionId,
   );
+}
+
+function clearQueuedNotificationsForSubscription(state, subscriptionId) {
+  clearPendingNotificationsForSubscription(state, subscriptionId);
+  const affectedEventIds = new Set();
+  for (const reminder of state.discoveryReminders) {
+    if (reminder.subscriptionId === subscriptionId) {
+      for (const eventId of reminder.eventIds || []) {
+        affectedEventIds.add(eventId);
+      }
+    }
+  }
+  for (const event of state.events) {
+    if (
+      event.subscriptionId === subscriptionId &&
+      affectedEventIds.has(event.id)
+    ) {
+      event.notificationDueAt = null;
+      event.notificationError = null;
+    }
+  }
   state.discoveryReminders = state.discoveryReminders.filter(
     (reminder) => reminder.subscriptionId !== subscriptionId,
   );
+}
+
+function remindersEnabledForSubscription(state, subscriptionId) {
+  const subscription = state.subscriptions.find(
+    (item) => item.id === subscriptionId,
+  );
+  return reminderModeForSubscription(subscription) === "enabled";
+}
+
+function reminderModeForSubscription(subscription) {
+  if (!subscription || subscription.reminderEnabled === false) {
+    return "disabled";
+  }
+  if (subscription.reminderMutedForCurrentUpdate === true) {
+    return "muted";
+  }
+  return "enabled";
+}
+
+function resumeMutedReminderForNewUpdate(subscription) {
+  if (subscription?.reminderMutedForCurrentUpdate === true) {
+    subscription.reminderMutedForCurrentUpdate = false;
+  }
 }
 
 function statusLabel(status) {
@@ -485,7 +522,11 @@ function detailedCheckMessage(state, events, subscriptionId) {
   const relevantEvents = events.filter((event) =>
     SUMMARY_EVENT_TYPES.has(event.type),
   );
-  if (!subscription || !relevantEvents.length) {
+  if (
+    !subscription ||
+    subscription.reminderEnabled === false ||
+    !relevantEvents.length
+  ) {
     return null;
   }
 
@@ -618,7 +659,7 @@ function groupedCheckEvents(state, events) {
     const subscription = state.subscriptions.find(
       (item) => item.id === event.subscriptionId,
     );
-    if (!subscription) {
+    if (!subscription || subscription.reminderEnabled === false) {
       continue;
     }
     const group = groups.get(event.subscriptionId) || {
@@ -660,7 +701,7 @@ function pendingNotificationCopy(state, pendingNotifications) {
     const subscription = state.subscriptions.find(
       (item) => item.id === pending.subscriptionId,
     );
-    if (!subscription) {
+    if (!subscription || subscription.reminderEnabled === false) {
       continue;
     }
     const group = pendingBySubscription.get(pending.subscriptionId) || {
@@ -730,7 +771,7 @@ function discoveryReminderCopy(state, reminders, nowMs) {
     const subscription = state.subscriptions.find(
       (item) => item.id === reminder.subscriptionId,
     );
-    if (!subscription) {
+    if (!subscription || subscription.reminderEnabled === false) {
       continue;
     }
     const group = remindersBySubscription.get(reminder.subscriptionId) || {
@@ -943,6 +984,118 @@ function queueDiscoveryReminder(state, event, nowMs) {
   return reminder;
 }
 
+function restoreDiscoveryRemindersForSubscription(
+  state,
+  subscription,
+  nowMs,
+) {
+  const durationMinutes = Number(
+    state.settings.discoveryReminderDurationMinutes,
+  );
+  if (
+    !subscription ||
+    subscription.hasUnreadUpdate !== true ||
+    reminderModeForSubscription(subscription) !== "enabled" ||
+    !Number.isFinite(durationMinutes) ||
+    durationMinutes <= 0
+  ) {
+    return [];
+  }
+
+  const durationMs = durationMinutes * 60_000;
+  const cutoffMs = nowMs - durationMs;
+  const lastWatchedMs = Date.parse(subscription.lastWatchedAt || "");
+  const eventsBySeason = new Map();
+
+  for (const event of state.events) {
+    if (
+      event.subscriptionId !== subscription.id ||
+      ![EVENT_TYPE.EPISODE, EVENT_TYPE.SEASON].includes(event.type) ||
+      !event.seasonId
+    ) {
+      continue;
+    }
+    const eventMs = Date.parse(event.createdAt || "");
+    if (
+      !Number.isFinite(eventMs) ||
+      eventMs < cutoffMs ||
+      eventMs > nowMs ||
+      (Number.isFinite(lastWatchedMs) && eventMs <= lastWatchedMs)
+    ) {
+      continue;
+    }
+    const key = `${event.subscriptionId}:${event.seasonId}`;
+    const events = eventsBySeason.get(key) || [];
+    events.push(event);
+    eventsBySeason.set(key, events);
+  }
+
+  state.discoveryReminders = state.discoveryReminders.filter((reminder) => {
+    const expiresAtMs = Date.parse(reminder.expiresAt || "");
+    return Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+  });
+  const existingKeys = new Set(
+    state.discoveryReminders
+      .filter((reminder) => reminder.subscriptionId === subscription.id)
+      .map(
+        (reminder) =>
+          `${reminder.subscriptionId}:${reminder.seasonId}`,
+      ),
+  );
+  const restored = [];
+
+  for (const [key, events] of eventsBySeason) {
+    if (existingKeys.has(key)) {
+      continue;
+    }
+    events.sort(
+      (left, right) =>
+        (Date.parse(left.createdAt || "") || 0) -
+        (Date.parse(right.createdAt || "") || 0),
+    );
+    const firstEvent = events[0];
+    const latestEvent = events.at(-1);
+    const firstDiscoveredMs = Date.parse(firstEvent?.createdAt || "");
+    const expiresAtMs = firstDiscoveredMs + durationMs;
+    if (
+      !Number.isFinite(firstDiscoveredMs) ||
+      expiresAtMs <= nowMs
+    ) {
+      continue;
+    }
+
+    const episodeEvents = events.filter(
+      (event) => event.type === EVENT_TYPE.EPISODE,
+    );
+    const reminder = {
+      id: createId("repeat_"),
+      type: latestEvent.type,
+      subscriptionId: subscription.id,
+      seasonId: latestEvent.seasonId,
+      seasonTitle: latestEvent.seasonTitle,
+      previousEpisodeCount:
+        latestEvent.type === EVENT_TYPE.EPISODE
+          ? (episodeEvents[0]?.previousEpisodeCount ?? null)
+          : null,
+      episodeCount: Math.max(
+        ...events.map((event) => Number(event.episodeCount) || 0),
+      ),
+      firstDiscoveredAt: new Date(firstDiscoveredMs).toISOString(),
+      lastDiscoveredAt: latestEvent.createdAt,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      eventIds: [...new Set(events.map((event) => event.id))],
+      nextReminderAt: new Date(nowMs).toISOString(),
+      lastReminderAt: null,
+      lastError: null,
+    };
+    state.discoveryReminders.push(reminder);
+    existingKeys.add(key);
+    restored.push(reminder);
+  }
+
+  return restored;
+}
+
 export class ReminderService {
   constructor({
     store,
@@ -1127,6 +1280,7 @@ export class ReminderService {
           autoCompletedAt: null,
           autoCompletionReason: null,
           hasUnreadUpdate: false,
+          reminderEnabled: true,
           lastWatchedAt: null,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -1372,6 +1526,76 @@ export class ReminderService {
 
   async markSubscriptionUnwatched(subscriptionId) {
     return this.setSubscriptionWatchState(subscriptionId, false);
+  }
+
+  async setSubscriptionReminderState(subscriptionId, mode) {
+    const reminderMode = String(mode || "");
+    if (!["enabled", "muted", "disabled"].includes(reminderMode)) {
+      throw new ReminderError(
+        "提醒状态必须为 enabled、muted 或 disabled。",
+        "INVALID_REMINDER_STATE",
+        400,
+      );
+    }
+
+    const result = await this.store.mutate((state) => {
+      const subscription = state.subscriptions.find(
+        (item) => item.id === subscriptionId,
+      );
+      if (!subscription) {
+        throw new ReminderError(
+          "追更条目不存在。",
+          "SUBSCRIPTION_NOT_FOUND",
+          404,
+        );
+      }
+
+      subscription.reminderEnabled = reminderMode !== "disabled";
+      subscription.reminderMutedForCurrentUpdate =
+        reminderMode === "muted";
+      if (reminderMode === "muted") {
+        clearPendingNotificationsForSubscription(
+          state,
+          subscriptionId,
+        );
+      }
+      if (reminderMode === "enabled") {
+        restoreDiscoveryRemindersForSubscription(
+          state,
+          subscription,
+          this.now().getTime(),
+        );
+      }
+      subscription.updatedAt = this.now().toISOString();
+      return {
+        id: subscription.id,
+        title:
+          subscription.displayTitle ||
+          subscription.firstSeasonTitle ||
+          subscription.title,
+        reminderEnabled: subscription.reminderEnabled,
+        reminderMutedForCurrentUpdate:
+          subscription.reminderMutedForCurrentUpdate,
+        reminderMode: reminderModeForSubscription(subscription),
+        hasUnreadUpdate: subscription.hasUnreadUpdate === true,
+      };
+    });
+
+    if (reminderMode === "enabled") {
+      await this.flushDiscoveryReminders();
+      await this.flushDueNotifications();
+    }
+    if (!this.stopped) {
+      await this.reschedule();
+    }
+    return result;
+  }
+
+  async setSubscriptionReminderEnabled(subscriptionId, enabled) {
+    return this.setSubscriptionReminderState(
+      subscriptionId,
+      enabled ? "enabled" : "disabled",
+    );
   }
 
   async updateSubscriptionStatus(subscriptionId, status) {
@@ -1694,6 +1918,24 @@ export class ReminderService {
         0,
       );
       const latestContentActivity = latestContentActivityMs(subscription);
+      const hasUnreadUpdate = subscription.hasUnreadUpdate === true;
+      const reminderMode = reminderModeForSubscription(subscription);
+      const reminderEnabled = reminderMode !== "disabled";
+      const activeReminderExpiryMs =
+        reminderMode === "enabled" && hasUnreadUpdate
+          ? state.discoveryReminders
+              .filter(
+                (reminder) =>
+                  reminder.subscriptionId === subscription.id,
+              )
+              .map((reminder) => Date.parse(reminder.expiresAt || ""))
+              .filter((expiresAtMs) => Number.isFinite(expiresAtMs))
+              .filter((expiresAtMs) => expiresAtMs > nowMs)
+              .reduce(
+                (latest, expiresAtMs) => Math.max(latest, expiresAtMs),
+                0,
+              )
+          : 0;
       const searchIndex = buildSubscriptionSearchIndex([
         subscription.displayTitle,
         subscription.firstSeasonTitle,
@@ -1726,7 +1968,15 @@ export class ReminderService {
           : null,
         seriesCompletionAnnounced:
           subscription.seriesCompletionAnnounced,
-        hasUnreadUpdate: subscription.hasUnreadUpdate === true,
+        hasUnreadUpdate,
+        reminderEnabled,
+        reminderMutedForCurrentUpdate: reminderMode === "muted",
+        reminderMode,
+        reminderActive: activeReminderExpiryMs > nowMs,
+        reminderExpiresAt:
+          activeReminderExpiryMs > nowMs
+            ? new Date(activeReminderExpiryMs).toISOString()
+            : null,
         lastWatchedAt: subscription.lastWatchedAt,
         createdAt: subscription.createdAt,
         updatedAt: subscription.updatedAt,
@@ -1788,6 +2038,10 @@ export class ReminderService {
               reminder.nextReminderAt || "",
             );
             return (
+              remindersEnabledForSubscription(
+                state,
+                reminder.subscriptionId,
+              ) &&
               Number.isFinite(expiresAtMs) &&
               expiresAtMs > nowMs &&
               Number.isFinite(nextReminderMs)
@@ -2290,6 +2544,7 @@ export class ReminderService {
         );
 
         if (detail.episodeCount > previousHighWater) {
+          resumeMutedReminderForNewUpdate(current);
           clearAutomaticCompletion(current);
           updatedSeasons += 1;
           season.lastEpisodeChangedAt = timestamp;
@@ -2360,6 +2615,7 @@ export class ReminderService {
           discoveredNewerSeason = true;
         }
         discoveredSeasons += 1;
+        resumeMutedReminderForNewUpdate(current);
         const event = appendEvent(state, {
           id: createId("evt_"),
           type: EVENT_TYPE.SEASON,
@@ -2472,6 +2728,7 @@ export class ReminderService {
         current.seriesCompletionVerifiedAt ||= timestamp;
         current.completedAt ||= timestamp;
         if (!current.seriesCompletionAnnounced) {
+          resumeMutedReminderForNewUpdate(current);
           const seasonEpisodeCount = current.seasons.reduce(
             (sum, season) => sum + (season.highWaterEpisodeCount || 0),
             0,
@@ -2533,14 +2790,16 @@ export class ReminderService {
     events,
     { mode = "summary", subscriptionId = null } = {},
   ) {
+    const state = await this.store.read();
     const immediateEvents = events.filter(
       (event) =>
-        !event.notificationDueAt && SUMMARY_EVENT_TYPES.has(event.type),
+        !event.notificationDueAt &&
+        SUMMARY_EVENT_TYPES.has(event.type) &&
+        remindersEnabledForSubscription(state, event.subscriptionId),
     );
     if (!immediateEvents.length) {
       return;
     }
-    const state = await this.store.read();
     const notificationSettings = state.settings.notifications;
     if (!enabledNotificationChannels(notificationSettings).length) {
       return;
@@ -2593,7 +2852,11 @@ export class ReminderService {
     const nowMs = this.now().getTime();
     const activeReminders = state.discoveryReminders.filter((reminder) => {
       const expiresAtMs = Date.parse(reminder.expiresAt || "");
-      return Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+      return (
+        remindersEnabledForSubscription(state, reminder.subscriptionId) &&
+        Number.isFinite(expiresAtMs) &&
+        expiresAtMs > nowMs
+      );
     });
 
     if (!enabledNotificationChannels(state.settings.notifications).length) {
@@ -2689,7 +2952,7 @@ export class ReminderService {
                 expiresAtMs,
               );
               reminder.lastError = null;
-              return reminder.nextReminderAt ? reminder : null;
+              return reminder;
             }
 
             const retryAtMs = completedAtMs + NOTIFICATION_RETRY_MS;
@@ -2710,6 +2973,10 @@ export class ReminderService {
       pending: latestState.discoveryReminders.filter((reminder) => {
         const expiresAtMs = Date.parse(reminder.expiresAt || "");
         return (
+          remindersEnabledForSubscription(
+            latestState,
+            reminder.subscriptionId,
+          ) &&
           Number.isFinite(expiresAtMs) &&
           expiresAtMs > completedAtMs &&
           Number.isFinite(Date.parse(reminder.nextReminderAt || ""))
@@ -2730,7 +2997,11 @@ export class ReminderService {
     const nowMs = this.now().getTime();
     const dueNotifications = state.pendingNotifications.filter((pending) => {
       const dueAtMs = Date.parse(pending.dueAt || "");
-      return Number.isFinite(dueAtMs) && dueAtMs <= nowMs;
+      return (
+        remindersEnabledForSubscription(state, pending.subscriptionId) &&
+        Number.isFinite(dueAtMs) &&
+        dueAtMs <= nowMs
+      );
     });
     if (!dueNotifications.length) {
       return { sent: 0, pending: state.pendingNotifications.length };
@@ -2811,6 +3082,18 @@ export class ReminderService {
       return;
     }
     this.stopped = false;
+    await this.store.mutate((state) => {
+      const nowMs = this.now().getTime();
+      for (const subscription of state.subscriptions) {
+        if (reminderModeForSubscription(subscription) === "enabled") {
+          restoreDiscoveryRemindersForSubscription(
+            state,
+            subscription,
+            nowMs,
+          );
+        }
+      }
+    });
     await this.flushDiscoveryReminders();
     await this.flushDueNotifications();
     await this.scheduleNext();
@@ -2849,12 +3132,24 @@ export class ReminderService {
     const pendingDueTargets =
       enabledNotificationChannels(state.settings.notifications).length > 0
         ? state.pendingNotifications
+            .filter((pending) =>
+              remindersEnabledForSubscription(
+                state,
+                pending.subscriptionId,
+              ),
+            )
             .map((pending) => Date.parse(pending.dueAt || ""))
             .filter(Number.isFinite)
         : [];
     const discoveryReminderTargets =
       enabledNotificationChannels(state.settings.notifications).length > 0
         ? state.discoveryReminders
+            .filter((reminder) =>
+              remindersEnabledForSubscription(
+                state,
+                reminder.subscriptionId,
+              ),
+            )
             .map((reminder) => {
               const expiresAtMs = Date.parse(reminder.expiresAt || "");
               const nextReminderMs = Date.parse(

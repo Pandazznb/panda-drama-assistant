@@ -254,7 +254,7 @@ async function serveStatic(pathname, response) {
 
 function subscriptionRoute(pathname) {
   const match = pathname.match(
-    /^\/api\/subscriptions\/([^/]+)(?:\/(seasons|check|watched|status))?$/,
+    /^\/api\/subscriptions\/([^/]+)(?:\/(seasons|check|watched|status|reminder))?$/,
   );
   if (!match) {
     return null;
@@ -607,6 +607,44 @@ export function createRequestHandler(service, screenshotImport, eventLog) {
             message: watched
               ? `已将《${result.title}》标记为已观看。`
               : `已将《${result.title}》恢复为有更新。`,
+          });
+          return;
+        }
+
+        if (request.method === "POST" && subRoute.action === "reminder") {
+          const body = await readJsonBody(request);
+          const requestedMode =
+            typeof body?.mode === "string"
+              ? body.mode
+              : typeof body?.enabled === "boolean"
+                ? body.enabled
+                  ? "enabled"
+                  : "disabled"
+                : null;
+          if (
+            requestedMode === null ||
+            !["enabled", "muted", "disabled"].includes(requestedMode)
+          ) {
+            const error = new Error(
+              "提醒状态必须为 enabled、muted 或 disabled。",
+            );
+            error.statusCode = 400;
+            error.code = "INVALID_REMINDER_STATE";
+            throw error;
+          }
+          const result = await service.setSubscriptionReminderState(
+            subRoute.id,
+            requestedMode,
+          );
+          const message = {
+            enabled: `已开启《${result.title}》的更新提醒。`,
+            muted: `已关闭《${result.title}》本次更新的提醒，下次更新会自动恢复。`,
+            disabled: `已长期关闭《${result.title}》的更新提醒，有更新状态会保留。`,
+          }[requestedMode];
+          sendJson(response, 200, {
+            ok: true,
+            result,
+            message,
           });
           return;
         }

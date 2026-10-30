@@ -35,6 +35,8 @@
   --color-update-glow: rgb(189 48 41 / 46%);
   --color-update-halo: rgb(255 124 108 / 42%);
   --color-update-highlight: rgb(255 255 255 / 28%);
+  --color-reminder-active: #875300;
+  --color-reminder-active-glow: rgb(255 185 27 / 42%);
   --color-focus: #1868c7;
   --color-on-accent: #ffffff;
   --color-header-bg: rgb(243 245 247 / 88%);
@@ -109,6 +111,8 @@
   --color-update-glow: rgb(224 70 61 / 54%);
   --color-update-halo: rgb(255 137 122 / 46%);
   --color-update-highlight: rgb(255 255 255 / 30%);
+  --color-reminder-active: #ffe083;
+  --color-reminder-active-glow: rgb(255 194 46 / 46%);
   --color-focus: #7cb2ff;
   --color-on-accent: #ffffff;
   --color-header-bg: rgb(15 18 22 / 90%);
@@ -385,7 +389,8 @@ code {
 .brand__mark .icon {
   width: 18px;
   height: 18px;
-  margin-left: 2px;
+  display: block;
+  margin: 0;
 }
 
 .brand__text {
@@ -1467,6 +1472,113 @@ code {
   margin-top: 0;
 }
 
+.subscription-row__actions {
+  display: grid;
+  width: 110px;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-self: stretch;
+  align-content: space-between;
+  justify-items: stretch;
+  gap: 7px;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.reminder-toggle {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  width: 40px;
+  height: 40px;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  padding: 0;
+  color: var(--color-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+  font: inherit;
+  transition:
+    color 160ms var(--ease-out-fluid),
+    background-color 160ms var(--ease-out-fluid),
+    border-color 160ms var(--ease-out-fluid),
+    box-shadow 180ms var(--ease-out-fluid),
+    transform 140ms var(--ease-out-fluid);
+}
+
+.reminder-toggle .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.reminder-toggle:hover:not(:disabled) {
+  color: var(--color-ink-soft);
+  background: color-mix(
+    in srgb,
+    var(--color-surface-strong) 76%,
+    transparent
+  );
+  transform: translateY(-1px);
+}
+
+.reminder-toggle:active:not(:disabled) {
+  transform: translateY(1px) scale(0.96);
+}
+
+.reminder-toggle.is-enabled {
+  color: var(--color-ink-soft);
+}
+
+.reminder-toggle.is-muted {
+  color: var(--color-warning);
+}
+
+.reminder-toggle.is-muted .icon {
+  opacity: 0.92;
+}
+
+.reminder-toggle.is-off {
+  color: var(--color-muted);
+}
+
+.reminder-toggle.is-off .icon {
+  opacity: 0.68;
+}
+
+.reminder-toggle.is-active {
+  color: var(--color-reminder-active);
+  background: transparent;
+}
+
+.reminder-toggle.is-active .icon {
+  filter: drop-shadow(0 0 5px var(--color-reminder-active-glow));
+  transform-origin: 50% 18%;
+  animation: reminder-bell-swing 2.6s var(--ease-in-out-fluid) infinite;
+  animation-play-state: paused;
+}
+
+.reminder-toggle.is-active:hover:not(:disabled) {
+  color: var(--color-reminder-active);
+  background: color-mix(
+    in srgb,
+    var(--color-reminder-active-glow) 32%,
+    transparent
+  );
+}
+
+.reminder-toggle.is-active.is-glow-visible .icon {
+  animation-play-state: running;
+}
+
+.reminder-toggle[aria-busy="true"] .icon {
+  animation: spin 900ms linear infinite;
+}
+
 .status {
   display: inline-flex;
   min-height: 22px;
@@ -1485,13 +1597,14 @@ code {
   position: relative;
   isolation: isolate;
   overflow: visible;
-  width: 126px;
-  min-height: 52px;
-  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  gap: 6px;
   margin-left: 0;
-  padding: 5px 9px 5px 6px;
-  align-self: center;
-  justify-self: end;
+  padding: 4px 7px 4px 5px;
+  align-self: end;
+  justify-self: stretch;
   border-radius: 11px;
   text-align: left;
   transition:
@@ -1500,8 +1613,6 @@ code {
     border-color 160ms var(--ease-out-fluid),
     background-color 160ms var(--ease-out-fluid),
     color 160ms var(--ease-out-fluid);
-  grid-column: 2;
-  grid-row: 1 / span 2;
 }
 
 .status-toggle__icon,
@@ -1512,31 +1623,32 @@ code {
 
 .status-toggle__icon {
   display: grid;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
-  border-radius: 7px;
+  border-radius: 6px;
 }
 
 .status-toggle__icon .icon {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .status-toggle__copy {
   display: grid;
+  min-width: 0;
   gap: 1px;
 }
 
 .status-toggle__label {
-  font-size: 0.8125rem;
+  font-size: 0.78125rem;
   font-weight: 700;
   line-height: 1.15;
 }
 
 .status-toggle__hint {
-  font-size: 0.625rem;
+  font-size: 0.59375rem;
   font-weight: 550;
   line-height: 1.15;
 }
@@ -1544,11 +1656,11 @@ code {
 .status-toggle.status--unread::after {
   position: absolute;
   z-index: 0;
-  inset: -8px;
-  border-radius: 16px;
+  inset: -6px;
+  border-radius: 14px;
   content: "";
   background: var(--color-update-halo);
-  filter: blur(12px);
+  filter: blur(10px);
   opacity: 0.42;
   pointer-events: none;
   animation: status-unread-glow 2.2s var(--ease-in-out-fluid) infinite;
@@ -1662,6 +1774,30 @@ code {
   50% {
     opacity: 0.62;
     transform: scale(1.04);
+  }
+}
+
+@keyframes reminder-bell-swing {
+  0%,
+  32%,
+  100% {
+    transform: rotate(0);
+  }
+
+  40% {
+    transform: rotate(8deg);
+  }
+
+  50% {
+    transform: rotate(-7deg);
+  }
+
+  60% {
+    transform: rotate(4deg);
+  }
+
+  70% {
+    transform: rotate(-2deg);
   }
 }
 
@@ -3948,7 +4084,7 @@ a.latest-season__title .icon {
   }
 
   .subscription-row__header {
-    grid-column: 1 / -1;
+    grid-column: 1;
     grid-row: 1;
   }
 
@@ -3979,30 +4115,43 @@ a.latest-season__title .icon {
     margin-top: 0;
   }
 
+  .subscription-row__actions {
+    width: 86px;
+    gap: 5px;
+  }
+
   .status {
     min-height: 22px;
     padding: 2px 6px;
     font-size: 0.6875rem;
   }
 
+  .reminder-toggle {
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .reminder-toggle .icon {
+    width: 20px;
+    height: 20px;
+  }
+
   .status.status-toggle {
-    width: 96px;
-    min-height: 46px;
-    grid-column: 2;
-    grid-row: 2;
-    gap: 5px;
-    padding: 4px 7px 4px 5px;
+    min-height: 42px;
+    gap: 4px;
+    padding: 4px 6px 4px 4px;
   }
 
   .status-toggle__icon {
-    width: 28px;
-    height: 28px;
-    flex-basis: 28px;
+    width: 24px;
+    height: 24px;
+    flex-basis: 24px;
   }
 
   .status-toggle__icon .icon {
-    width: 15px;
-    height: 15px;
+    width: 13px;
+    height: 13px;
   }
 
   .status-toggle__label {
@@ -4010,7 +4159,7 @@ a.latest-season__title .icon {
   }
 
   .status-toggle__hint {
-    font-size: 0.5625rem;
+    display: none;
   }
 
   .latest-season {

@@ -1,6 +1,6 @@
 {
   "name": "panda-drama-assistant",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "description": "熊猫 · 短剧助手：追踪短剧新季、新集并通过多渠道发送提醒",

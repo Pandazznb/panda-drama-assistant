@@ -126,6 +126,8 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /id="add-dialog"/);
   assert.match(page, /id="share-input-clear"/);
   assert.match(page, /id="watchlist-search-clear"/);
+  assert.match(page, /symbol id="icon-bell-minus"/);
+  assert.match(page, /symbol id="icon-bell-off"/);
   assert.match(
     page,
     /href="\/assets\/panda-drama-assistant-icon\.svg"/,
@@ -365,7 +367,7 @@ test("settings API saves a custom Cron schedule and all notification channels wi
   assert.equal(JSON.stringify(state).includes("proxy-pass"), false);
 
   const onDisk = await harness.store.read();
-  assert.equal(onDisk.version, 10);
+  assert.equal(onDisk.version, 12);
   assert.equal(onDisk.settings.checkCron, "0 0 * * 0");
   assert.equal(onDisk.settings.staleCompletionDays, 120);
   assert.equal(onDisk.settings.discoveryReminderDurationMinutes, 1440);
@@ -640,6 +642,134 @@ test("watched API can restore a subscription to unread", async (t) => {
   assert.equal(payload.result.hasUnreadUpdate, true);
   assert.equal(payload.message, "已将《测试短剧》恢复为有更新。");
   assert.deepEqual(calls, ["sub_test"]);
+});
+
+test("reminder API switches between all three notification states", async (t) => {
+  const harness = await startHarness(t);
+  const calls = [];
+  harness.service.setSubscriptionReminderState = async (
+    subscriptionId,
+    mode,
+  ) => {
+    calls.push({ subscriptionId, mode });
+    return {
+      id: subscriptionId,
+      title: "测试短剧",
+      reminderEnabled: mode !== "disabled",
+      reminderMutedForCurrentUpdate: mode === "muted",
+      reminderMode: mode,
+      hasUnreadUpdate: true,
+    };
+  };
+
+  const enabledResponse = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/reminder`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "enabled" }),
+    },
+  );
+  assert.equal(enabledResponse.status, 200);
+  const enabledPayload = await enabledResponse.json();
+  assert.equal(enabledPayload.result.reminderMode, "enabled");
+  assert.match(enabledPayload.message, /已开启/);
+
+  const mutedResponse = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/reminder`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "muted" }),
+    },
+  );
+  assert.equal(mutedResponse.status, 200);
+  const mutedPayload = await mutedResponse.json();
+  assert.equal(mutedPayload.result.reminderMode, "muted");
+  assert.equal(mutedPayload.result.reminderEnabled, true);
+  assert.equal(
+    mutedPayload.result.reminderMutedForCurrentUpdate,
+    true,
+  );
+  assert.equal(mutedPayload.result.hasUnreadUpdate, true);
+  assert.match(mutedPayload.message, /下次更新会自动恢复/);
+
+  const disabledResponse = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/reminder`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "disabled" }),
+    },
+  );
+  assert.equal(disabledResponse.status, 200);
+  const disabledPayload = await disabledResponse.json();
+  assert.equal(disabledPayload.result.reminderMode, "disabled");
+  assert.equal(disabledPayload.result.reminderEnabled, false);
+  assert.equal(disabledPayload.result.hasUnreadUpdate, true);
+  assert.match(disabledPayload.message, /有更新状态会保留/);
+  assert.deepEqual(calls, [
+    { subscriptionId: "sub_test", mode: "enabled" },
+    { subscriptionId: "sub_test", mode: "muted" },
+    { subscriptionId: "sub_test", mode: "disabled" },
+  ]);
+});
+
+test("reminder API keeps the legacy enabled boolean contract", async (t) => {
+  const harness = await startHarness(t);
+  const calls = [];
+  harness.service.setSubscriptionReminderState = async (
+    subscriptionId,
+    mode,
+  ) => {
+    calls.push({ subscriptionId, mode });
+    return {
+      id: subscriptionId,
+      title: "测试短剧",
+      reminderMode: mode,
+      reminderEnabled: mode !== "disabled",
+      reminderMutedForCurrentUpdate: false,
+      hasUnreadUpdate: true,
+    };
+  };
+
+  for (const enabled of [false, true]) {
+    const response = await fetch(
+      `${harness.origin}/api/subscriptions/sub_test/reminder`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      },
+    );
+    assert.equal(response.status, 200);
+  }
+
+  assert.deepEqual(calls, [
+    { subscriptionId: "sub_test", mode: "disabled" },
+    { subscriptionId: "sub_test", mode: "enabled" },
+  ]);
+});
+
+test("reminder API rejects an invalid reminder mode", async (t) => {
+  const harness = await startHarness(t);
+  let called = false;
+  harness.service.setSubscriptionReminderState = async () => {
+    called = true;
+  };
+
+  const response = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/reminder`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "silent" }),
+    },
+  );
+  assert.equal(response.status, 400);
+  const payload = await response.json();
+  assert.equal(payload.error.code, "INVALID_REMINDER_STATE");
+  assert.equal(called, false);
 });
 
 test("watched API returns 404 for an unknown subscription", async (t) => {

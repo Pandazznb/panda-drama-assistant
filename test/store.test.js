@@ -512,6 +512,99 @@ test("normalizeState preserves a valid watched timestamp", () => {
   );
 });
 
+test("normalizeState migrates the three reminder states", () => {
+  const seriesId = "7621200213801176126";
+  const normalized = normalizeState({
+    subscriptions: [
+      {
+        id: "sub_reminder_default",
+        primarySeriesId: seriesId,
+        seriesGroupId: "7624475539960499262",
+        title: "测试短剧第一季",
+        seasons: [
+          {
+            seriesId,
+            seriesGroupId: "7624475539960499262",
+            title: "测试短剧第一季",
+            status: "updating",
+            episodeCount: 18,
+          },
+        ],
+      },
+      {
+        id: "sub_reminder_off",
+        primarySeriesId: seriesId,
+        seriesGroupId: "7624475539960499262",
+        title: "测试短剧第一季",
+        reminderEnabled: false,
+        seasons: [
+          {
+            seriesId,
+            seriesGroupId: "7624475539960499262",
+            title: "测试短剧第一季",
+            status: "updating",
+            episodeCount: 18,
+          },
+        ],
+      },
+      {
+        id: "sub_reminder_muted",
+        primarySeriesId: seriesId,
+        seriesGroupId: "7624475539960499262",
+        title: "测试短剧第一季",
+        reminderMutedForCurrentUpdate: true,
+        seasons: [
+          {
+            seriesId,
+            seriesGroupId: "7624475539960499262",
+            title: "测试短剧第一季",
+            status: "updating",
+            episodeCount: 18,
+          },
+        ],
+      },
+      {
+        id: "sub_reminder_off_and_muted",
+        primarySeriesId: seriesId,
+        seriesGroupId: "7624475539960499262",
+        title: "测试短剧第一季",
+        reminderEnabled: false,
+        reminderMutedForCurrentUpdate: true,
+        seasons: [
+          {
+            seriesId,
+            seriesGroupId: "7624475539960499262",
+            title: "测试短剧第一季",
+            status: "updating",
+            episodeCount: 18,
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(normalized.subscriptions[0].reminderEnabled, true);
+  assert.equal(
+    normalized.subscriptions[0].reminderMutedForCurrentUpdate,
+    false,
+  );
+  assert.equal(normalized.subscriptions[1].reminderEnabled, false);
+  assert.equal(
+    normalized.subscriptions[1].reminderMutedForCurrentUpdate,
+    false,
+  );
+  assert.equal(normalized.subscriptions[2].reminderEnabled, true);
+  assert.equal(
+    normalized.subscriptions[2].reminderMutedForCurrentUpdate,
+    true,
+  );
+  assert.equal(normalized.subscriptions[3].reminderEnabled, false);
+  assert.equal(
+    normalized.subscriptions[3].reminderMutedForCurrentUpdate,
+    false,
+  );
+});
+
 test("normalizeState migrates the latest episode detection time into its season", () => {
   const seriesId = "7621200213801176126";
   const normalized = normalizeState({
@@ -587,7 +680,7 @@ test("normalizeState clears a verified legacy completion without a finale marker
     ],
   });
   const subscription = normalized.subscriptions[0];
-  assert.equal(normalized.version, 10);
+  assert.equal(normalized.version, 12);
   assert.equal(subscription.seriesStatus, "unknown");
   assert.match(subscription.seriesStatusReason, /完结篇/);
   assert.equal(subscription.completedAt, null);
@@ -758,7 +851,7 @@ test("store persists a legacy state migration and completion event cleanup", asy
   const store = new JsonStateStore(filePath);
   try {
     const state = await store.init();
-    assert.equal(state.version, 10);
+    assert.equal(state.version, 12);
     assert.deepEqual(
       state.events.map((event) => event.id),
       ["evt_disk_episode"],

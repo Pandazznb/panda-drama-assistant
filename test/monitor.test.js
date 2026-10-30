@@ -157,11 +157,20 @@ test("first subscription creates a baseline and never notifies immediately", asy
   assert.equal(state.subscriptions.length, 1);
   assert.equal(state.subscriptions[0].seasons[0].highWaterEpisodeCount, 12);
   assert.equal(state.subscriptions[0].hasUnreadUpdate, false);
+  assert.equal(state.subscriptions[0].reminderEnabled, true);
   assert.equal(state.subscriptions[0].lastWatchedAt, null);
   assert.equal(state.events[0].type, "baseline");
   assert.equal(harness.notifications.length, 0);
   const dashboard = await harness.service.getDashboard();
   assert.equal(dashboard.subscriptions[0].hasUnreadUpdate, false);
+  assert.equal(dashboard.subscriptions[0].reminderEnabled, true);
+  assert.equal(dashboard.subscriptions[0].reminderMode, "enabled");
+  assert.equal(
+    dashboard.subscriptions[0].reminderMutedForCurrentUpdate,
+    false,
+  );
+  assert.equal(dashboard.subscriptions[0].reminderActive, false);
+  assert.equal(dashboard.subscriptions[0].reminderExpiresAt, null);
   assert.equal(dashboard.subscriptions[0].lastWatchedAt, null);
   assert.equal(dashboard.subscriptions[0].searchText, "测试短剧");
   assert.equal(dashboard.subscriptions[0].searchPinyin, "ceshiduanju");
@@ -716,6 +725,7 @@ test("marking watched clears queued reminders until another update arrives", asy
   state = await harness.store.read();
   assert.equal(watched.lastWatchedAt, "2026-10-27T08:00:00.000Z");
   assert.equal(state.subscriptions[0].hasUnreadUpdate, false);
+  assert.equal(state.subscriptions[0].reminderEnabled, true);
   assert.equal(
     state.subscriptions[0].lastWatchedAt,
     "2026-10-27T08:00:00.000Z",
@@ -740,8 +750,371 @@ test("marking watched clears queued reminders until another update arrives", asy
   });
   state = await harness.store.read();
   assert.equal(state.subscriptions[0].hasUnreadUpdate, true);
+  assert.equal(state.subscriptions[0].reminderEnabled, true);
   assert.equal(state.pendingNotifications.length, 1);
   assert.equal(state.discoveryReminders.length, 1);
+});
+
+test("disabled reminders suppress manual and aggregated update notifications", async () => {
+  const harness = await createHarness();
+  await addAndEnableBark(harness);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  await harness.service.setSubscriptionReminderEnabled(
+    subscriptionId,
+    false,
+  );
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscription(subscriptionId, {
+    discover: false,
+  });
+  harness.details.set(ROOT_ID, detail({ episodeCount: 16 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+
+  const state = await harness.store.read();
+  assert.equal(state.subscriptions[0].hasUnreadUpdate, true);
+  assert.equal(state.subscriptions[0].reminderEnabled, false);
+  assert.equal(state.subscriptions[0].reminderMutedForCurrentUpdate, false);
+  assert.equal(harness.notifications.length, 0);
+});
+
+test("muting pauses current reminders and resumes on the next episode", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await addAndEnableBark(harness);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 60,
+    discoveryReminderDurationMinutes: 60,
+    discoveryReminderCron: "*/10 * * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  let state = await harness.store.read();
+  assert.equal(state.subscriptions[0].hasUnreadUpdate, true);
+  assert.equal(state.pendingNotifications.length, 1);
+  assert.equal(state.discoveryReminders.length, 1);
+  assert.equal(harness.notifications.length, 0);
+
+  const muted = await harness.service.setSubscriptionReminderState(
+    subscriptionId,
+    "muted",
+  );
+  state = await harness.store.read();
+  assert.equal(muted.reminderMode, "muted");
+  assert.equal(state.subscriptions[0].reminderEnabled, true);
+  assert.equal(
+    state.subscriptions[0].reminderMutedForCurrentUpdate,
+    true,
+  );
+  assert.equal(state.subscriptions[0].hasUnreadUpdate, true);
+  assert.equal(state.pendingNotifications.length, 0);
+  assert.equal(state.discoveryReminders.length, 1);
+  let dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderMode, "muted");
+  assert.equal(dashboard.subscriptions[0].reminderActive, false);
+
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  state = await harness.store.read();
+  assert.equal(
+    state.subscriptions[0].reminderMutedForCurrentUpdate,
+    true,
+  );
+  assert.equal(state.discoveryReminders.length, 1);
+  assert.equal(harness.notifications.length, 0);
+
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 0,
+  });
+  harness.details.set(ROOT_ID, detail({ episodeCount: 16 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  state = await harness.store.read();
+  assert.equal(
+    state.subscriptions[0].reminderMutedForCurrentUpdate,
+    false,
+  );
+  assert.equal(harness.notifications.length, 1);
+  assert.match(harness.notifications[0].message.body, /第 16 集/);
+  assert.equal(state.discoveryReminders.length, 1);
+  dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderMode, "enabled");
+  assert.equal(dashboard.subscriptions[0].reminderActive, true);
+});
+
+test("restoring a reminder resumes its animation and due notifications", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await addAndEnableBark(harness);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 60,
+    discoveryReminderDurationMinutes: 120,
+    discoveryReminderCron: "* * * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  await harness.service.setSubscriptionReminderState(
+    subscriptionId,
+    "muted",
+  );
+
+  now = new Date("2026-10-27T08:05:00.000Z");
+  const enabled = await harness.service.setSubscriptionReminderState(
+    subscriptionId,
+    "enabled",
+  );
+
+  assert.equal(enabled.reminderMode, "enabled");
+  assert.equal(harness.notifications.length, 1);
+  assert.match(harness.notifications[0].message.body, /第 15 集/);
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderActive, true);
+  assert.ok(dashboard.subscriptions[0].reminderExpiresAt);
+});
+
+test("enabling reminders rebuilds a queue cleared by the previous mute behavior", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await addAndEnableBark(harness);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 60,
+    discoveryReminderDurationMinutes: 120,
+    discoveryReminderCron: "0 */4 * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  await harness.service.setSubscriptionReminderState(
+    subscriptionId,
+    "disabled",
+  );
+  await harness.store.mutate((state) => {
+    state.pendingNotifications = [];
+    state.discoveryReminders = [];
+  });
+
+  now = new Date("2026-10-27T09:00:00.000Z");
+  await harness.service.setSubscriptionReminderState(
+    subscriptionId,
+    "enabled",
+  );
+
+  const state = await harness.store.read();
+  assert.equal(state.discoveryReminders.length, 1);
+  assert.equal(harness.notifications.length, 1);
+  assert.match(harness.notifications[0].message.body, /第 15 集/);
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderActive, true);
+});
+
+test("enabling reminders does not rebuild updates outside the reminder window", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await addAndEnableBark(harness);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 0,
+    discoveryReminderDurationMinutes: 60,
+    discoveryReminderCron: "0 */4 * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  const notificationsBeforeEnabling = harness.notifications.length;
+  await harness.service.setSubscriptionReminderState(
+    subscriptionId,
+    "disabled",
+  );
+  await harness.store.mutate((state) => {
+    state.pendingNotifications = [];
+    state.discoveryReminders = [];
+  });
+
+  now = new Date("2026-10-27T09:01:00.000Z");
+  await harness.service.setSubscriptionReminderState(
+    subscriptionId,
+    "enabled",
+  );
+
+  const state = await harness.store.read();
+  assert.equal(state.discoveryReminders.length, 0);
+  assert.equal(
+    harness.notifications.length,
+    notificationsBeforeEnabling,
+  );
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderActive, false);
+});
+
+test("service start rebuilds current reminders missing after an old mute", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await addAndEnableBark(harness);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 60,
+    discoveryReminderDurationMinutes: 120,
+    discoveryReminderCron: "* * * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  await harness.store.mutate((state) => {
+    state.pendingNotifications = [];
+    state.discoveryReminders = [];
+  });
+
+  now = new Date("2026-10-27T08:30:00.000Z");
+  await harness.service.start();
+  harness.service.stop();
+
+  const state = await harness.store.read();
+  assert.equal(state.discoveryReminders.length, 1);
+  assert.equal(harness.notifications.length, 1);
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderActive, true);
+});
+
+test("a muted reminder resumes when a new season is discovered", async () => {
+  const harness = await createHarness({
+    nextDetail: detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧 第二季",
+      episodeCount: 6,
+      firstVisibleTime: "2026-10-17T16:04:00.000Z",
+    }),
+    albumSeriesIds: [NEXT_ID],
+    recommendFromRoot: false,
+  });
+  await addAndEnableBark(harness);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 0,
+    discoveryReminderDurationMinutes: 0,
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 13 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+    notify: false,
+  });
+  await harness.service.setSubscriptionReminderState(
+    subscriptionId,
+    "muted",
+  );
+
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: true,
+    forceDiscovery: true,
+  });
+  const state = await harness.store.read();
+  assert.equal(state.subscriptions[0].seasons.length, 2);
+  assert.equal(
+    state.subscriptions[0].reminderMutedForCurrentUpdate,
+    false,
+  );
+  assert.equal(harness.notifications.length, 1);
+  assert.match(harness.notifications[0].message.body, /新季/);
+});
+
+test("enabling a paused summary sends its due notification without another update", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await addAndEnableBark(harness);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 60,
+    discoveryReminderDurationMinutes: 0,
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.service.setSubscriptionReminderEnabled(
+    subscriptionId,
+    false,
+  );
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  let state = await harness.store.read();
+  assert.equal(state.pendingNotifications.length, 1);
+  assert.equal(harness.notifications.length, 0);
+
+  now = new Date("2026-10-27T09:00:00.000Z");
+  const pausedFlush = await harness.service.flushDueNotifications();
+  assert.equal(pausedFlush.sent, 0);
+  assert.equal(pausedFlush.pending, 1);
+  assert.equal(harness.notifications.length, 0);
+
+  const enabled = await harness.service.setSubscriptionReminderEnabled(
+    subscriptionId,
+    true,
+  );
+  state = await harness.store.read();
+  assert.equal(enabled.reminderEnabled, true);
+  assert.equal(state.pendingNotifications.length, 0);
+  assert.equal(harness.notifications.length, 1);
+  assert.match(harness.notifications[0].message.body, /第 15 集/);
+});
+
+test("paused sustained reminders resume only after reminders are enabled again", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  await addAndEnableBark(harness);
+  await harness.service.updateSettings({
+    episodeNotificationWindowMinutes: 0,
+    discoveryReminderDurationMinutes: 120,
+    discoveryReminderCron: "* * * * *",
+  });
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.service.setSubscriptionReminderEnabled(
+    subscriptionId,
+    false,
+  );
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+  let state = await harness.store.read();
+  assert.equal(state.discoveryReminders.length, 1);
+  assert.equal(harness.notifications.length, 0);
+
+  now = new Date("2026-10-27T08:01:00.000Z");
+  const pausedFlush = await harness.service.flushDiscoveryReminders();
+  assert.equal(pausedFlush.sent, 0);
+  assert.equal(pausedFlush.pending, 0);
+  assert.equal(harness.notifications.length, 0);
+
+  const enabled = await harness.service.setSubscriptionReminderEnabled(
+    subscriptionId,
+    true,
+  );
+  state = await harness.store.read();
+  assert.equal(enabled.reminderEnabled, true);
+  assert.equal(state.subscriptions[0].hasUnreadUpdate, true);
+  assert.equal(harness.notifications.length, 1);
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(dashboard.subscriptions[0].reminderActive, true);
+  assert.ok(dashboard.subscriptions[0].reminderExpiresAt);
 });
 
 test("watched state can be restored to unread without losing watch history", async () => {

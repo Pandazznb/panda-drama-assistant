@@ -373,11 +373,80 @@ function statusMarkup(status) {
   )}${label}</span>`;
 }
 
+function reminderToggleMarkup(subscription) {
+  const reminderMode =
+    subscription.reminderMode ||
+    (subscription.reminderEnabled === false
+      ? "disabled"
+      : subscription.reminderMutedForCurrentUpdate === true
+        ? "muted"
+        : "enabled");
+  const hasCurrentUpdate =
+    subscription.hasUnreadUpdate === true ||
+    subscription.reminderActive === true;
+  const nextMode =
+    reminderMode === "enabled"
+      ? hasCurrentUpdate
+        ? "muted"
+        : "disabled"
+      : reminderMode === "muted"
+        ? "disabled"
+        : "enabled";
+  const reminderActive =
+    reminderMode === "enabled" && subscription.reminderActive === true;
+  const displayTitle = subscriptionDisplayTitle(subscription);
+  const expiresAt = reminderActive
+    ? formatDateTime(subscription.reminderExpiresAt)
+    : "";
+  const actionLabel = {
+    enabled: hasCurrentUpdate
+      ? `关闭《${displayTitle}》本次更新的提醒`
+      : `关闭《${displayTitle}》的全部更新提醒`,
+    muted: `关闭《${displayTitle}》的全部更新提醒`,
+    disabled: `开启《${displayTitle}》的更新提醒`,
+  }[nextMode];
+  const stateHint = reminderActive
+    ? `提醒已开启，当前提醒有效至 ${expiresAt}`
+    : reminderMode === "enabled"
+      ? "提醒已开启，当前没有生效中的持续提醒"
+      : reminderMode === "muted"
+        ? "本次更新已静音，下次有新集或新季时自动恢复"
+        : "已关闭全部更新提醒，有更新状态仍会保留";
+  const title = `${actionLabel}；当前状态：${stateHint}`;
+  const stateClass = reminderActive
+    ? "is-active"
+    : {
+        enabled: "is-enabled",
+        muted: "is-muted",
+        disabled: "is-off",
+      }[reminderMode];
+  const iconName = {
+    enabled: "bell",
+    muted: "bell-minus",
+    disabled: "bell-off",
+  }[reminderMode];
+
+  return `
+    <button
+      class="reminder-toggle ${stateClass}"
+      type="button"
+      data-action="reminder"
+      data-reminder-mode="${reminderMode}"
+      data-next-reminder-mode="${nextMode}"
+      aria-label="${escapeHtml(title)}"
+      title="${escapeHtml(title)}"
+    >
+      ${icon(iconName)}
+      <span class="sr-only" data-button-label>${escapeHtml(actionLabel)}</span>
+    </button>
+  `;
+}
+
 function updateStatusMarkup(subscription) {
   const hasUnreadUpdate = subscription.hasUnreadUpdate === true;
   const label = hasUnreadUpdate ? "有更新" : "已观看";
-  const hint = hasUnreadUpdate ? "点按标记已看" : "点按恢复提醒";
-  const iconName = hasUnreadUpdate ? "bell" : "eye";
+  const hint = hasUnreadUpdate ? "点按标记已看" : "点按恢复更新";
+  const iconName = hasUnreadUpdate ? "play" : "check";
   const lastWatchedNote = subscription.lastWatchedAt
     ? `；最后标记已看：${formatDate(subscription.lastWatchedAt)}`
     : "";
@@ -1565,7 +1634,10 @@ function renderSubscription(subscription) {
           ${statusMarkup(subscription.seriesStatus)}
           <span class="status status--count">${subscription.seasonCount} 季已确认</span>
         </div>
-        ${updateStatusMarkup(subscription)}
+        <div class="subscription-row__actions">
+          ${reminderToggleMarkup(subscription)}
+          ${updateStatusMarkup(subscription)}
+        </div>
       </div>
       <div
         class="subscription-row__details"
@@ -1755,7 +1827,7 @@ function renderEvents(events) {
 function observeStatusGlowButtons() {
   const buttons = [
     ...elements.subscriptionList.querySelectorAll(
-      ".status-toggle.status--unread",
+      ".status-toggle.status--unread, .reminder-toggle.is-active",
     ),
   ];
   appState.statusGlowObserver?.disconnect();
@@ -3820,6 +3892,32 @@ elements.subscriptionList.addEventListener("click", async (event) => {
       showToast(payload.message);
       await loadDashboard({ silent: true });
       focusSubscriptionAction(subscriptionId, "watched");
+    } catch (error) {
+      showToast(error.message, "error");
+      setButtonBusy(button, false);
+    }
+    return;
+  }
+
+  if (button.dataset.action === "reminder") {
+    const nextMode = button.dataset.nextReminderMode;
+    const busyLabel = {
+      enabled: "开启中…",
+      muted: "静音中…",
+      disabled: "关闭中…",
+    }[nextMode];
+    setButtonBusy(button, true, busyLabel);
+    try {
+      const payload = await requestJson(
+        `/api/subscriptions/${encodeURIComponent(subscriptionId)}/reminder`,
+        {
+          method: "POST",
+          body: JSON.stringify({ mode: nextMode }),
+        },
+      );
+      showToast(payload.message);
+      await loadDashboard({ silent: true });
+      focusSubscriptionAction(subscriptionId, "reminder");
     } catch (error) {
       showToast(error.message, "error");
       setButtonBusy(button, false);
