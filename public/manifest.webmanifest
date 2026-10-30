@@ -1,0 +1,48 @@
+{
+  "id": "/",
+  "name": "熊猫 · 短剧助手",
+  "short_name": "短剧助手",
+  "description": "通过红果短剧分享链接追更，发现同系列最新季和新集，并通过多种渠道提醒。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f7",
+  "theme_color": "#f3f5f7",
+  "categories": ["entertainment", "utilities"],
+  "icons": [
+    {
+      "src": "/assets/pwa-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/pwa-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/pwa-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "全部动态",
+      "short_name": "动态",
+      "description": "查看全部更新、新季、完结和检查记录",
+      "url": "/logs",
+      "icons": [
+        {
+          "src": "/assets/pwa-icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}

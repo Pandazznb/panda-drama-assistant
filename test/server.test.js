@@ -111,6 +111,14 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     pageResponse.headers.get("content-security-policy"),
     /img-src[^;]*blob:/,
   );
+  assert.match(
+    pageResponse.headers.get("content-security-policy"),
+    /manifest-src 'self'/,
+  );
+  assert.match(
+    pageResponse.headers.get("content-security-policy"),
+    /worker-src 'self'/,
+  );
   const page = await pageResponse.text();
   assert.match(page, /短剧助手/);
   assert.equal((page.match(/data-theme-toggle/g) || []).length, 1);
@@ -132,6 +140,15 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     page,
     /href="\/assets\/panda-drama-assistant-icon\.svg"/,
   );
+  assert.match(page, /rel="manifest" href="\/manifest\.webmanifest"/);
+  assert.match(
+    page,
+    /rel="apple-touch-icon" href="\/assets\/apple-touch-icon\.png"/,
+  );
+  assert.match(page, /name="application-name" content="短剧助手"/);
+  assert.match(page, /name="mobile-web-app-capable" content="yes"/);
+  assert.match(page, /src="\/pwa\.js" defer/);
+  assert.match(page, /data-pwa-install/);
 
   const iconResponse = await fetch(
     `${harness.origin}/assets/panda-drama-assistant-icon.svg`,
@@ -149,6 +166,71 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     Buffer.from(await appIconResponse.arrayBuffer()).subarray(1, 4).toString(),
     "PNG",
   );
+
+  const manifestResponse = await fetch(
+    `${harness.origin}/manifest.webmanifest`,
+  );
+  assert.equal(manifestResponse.status, 200);
+  assert.match(
+    manifestResponse.headers.get("content-type"),
+    /^application\/manifest\+json/,
+  );
+  assert.equal(manifestResponse.headers.get("cache-control"), "no-cache");
+  const manifest = await manifestResponse.json();
+  assert.equal(manifest.name, "熊猫 · 短剧助手");
+  assert.equal(manifest.short_name, "短剧助手");
+  assert.equal(manifest.start_url, "/");
+  assert.equal(manifest.scope, "/");
+  assert.equal(manifest.display, "standalone");
+  assert.deepEqual(
+    manifest.icons.map((icon) => [icon.sizes, icon.purpose]),
+    [
+      ["192x192", "any"],
+      ["512x512", "any"],
+      ["512x512", "maskable"],
+    ],
+  );
+
+  const serviceWorkerResponse = await fetch(`${harness.origin}/sw.js`);
+  assert.equal(serviceWorkerResponse.status, 200);
+  assert.match(
+    serviceWorkerResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+  assert.equal(serviceWorkerResponse.headers.get("cache-control"), "no-cache");
+  assert.equal(
+    serviceWorkerResponse.headers.get("service-worker-allowed"),
+    "/",
+  );
+  const serviceWorker = await serviceWorkerResponse.text();
+  assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
+  assert.match(serviceWorker, /self\.skipWaiting\(\)/);
+  assert.match(serviceWorker, /self\.clients\.claim\(\)/);
+
+  const pwaScriptResponse = await fetch(`${harness.origin}/pwa.js`);
+  assert.equal(pwaScriptResponse.status, 200);
+  assert.match(
+    pwaScriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+  const pwaScript = await pwaScriptResponse.text();
+  assert.match(pwaScript, /navigator\.serviceWorker/);
+  assert.match(pwaScript, /beforeinstallprompt/);
+
+  for (const [iconPath, expectedSize] of [
+    ["/assets/pwa-icon-192.png", "192"],
+    ["/assets/pwa-icon-512.png", "512"],
+    ["/assets/pwa-icon-maskable-512.png", "512"],
+    ["/assets/apple-touch-icon.png", "180"],
+  ]) {
+    const response = await fetch(`${harness.origin}${iconPath}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/png");
+    const content = Buffer.from(await response.arrayBuffer());
+    assert.equal(content.subarray(1, 4).toString(), "PNG");
+    assert.equal(content.readUInt32BE(16), Number(expectedSize));
+    assert.equal(content.readUInt32BE(20), Number(expectedSize));
+  }
 
   const themeResponse = await fetch(`${harness.origin}/theme.js`);
   assert.equal(themeResponse.status, 200);
@@ -187,6 +269,13 @@ test("HTTP app serves the full log page and paginated event log API", async (t) 
   const page = await pageResponse.text();
   assert.match(page, /全部动态/);
   assert.match(page, /id="logs-load-more"/);
+  assert.match(page, /rel="manifest" href="\/manifest\.webmanifest"/);
+  assert.match(
+    page,
+    /rel="apple-touch-icon" href="\/assets\/apple-touch-icon\.png"/,
+  );
+  assert.match(page, /src="\/pwa\.js" defer/);
+  assert.match(page, /data-pwa-install/);
   assert.equal((page.match(/data-theme-toggle/g) || []).length, 1);
   assert.doesNotMatch(page, /data-theme-choice=/);
 

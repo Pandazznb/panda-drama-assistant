@@ -624,6 +624,10 @@ code {
   font-size: 0.8125rem;
 }
 
+.pwa-install-button[hidden] {
+  display: none;
+}
+
 .field {
   min-width: 0;
 }

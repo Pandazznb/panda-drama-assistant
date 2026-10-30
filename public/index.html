@@ -8,8 +8,16 @@
       content="短剧助手：通过红果短剧分享链接追更，发现同系列最新季和新集，并通过多种渠道提醒。"
     >
     <meta name="theme-color" content="#f3f5f7">
+    <meta name="application-name" content="短剧助手">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="短剧助手">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>短剧助手</title>
     <script src="/theme.js"></script>
+    <script src="/pwa.js" defer></script>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
     <link
       rel="icon"
       href="/assets/panda-drama-assistant-icon.svg"
@@ -70,6 +78,19 @@
               </svg>
             </button>
           </div>
+          <button
+            class="button button--quiet pwa-install-button"
+            type="button"
+            data-pwa-install
+            aria-label="安装短剧助手应用"
+            title="安装应用"
+            hidden
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-download"></use>
+            </svg>
+            <span class="header-action__label">安装应用</span>
+          </button>
           <button
             class="theme-switcher"
             type="button"
@@ -1578,6 +1599,11 @@
       </symbol>
       <symbol id="icon-moon" viewBox="0 0 24 24">
         <path d="M20.5 14.4A8.5 8.5 0 0 1 9.6 3.5a8.5 8.5 0 1 0 10.9 10.9Z"></path>
+      </symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24">
+        <path d="M12 3v12"></path>
+        <path d="m7 10 5 5 5-5"></path>
+        <path d="M5 21h14"></path>
       </symbol>
     </svg>
 

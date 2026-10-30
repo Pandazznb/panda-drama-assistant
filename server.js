@@ -37,12 +37,43 @@ const STATIC_FILES = new Map([
     { file: "logs.js", type: "text/javascript; charset=utf-8" },
   ],
   [
+    "/pwa.js",
+    { file: "pwa.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/sw.js",
+    { file: "sw.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/manifest.webmanifest",
+    {
+      file: "manifest.webmanifest",
+      type: "application/manifest+json; charset=utf-8",
+    },
+  ],
+  [
     "/assets/panda-drama-assistant-icon.svg",
     { file: "assets/panda-drama-assistant-icon.svg", type: "image/svg+xml" },
   ],
   [
     "/assets/panda-drama-assistant-icon.png",
     { file: "assets/panda-drama-assistant-icon.png", type: "image/png" },
+  ],
+  [
+    "/assets/pwa-icon-192.png",
+    { file: "assets/pwa-icon-192.png", type: "image/png" },
+  ],
+  [
+    "/assets/pwa-icon-512.png",
+    { file: "assets/pwa-icon-512.png", type: "image/png" },
+  ],
+  [
+    "/assets/pwa-icon-maskable-512.png",
+    { file: "assets/pwa-icon-maskable-512.png", type: "image/png" },
+  ],
+  [
+    "/assets/apple-touch-icon.png",
+    { file: "assets/apple-touch-icon.png", type: "image/png" },
   ],
 ]);
 
@@ -55,7 +86,7 @@ function securityHeaders(contentType) {
     "permissions-policy": "camera=(), microphone=(), geolocation=()",
     "cross-origin-opener-policy": "same-origin",
     "content-security-policy":
-      "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self'; script-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   };
 }
 
@@ -241,6 +272,9 @@ async function serveStatic(pathname, response) {
       ...securityHeaders(entry.type),
       "cache-control": "no-cache",
       "content-length": content.length,
+      ...(pathname === "/sw.js"
+        ? { "service-worker-allowed": "/" }
+        : {}),
     });
     response.end(content);
     return true;
