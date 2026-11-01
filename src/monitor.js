@@ -33,6 +33,11 @@ import {
   summarizeNotificationDelivery,
 } from "./notifications.js";
 import {
+  applyNotificationTemplatesPatch,
+  renderNotificationTemplate,
+  validateNotificationTemplatesPatch,
+} from "./notification-templates.js";
+import {
   albumMetadataIssue,
   deriveSeriesStatus,
   deriveSubscriptionIdentity,
@@ -113,9 +118,6 @@ function nextCheckAtAfterRun(scheduledMs, checkCron, completedMs) {
 }
 
 function isKnownCompletedSeries(subscription) {
-  if (Number.isFinite(Date.parse(subscription?.autoCompletedAt || ""))) {
-    return true;
-  }
   if (subscription?.seriesStatusOverride) {
     return subscription.seriesStatusOverride === SERIES_STATUS.COMPLETED;
   }
@@ -125,6 +127,44 @@ function isKnownCompletedSeries(subscription) {
     Number.isFinite(
       Date.parse(subscription?.seriesCompletionVerifiedAt || ""),
     )
+  );
+}
+
+function isKnownInactiveSeries(subscription) {
+  return (
+    subscription?.seriesStatus === SERIES_STATUS.INACTIVE ||
+    Number.isFinite(Date.parse(subscription?.autoInactiveAt || ""))
+  );
+}
+
+function calendarDateKey(value, timeZone = NOTIFICATION_TIME_ZONE) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return values.year && values.month && values.day
+    ? `${values.year}-${values.month}-${values.day}`
+    : null;
+}
+
+function inactiveCheckedToday(subscription, now) {
+  const lastCheckedDate = calendarDateKey(
+    subscription?.inactiveStatusCheckedAt,
+  );
+  const currentDate = calendarDateKey(now?.toISOString?.() || "");
+  return Boolean(
+    lastCheckedDate && currentDate && lastCheckedDate === currentDate,
   );
 }
 
@@ -139,6 +179,7 @@ function batchNeedsDiscoveryAlignment(
   }
   return subscriptions.some(
     (subscription) =>
+      subscription.trackingPaused !== true &&
       !isKnownCompletedSeries(subscription) &&
       isDiscoveryDue(
         subscription,
@@ -171,18 +212,14 @@ function latestContentActivityMs(subscription) {
   return addedTimes.length ? Math.min(...addedTimes) : null;
 }
 
-function shouldAutomaticallyComplete(subscription, staleDays, nowMs) {
-  const hasActiveManualStatus = [
-    SERIES_STATUS.UPDATING,
-    SERIES_STATUS.UNKNOWN,
-  ].includes(subscription?.seriesStatusOverride);
+function shouldAutomaticallyInactivate(subscription, staleDays, nowMs) {
   if (
-    Number.isFinite(Date.parse(subscription?.autoCompletedAt || "")) ||
-    (!hasActiveManualStatus &&
-      (Number.isFinite(Date.parse(subscription?.completedAt || "")) ||
-        Number.isFinite(
-          Date.parse(subscription?.seriesCompletionVerifiedAt || ""),
-        )))
+    isKnownInactiveSeries(subscription) ||
+    isKnownCompletedSeries(subscription) ||
+    Number.isFinite(Date.parse(subscription?.completedAt || "")) ||
+    Number.isFinite(
+      Date.parse(subscription?.seriesCompletionVerifiedAt || ""),
+    )
   ) {
     return null;
   }
@@ -196,13 +233,18 @@ function shouldAutomaticallyComplete(subscription, staleDays, nowMs) {
   return { latestActivityMs };
 }
 
-function clearAutomaticCompletion(subscription) {
+function clearAutomaticInactive(subscription) {
+  subscription.autoInactiveAt = null;
+  subscription.autoInactiveReason = null;
+  subscription.inactiveStatusCheckedAt = null;
+  // Remove fields written by state versions that treated inactivity as a
+  // confirmed series completion.
   subscription.autoCompletedAt = null;
   subscription.autoCompletionReason = null;
 }
 
 function clearSeriesCompletionState(subscription) {
-  clearAutomaticCompletion(subscription);
+  clearAutomaticInactive(subscription);
   subscription.seriesStatusOverride = null;
   subscription.seriesStatusOverrideAt = null;
   subscription.seriesCompletionAnnounced = false;
@@ -283,6 +325,9 @@ function resumeMutedReminderForNewUpdate(subscription) {
 function statusLabel(status) {
   if (status === "completed") {
     return "已完结";
+  }
+  if (status === "inactive") {
+    return "系列已停更";
   }
   if (status === "updating") {
     return "更新中";
@@ -459,6 +504,24 @@ function latestEventTime(events) {
   }, "");
 }
 
+function notificationTemplateCopy(
+  state,
+  type,
+  { defaultTitle, defaultBody, variables },
+) {
+  const template = state.settings.notificationTemplates?.[type] || {};
+  const renderedTitle = template.title
+    ? renderNotificationTemplate(template.title, variables)
+    : "";
+  const renderedBody = template.body
+    ? renderNotificationTemplate(template.body, variables)
+    : "";
+  return {
+    title: renderedTitle.trim() ? renderedTitle.trim() : defaultTitle,
+    body: renderedBody.trim() ? renderedBody.trim() : defaultBody,
+  };
+}
+
 function seasonForEvent(subscription, event) {
   return subscription?.seasons.find(
     (season) => season.seriesId === event.seasonId,
@@ -552,10 +615,22 @@ function detailedCheckMessage(state, events, subscriptionId) {
     `当前共收录 ${subscription.seasons.length} 季。`,
   ];
 
-  return {
-    title: notificationTitle,
-    body: lines.join("\n"),
-  };
+  return notificationTemplateCopy(state, "detailed", {
+    defaultTitle: notificationTitle,
+    defaultBody: lines.join("\n"),
+    variables: {
+      appName: APP_NAME,
+      seriesTitle,
+      checkTime: formatNotificationTime(
+        latestEventTime(relevantEvents),
+      ),
+      updates: subscriptionEventLines(
+        subscription,
+        relevantEvents,
+      ).join("\n"),
+      seasonCount: subscription.seasons.length,
+    },
+  });
 }
 
 function seasonRankMap(subscription) {
@@ -689,10 +764,19 @@ function batchCheckMessage(state, events) {
     return null;
   }
 
-  return {
-    title: `${APP_NAME} · ${lines.length} 个系列有更新`,
-    body: `检查时间：${formatNotificationTime(latestEventTime(allEvents))}\n\n${lines.join("\n")}`,
-  };
+  const checkTime = formatNotificationTime(
+    latestEventTime(allEvents),
+  );
+  return notificationTemplateCopy(state, "batch", {
+    defaultTitle: `${APP_NAME} · ${lines.length} 个系列有更新`,
+    defaultBody: `检查时间：${checkTime}\n\n${lines.join("\n")}`,
+    variables: {
+      appName: APP_NAME,
+      checkTime,
+      updateCount: groups.length,
+      updates: lines.join("\n"),
+    },
+  });
 }
 
 function pendingNotificationCopy(state, pendingNotifications) {
@@ -757,12 +841,22 @@ function pendingNotificationCopy(state, pendingNotifications) {
   if (!groups.length) {
     return null;
   }
-  return {
-    title: "红果短剧更新汇总",
-    body: `最近检测：${formatNotificationTime(latestEventTime(groups))}\n\n${groups
-      .map((group, index) => `${index + 1}. ${group.line}`)
-      .join("\n")}`,
-  };
+  const checkTime = formatNotificationTime(
+    latestEventTime(groups),
+  );
+  const updates = groups
+    .map((group, index) => `${index + 1}. ${group.line}`)
+    .join("\n");
+  return notificationTemplateCopy(state, "batch", {
+    defaultTitle: "红果短剧更新汇总",
+    defaultBody: `最近检测：${checkTime}\n\n${updates}`,
+    variables: {
+      appName: APP_NAME,
+      checkTime,
+      updateCount: groups.length,
+      updates,
+    },
+  });
 }
 
 function discoveryReminderCopy(state, reminders, nowMs) {
@@ -845,14 +939,22 @@ function discoveryReminderCopy(state, reminders, nowMs) {
   if (!groups.length) {
     return null;
   }
-  return {
-    title: "红果短剧新内容提醒",
-    body: `提醒时间：${formatNotificationTime(
-      new Date(nowMs).toISOString(),
-    )}\n\n${groups
-      .map((group, index) => `${index + 1}. ${group}`)
-      .join("\n")}`,
-  };
+  const reminderTime = formatNotificationTime(
+    new Date(nowMs).toISOString(),
+  );
+  const updates = groups
+    .map((group, index) => `${index + 1}. ${group}`)
+    .join("\n");
+  return notificationTemplateCopy(state, "reminder", {
+    defaultTitle: "红果短剧新内容提醒",
+    defaultBody: `提醒时间：${reminderTime}\n\n${updates}`,
+    variables: {
+      appName: APP_NAME,
+      reminderTime,
+      updateCount: groups.length,
+      updates,
+    },
+  });
 }
 
 function queueEpisodeNotification(
@@ -1122,16 +1224,25 @@ export class ReminderService {
     fetchAlbumSeries = fetchAlbumSeriesInfo,
     resolveShared = resolveSharedSeries,
     sendNotifications = sendNotificationChannels,
+    systemLog = null,
     now = () => new Date(),
     discoveryIntervalMs = DISCOVERY_INTERVAL_MS,
     candidateRecheckMs = CANDIDATE_RECHECK_MS,
     timers = { setTimeout, clearTimeout },
+    requestScheduler = null,
   }) {
     this.store = store;
-    this.fetchDetail = fetchDetail;
-    this.fetchAlbumSeries = fetchAlbumSeries;
-    this.resolveShared = resolveShared;
+    this.fetchDetail = requestScheduler
+      ? (seriesId) => fetchDetail(seriesId, { requestScheduler })
+      : fetchDetail;
+    this.fetchAlbumSeries = requestScheduler
+      ? (seriesId) => fetchAlbumSeries(seriesId, { requestScheduler })
+      : fetchAlbumSeries;
+    this.resolveShared = requestScheduler
+      ? (input) => resolveShared(input, { requestScheduler })
+      : resolveShared;
     this.sendNotifications = sendNotifications;
+    this.systemLog = systemLog;
     this.now = now;
     this.discoveryIntervalMs = discoveryIntervalMs;
     this.candidateRecheckMs = candidateRecheckMs;
@@ -1141,6 +1252,79 @@ export class ReminderService {
     this.schedulerTimer = null;
     this.nextCheckAt = null;
     this.stopped = true;
+  }
+
+  async writeSystemLog(entry) {
+    if (!this.systemLog) {
+      return;
+    }
+    try {
+      await this.systemLog.append(entry);
+    } catch (error) {
+      console.error(
+        `系统操作日志写入失败：${error?.message || "未知错误"}`,
+      );
+    }
+  }
+
+  async logCheckResult(result, { scope, trigger, subscriptionId = null }) {
+    let title = "";
+    if (subscriptionId) {
+      const state = await this.store.read();
+      const subscription = state.subscriptions.find(
+        (item) => item.id === subscriptionId,
+      );
+      title =
+        subscription?.displayTitle ||
+        subscription?.firstSeasonTitle ||
+        subscription?.title ||
+        "";
+    }
+    const triggerLabel =
+      trigger === "cron" ? "自动检查" : "手动检查";
+    const scopeLabel =
+      scope === "single" ? (title ? `《${title}》` : "单个系列") : "全部追更";
+    const skipped = [
+      result.skipped === "completed" ? "已完结" : "",
+      result.skipped === "inactive" ? "今天已核验停更状态" : "",
+      result.skipped === "paused" ? "已暂停追更" : "",
+    ].filter(Boolean);
+    const message = skipped.length
+      ? `${triggerLabel}跳过${scopeLabel}：${skipped.join("、")}。`
+      : `${triggerLabel}${scopeLabel}完成：检查 ${
+          result.seasonsChecked || 0
+        } 个季，发现 ${result.updatedSeasons || 0} 个季有更新，${
+          result.discoveredSeasons || 0
+        } 个新季${
+          result.errors > 0 ? `，${result.errors} 项失败` : ""
+        }${
+          result.discoveryFailures > 0
+            ? `，${result.discoveryFailures} 个系列多季核验未完成`
+            : ""
+        }。`;
+    const failureCount =
+      (result.errors || 0) + (result.discoveryFailures || 0);
+    await this.writeSystemLog({
+      category: "check",
+      action: "check.completed",
+      level:
+        failureCount > 0
+          ? result.seasonsChecked > failureCount
+            ? "warning"
+            : "error"
+          : "success",
+      message,
+      metadata: {
+        scope,
+        trigger,
+        subscriptionId,
+        seasonsChecked: result.seasonsChecked || 0,
+        updatedSeasons: result.updatedSeasons || 0,
+        discoveredSeasons: result.discoveredSeasons || 0,
+        errors: result.errors || 0,
+        discoveryFailures: result.discoveryFailures || 0,
+      },
+    });
   }
 
   enqueue(operation) {
@@ -1261,7 +1445,7 @@ export class ReminderService {
         subscription.discovery.unpublishedSeasonCount = 0;
         subscription.discovery.albumSeasonCount = null;
         subscription.discovery.albumItemCount = null;
-        clearAutomaticCompletion(subscription);
+        clearAutomaticInactive(subscription);
         if (
           hasNewerSeason(
             subscription.seasons.slice(0, -1),
@@ -1296,10 +1480,12 @@ export class ReminderService {
           completedAt: null,
           seriesCompletionVerifiedAt: null,
           seriesCompletionAnnounced: false,
-          autoCompletedAt: null,
-          autoCompletionReason: null,
+          autoInactiveAt: null,
+          autoInactiveReason: null,
+          inactiveStatusCheckedAt: null,
           hasUnreadUpdate: false,
           reminderEnabled: true,
+          trackingPaused: false,
           lastWatchedAt: null,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -1434,7 +1620,7 @@ export class ReminderService {
       current.discovery.unpublishedSeasonCount = 0;
       current.discovery.albumSeasonCount = null;
       current.discovery.albumItemCount = null;
-      clearAutomaticCompletion(current);
+      clearAutomaticInactive(current);
       if (newerSeason) {
         current.seriesCompletionAnnounced = false;
         current.completedAt = null;
@@ -1500,6 +1686,41 @@ export class ReminderService {
       return {
         id: removed.id,
         title: removed.displayTitle || removed.title,
+        subscription: {
+          id: removed.id,
+          title: removed.displayTitle || removed.title,
+          seriesGroupId: removed.seriesGroupId || null,
+          firstSeasonId: removed.firstSeasonId || null,
+          seasons: removed.seasons.map((season) => ({
+            seriesId: season.seriesId,
+          })),
+        },
+      };
+    });
+  }
+
+  async setSubscriptionTrackingState(subscriptionId, paused) {
+    const timestamp = this.now().toISOString();
+    return this.store.mutate((state) => {
+      const subscription = state.subscriptions.find(
+        (item) => item.id === subscriptionId,
+      );
+      if (!subscription) {
+        throw new ReminderError(
+          "追更条目不存在。",
+          "SUBSCRIPTION_NOT_FOUND",
+          404,
+        );
+      }
+      subscription.trackingPaused = Boolean(paused);
+      subscription.updatedAt = timestamp;
+      return {
+        id: subscription.id,
+        title:
+          subscription.displayTitle ||
+          subscription.firstSeasonTitle ||
+          subscription.title,
+        trackingPaused: subscription.trackingPaused,
       };
     });
   }
@@ -1668,7 +1889,7 @@ export class ReminderService {
         ? timestamp
         : null;
       subscription.updatedAt = timestamp;
-      clearAutomaticCompletion(subscription);
+      clearAutomaticInactive(subscription);
       if (normalizedStatus === SERIES_STATUS.COMPLETED) {
         clearQueuedNotificationsForSubscription(state, subscriptionId);
       }
@@ -1696,12 +1917,14 @@ export class ReminderService {
 
   async updateSettings({
     notifications,
+    notificationTemplates,
     checkCron,
     intervalMinutes,
     staleCompletionDays,
     episodeNotificationWindowMinutes,
     discoveryReminderDurationMinutes,
     discoveryReminderCron,
+    accountSyncCron,
   }) {
     let normalizedCheckCron;
     if (checkCron !== undefined) {
@@ -1732,7 +1955,7 @@ export class ReminderService {
         normalizedStaleCompletionDays > MAX_STALE_COMPLETION_DAYS
       ) {
         throw new ReminderError(
-          `未更新自动完结天数需要在 ${MIN_STALE_COMPLETION_DAYS} 到 ${MAX_STALE_COMPLETION_DAYS} 天之间。`,
+          `无更新自动停更期限需要在 ${MIN_STALE_COMPLETION_DAYS} 到 ${MAX_STALE_COMPLETION_DAYS} 天之间。`,
           "INVALID_STALE_COMPLETION_DAYS",
           400,
         );
@@ -1786,6 +2009,22 @@ export class ReminderService {
         );
       }
     }
+    let normalizedNotificationTemplates;
+    if (notificationTemplates !== undefined) {
+      normalizedNotificationTemplates =
+        validateNotificationTemplatesPatch(notificationTemplates);
+    }
+    let normalizedAccountSyncCron;
+    if (accountSyncCron !== undefined) {
+      normalizedAccountSyncCron = normalizeCronExpression(accountSyncCron);
+      if (!isValidCronExpression(normalizedAccountSyncCron, this.now())) {
+        throw new ReminderError(
+          "账号同步计划需要使用有效的 5 段 Cron 表达式。",
+          "INVALID_ACCOUNT_SYNC_CRON",
+          400,
+        );
+      }
+    }
 
     const settings = await this.store.mutate((state) => {
       const previousCheckCron = state.settings.checkCron;
@@ -1800,6 +2039,13 @@ export class ReminderService {
           state.settings.notifications,
           notifications,
         );
+      }
+      if (normalizedNotificationTemplates !== undefined) {
+        state.settings.notificationTemplates =
+          applyNotificationTemplatesPatch(
+            state.settings.notificationTemplates,
+            normalizedNotificationTemplates,
+          );
       }
       if (normalizedCheckCron !== undefined) {
         state.settings.checkCron = normalizedCheckCron;
@@ -1844,6 +2090,9 @@ export class ReminderService {
       }
       if (normalizedDiscoveryCron !== undefined) {
         state.settings.discoveryReminderCron = normalizedDiscoveryCron;
+      }
+      if (normalizedAccountSyncCron !== undefined) {
+        state.settings.accountSyncCron = normalizedAccountSyncCron;
       }
 
       const discoverySettingsChanged =
@@ -1901,9 +2150,11 @@ export class ReminderService {
         discoveryReminderDurationMinutes:
           state.settings.discoveryReminderDurationMinutes,
         discoveryReminderCron: state.settings.discoveryReminderCron,
+        accountSyncCron: state.settings.accountSyncCron,
         notifications: describeNotificationSettings(
           state.settings.notifications,
         ),
+        notificationTemplates: state.settings.notificationTemplates,
         pendingNotificationCount: state.pendingNotifications.length,
         pendingDiscoveryReminderCount:
           state.discoveryReminders.length,
@@ -1916,7 +2167,8 @@ export class ReminderService {
         normalizedNotificationWindow !== undefined ||
         notifications !== undefined ||
         normalizedDiscoveryDuration !== undefined ||
-        normalizedDiscoveryCron !== undefined) &&
+        normalizedDiscoveryCron !== undefined ||
+        normalizedAccountSyncCron !== undefined) &&
       !this.stopped
     ) {
       await this.reschedule();
@@ -1999,8 +2251,9 @@ export class ReminderService {
         seriesStatusOverride: subscription.seriesStatusOverride,
         seriesStatusOverrideAt: subscription.seriesStatusOverrideAt,
         completedAt: subscription.completedAt,
-        autoCompletedAt: subscription.autoCompletedAt,
-        autoCompletionReason: subscription.autoCompletionReason,
+        autoInactiveAt: subscription.autoInactiveAt,
+        autoInactiveReason: subscription.autoInactiveReason,
+        inactiveStatusCheckedAt: subscription.inactiveStatusCheckedAt,
         latestContentActivityAt: Number.isFinite(latestContentActivity)
           ? new Date(latestContentActivity).toISOString()
           : null,
@@ -2010,6 +2263,7 @@ export class ReminderService {
         reminderEnabled,
         reminderMutedForCurrentUpdate: reminderMode === "muted",
         reminderMode,
+        trackingPaused: subscription.trackingPaused === true,
         reminderActive: activeReminderExpiryMs > nowMs,
         reminderExpiresAt:
           activeReminderExpiryMs > nowMs
@@ -2057,6 +2311,7 @@ export class ReminderService {
         notifications: describeNotificationSettings(
           state.settings.notifications,
         ),
+        notificationTemplates: state.settings.notificationTemplates,
         checkCron: state.settings.checkCron || DEFAULT_CHECK_CRON,
         staleCompletionDays:
           state.settings.staleCompletionDays ||
@@ -2069,6 +2324,8 @@ export class ReminderService {
         discoveryReminderDurationMinutes:
           state.settings.discoveryReminderDurationMinutes,
         discoveryReminderCron: state.settings.discoveryReminderCron,
+        accountSyncCron: state.settings.accountSyncCron,
+        accountSync: state.settings.accountSync,
         pendingDiscoveryReminderCount:
           state.discoveryReminders.filter((reminder) => {
             const expiresAtMs = Date.parse(reminder.expiresAt || "");
@@ -2122,6 +2379,11 @@ export class ReminderService {
           await this.flushDueNotificationsLocked();
         }
         await this.recordCheckRun(result);
+        await this.logCheckResult(result, {
+          scope: "single",
+          trigger: options.trigger || "manual",
+          subscriptionId,
+        });
         return result;
       } finally {
         this.checking = false;
@@ -2155,6 +2417,25 @@ export class ReminderService {
           NETWORK_CONCURRENCY,
           async (subscriptionId) => {
             try {
+              const subscription = selectedSubscriptions.find(
+                (item) => item.id === subscriptionId,
+              );
+              if (subscription?.trackingPaused === true) {
+                return {
+                  subscriptionId,
+                  result: {
+                    subscriptionId,
+                    skipped: "paused",
+                    seasonsChecked: 0,
+                    updatedSeasons: 0,
+                    discoveredSeasons: 0,
+                    errors: 0,
+                    discoveryError: null,
+                  },
+                  notificationEvents: [],
+                  error: null,
+                };
+              }
               const notificationEvents = [];
               const result = await this.checkOne(subscriptionId, {
                 ...options,
@@ -2162,6 +2443,7 @@ export class ReminderService {
                 notificationMode: "aggregated",
                 skipCompleted: options.skipCompleted ?? true,
                 eventSink: notificationEvents,
+                trigger: options.trigger || "manual",
               });
               return {
                 subscriptionId,
@@ -2199,8 +2481,20 @@ export class ReminderService {
           skippedCompleted: entries.filter(
             (entry) => entry.result?.skipped === "completed",
           ).length,
+          skippedInactive: entries.filter(
+            (entry) => entry.result?.skipped === "inactive",
+          ).length,
+          skippedPaused: entries.filter(
+            (entry) => entry.result?.skipped === "paused",
+          ).length,
           failedSubscriptions: entries.filter(
-            (entry) => entry.error || entry.result?.errors > 0,
+            (entry) =>
+              entry.error ||
+              entry.result?.errors > 0 ||
+              entry.result?.discoveryError,
+          ).length,
+          discoveryFailures: entries.filter(
+            (entry) => entry.result?.discoveryError,
           ).length,
           seasonsChecked: entries.reduce(
             (sum, entry) => sum + (entry.result?.seasonsChecked || 0),
@@ -2222,6 +2516,10 @@ export class ReminderService {
           results: entries.map(({ notificationEvents: _, ...entry }) => entry),
         };
         await this.recordCheckRun(aggregate);
+        await this.logCheckResult(aggregate, {
+          scope: "batch",
+          trigger: options.trigger || "manual",
+        });
         return aggregate;
       } finally {
         this.checking = false;
@@ -2243,6 +2541,18 @@ export class ReminderService {
         const results = [];
         const notificationEvents = [];
         for (const subscription of snapshot.subscriptions) {
+          if (subscription.trackingPaused === true) {
+            results.push({
+              subscriptionId: subscription.id,
+              skipped: "paused",
+              seasonsChecked: 0,
+              updatedSeasons: 0,
+              discoveredSeasons: 0,
+              errors: 0,
+              discoveryError: null,
+            });
+            continue;
+          }
           results.push(
             await this.checkOne(subscription.id, {
               notify: options.notify ?? true,
@@ -2253,6 +2563,7 @@ export class ReminderService {
               notificationMode: "aggregated",
               eventSink: notificationEvents,
               markUnread: options.markUnread ?? true,
+              trigger: options.trigger || "manual",
             }),
           );
         }
@@ -2270,6 +2581,18 @@ export class ReminderService {
           skippedCompleted: results.filter(
             (result) => result.skipped === "completed",
           ).length,
+          skippedInactive: results.filter(
+            (result) => result.skipped === "inactive",
+          ).length,
+          skippedPaused: results.filter(
+            (result) => result.skipped === "paused",
+          ).length,
+          failedSubscriptions: results.filter(
+            (result) => result.errors > 0 || result.discoveryError,
+          ).length,
+          discoveryFailures: results.filter(
+            (result) => result.discoveryError,
+          ).length,
           seasonsChecked: results.reduce(
             (sum, result) => sum + result.seasonsChecked,
             0,
@@ -2285,6 +2608,10 @@ export class ReminderService {
           ),
         };
         await this.recordCheckRun(aggregate);
+        await this.logCheckResult(aggregate, {
+          scope: "all",
+          trigger: options.trigger || "manual",
+        });
         return aggregate;
       } finally {
         this.checking = false;
@@ -2310,10 +2637,12 @@ export class ReminderService {
           completedAt.getTime(),
         ),
       ).toISOString();
+      const failureCount =
+        (result.errors || 0) + (result.discoveryFailures || 0);
       state.settings.lastCheckResult =
-        result.errors === 0
+        failureCount === 0
           ? "success"
-          : result.seasonsChecked > result.errors
+          : result.seasonsChecked > failureCount
             ? "partial"
             : "error";
     });
@@ -2331,6 +2660,7 @@ export class ReminderService {
       notificationMode = "aggregated",
       eventSink = null,
       markUnread = true,
+      trigger = "manual",
     } = {},
   ) {
     const snapshot = await this.store.read();
@@ -2341,6 +2671,7 @@ export class ReminderService {
       throw new ReminderError("追更条目不存在。", "SUBSCRIPTION_NOT_FOUND", 404);
     }
     const wasCompleted = isKnownCompletedSeries(subscription);
+    const wasInactive = isKnownInactiveSeries(subscription);
     if (skipCompleted && wasCompleted && !forceCompletedCheck) {
       return {
         subscriptionId,
@@ -2357,34 +2688,15 @@ export class ReminderService {
     const staleDays =
       snapshot.settings.staleCompletionDays ||
       DEFAULT_STALE_COMPLETION_DAYS;
-    const automaticCompletion =
-      wasCompleted && forceCompletedCheck
-        ? null
-        : shouldAutomaticallyComplete(
-            subscription,
-            staleDays,
-            checkedAt.getTime(),
-          );
-    if (automaticCompletion) {
-      const timestamp = checkedAt.toISOString();
-      await this.store.mutate((state) => {
-        const current = state.subscriptions.find(
-          (item) => item.id === subscriptionId,
-        );
-        if (!current) {
-          return;
-        }
-        current.autoCompletedAt = timestamp;
-        current.autoCompletionReason = `超过 ${staleDays} 天未检测到新季或新集，已自动标记为完结。`;
-        current.seriesStatusOverride = null;
-        current.seriesStatusOverrideAt = null;
-        current.updatedAt = timestamp;
-        clearQueuedNotificationsForSubscription(state, subscriptionId);
-      });
+    if (
+      wasInactive &&
+      trigger === "cron" &&
+      inactiveCheckedToday(subscription, checkedAt)
+    ) {
       return {
         subscriptionId,
-        skipped: "completed",
-        autoCompleted: true,
+        skipped: "inactive",
+        inactiveRechecked: false,
         seasonsChecked: 0,
         updatedSeasons: 0,
         discoveredSeasons: 0,
@@ -2392,6 +2704,16 @@ export class ReminderService {
         discoveryError: null,
       };
     }
+    const automaticInactiveEligible =
+      !wasInactive &&
+      !wasCompleted &&
+      Boolean(
+        shouldAutomaticallyInactivate(
+          subscription,
+          staleDays,
+          checkedAt.getTime(),
+        ),
+      );
 
     const timestamp = checkedAt.toISOString();
     const nowMs = checkedAt.getTime();
@@ -2400,6 +2722,7 @@ export class ReminderService {
       discover &&
       (forceDiscovery ||
         forceAlbumDiscovery ||
+        wasInactive ||
         isDiscoveryDue(
           subscription,
           this.discoveryIntervalMs,
@@ -2516,6 +2839,7 @@ export class ReminderService {
     let errors = 0;
     let resultSubscriptionId = subscriptionId;
     let observedDiscoveryIssue = null;
+    let enteredAutomaticInactive = false;
 
     await this.store.mutate((state) => {
       const current = state.subscriptions.find(
@@ -2583,7 +2907,7 @@ export class ReminderService {
 
         if (detail.episodeCount > previousHighWater) {
           resumeMutedReminderForNewUpdate(current);
-          clearAutomaticCompletion(current);
+          clearAutomaticInactive(current);
           updatedSeasons += 1;
           season.lastEpisodeChangedAt = timestamp;
           const event = appendEvent(state, {
@@ -2646,7 +2970,7 @@ export class ReminderService {
           result.candidate.source === "album" ? "album" : "recommendation",
           timestamp,
         );
-        clearAutomaticCompletion(current);
+        clearAutomaticInactive(current);
         const seasonsBefore = [...current.seasons];
         current.seasons.push(newSeason);
         if (hasNewerSeason(seasonsBefore, current.seasons)) {
@@ -2762,7 +3086,10 @@ export class ReminderService {
       }
       current.seriesStatus = status.status;
       current.seriesStatusReason = status.reason;
+      const hasContentChange =
+        updatedSeasons > 0 || discoveredNewerSeason;
       if (status.status === SERIES_STATUS.COMPLETED) {
+        clearAutomaticInactive(current);
         current.seriesCompletionVerifiedAt ||= timestamp;
         current.completedAt ||= timestamp;
         if (!current.seriesCompletionAnnounced) {
@@ -2790,6 +3117,9 @@ export class ReminderService {
           }
         }
       } else if (status.status === SERIES_STATUS.UPDATING) {
+        if (!wasInactive) {
+          clearAutomaticInactive(current);
+        }
         current.seriesCompletionAnnounced = false;
         current.completedAt = null;
         current.seriesCompletionVerifiedAt = null;
@@ -2797,6 +3127,47 @@ export class ReminderService {
         if (!current.seriesCompletionVerifiedAt) {
           current.completedAt = null;
           current.seriesCompletionAnnounced = false;
+        }
+      }
+      if (status.status !== SERIES_STATUS.COMPLETED) {
+        if (wasInactive) {
+          if (hasContentChange) {
+            clearAutomaticInactive(current);
+            current.seriesStatus = SERIES_STATUS.UPDATING;
+            current.seriesStatusReason =
+              "停更后发现新集或新季，系列已恢复为未完结，将继续自动检查。";
+            current.seriesCompletionAnnounced = false;
+            current.completedAt = null;
+            current.seriesCompletionVerifiedAt = null;
+          } else {
+            current.seriesStatus = SERIES_STATUS.INACTIVE;
+            current.seriesStatusReason =
+              normalizeWhitespace(current.autoInactiveReason || "") ||
+              "超过设定的无更新期限，系列已停更。系统会每天自动核验一次。";
+            current.autoInactiveAt ||= timestamp;
+            current.autoInactiveReason = current.seriesStatusReason;
+            current.inactiveStatusCheckedAt = timestamp;
+          }
+        } else if (
+          automaticInactiveEligible &&
+          !hasContentChange &&
+          errors === 0
+        ) {
+          current.autoInactiveAt = timestamp;
+          current.autoInactiveReason =
+            `超过 ${staleDays} 天未检测到新季或新集，系列已停更。系统会每天自动核验一次。`;
+          current.inactiveStatusCheckedAt = timestamp;
+          current.seriesStatus = SERIES_STATUS.INACTIVE;
+          current.seriesStatusReason = current.autoInactiveReason;
+          current.seriesStatusOverride = null;
+          current.seriesStatusOverrideAt = null;
+          current.seriesCompletionAnnounced = false;
+          current.completedAt = null;
+          current.seriesCompletionVerifiedAt = null;
+          clearQueuedNotificationsForSubscription(state, subscriptionId);
+          enteredAutomaticInactive = true;
+        } else if (!wasInactive) {
+          clearAutomaticInactive(current);
         }
       }
       current.lastCheckedAt = timestamp;
@@ -2816,6 +3187,10 @@ export class ReminderService {
       discoveredSeasons,
       errors,
       discoveryError: observedDiscoveryIssue,
+      autoInactive: enteredAutomaticInactive,
+      inactiveRechecked: wasInactive,
+      reactivatedFromInactive:
+        wasInactive && (updatedSeasons > 0 || discoveredNewerSeason),
       completionRechecked: wasCompleted && forceCompletedCheck,
       reactivatedFromCompleted:
         wasCompleted &&
@@ -2853,11 +3228,13 @@ export class ReminderService {
 
     let notified = false;
     let notificationError = null;
+    let deliveryResult = null;
     try {
       const result = await this.sendNotifications(notificationSettings, {
         ...message,
         group: APP_NAME,
       });
+      deliveryResult = result;
       notified = result.delivered > 0;
       if (result.failed > 0) {
         notificationError = summarizeNotificationDelivery(result, {
@@ -2878,6 +3255,28 @@ export class ReminderService {
         storedEvent.notified = notified;
         storedEvent.notificationError = notificationError;
       }
+    });
+    await this.writeSystemLog({
+      category: "notification",
+      action: "notification.check-summary.sent",
+      level:
+        notified && !notificationError
+          ? "success"
+          : notified
+            ? "warning"
+            : "error",
+      message:
+        notified && !notificationError
+          ? `已发送${mode === "detailed" ? "单个系列更新详情" : "批量更新汇总"}通知。`
+          : `更新通知未完全发送：${
+              notificationError || "没有渠道成功送达"
+            }`,
+      metadata: {
+        deliveryId: deliveryResult?.id || null,
+        delivered: deliveryResult?.delivered || 0,
+        failed: deliveryResult?.failed || 0,
+        mode,
+      },
     });
   }
 
@@ -2942,6 +3341,7 @@ export class ReminderService {
     const message = discoveryReminderCopy(state, dueReminders, nowMs);
     let notified = false;
     let notificationError = null;
+    let deliveryResult = null;
     if (message) {
       try {
         const result = await this.sendNotifications(
@@ -2951,6 +3351,7 @@ export class ReminderService {
             group: APP_NAME,
           },
         );
+        deliveryResult = result;
         notified = result.delivered > 0;
         if (result.failed > 0) {
           notificationError = summarizeNotificationDelivery(result, {
@@ -3006,6 +3407,28 @@ export class ReminderService {
     });
 
     const latestState = await this.store.read();
+    await this.writeSystemLog({
+      category: "notification",
+      action: "notification.discovery-reminder.sent",
+      level:
+        notified && !notificationError
+          ? "success"
+          : notified
+            ? "warning"
+            : "error",
+      message:
+        notified && !notificationError
+          ? `已发送 ${dueReminders.length} 部短剧的持续更新提醒。`
+          : `持续更新提醒未完全发送：${
+              notificationError || "没有渠道成功送达"
+            }`,
+      metadata: {
+        deliveryId: deliveryResult?.id || null,
+        delivered: deliveryResult?.delivered || 0,
+        failed: deliveryResult?.failed || 0,
+        reminderCount: dueReminders.length,
+      },
+    });
     return {
       sent: notified ? 1 : 0,
       pending: latestState.discoveryReminders.filter((reminder) => {
@@ -3048,6 +3471,7 @@ export class ReminderService {
     const message = pendingNotificationCopy(state, dueNotifications);
     let notified = false;
     let notificationError = null;
+    let deliveryResult = null;
     if (message) {
       try {
         const result = await this.sendNotifications(
@@ -3057,6 +3481,7 @@ export class ReminderService {
             group: APP_NAME,
           },
         );
+        deliveryResult = result;
         notified = result.delivered > 0;
         if (result.failed > 0) {
           notificationError = summarizeNotificationDelivery(result, {
@@ -3107,6 +3532,28 @@ export class ReminderService {
           }
         }
       }
+    });
+    await this.writeSystemLog({
+      category: "notification",
+      action: "notification.update-summary.sent",
+      level:
+        notified && !notificationError
+          ? "success"
+          : notified
+            ? "warning"
+            : "error",
+      message:
+        notified && !notificationError
+          ? `已发送 ${dueNotifications.length} 条待处理更新汇总。`
+          : `待处理更新汇总未完全发送：${
+              notificationError || "没有渠道成功送达"
+            }`,
+      metadata: {
+        deliveryId: deliveryResult?.id || null,
+        delivered: deliveryResult?.delivered || 0,
+        failed: deliveryResult?.failed || 0,
+        summaryCount: dueNotifications.length,
+      },
     });
 
     return {
@@ -3224,7 +3671,11 @@ export class ReminderService {
           latestNowMs,
         );
         if (latestNowMs >= latestCheckTarget - 500) {
-          await this.checkAll({ notify: true, discover: true });
+          await this.checkAll({
+            notify: true,
+            discover: true,
+            trigger: "cron",
+          });
         }
       } catch {
         // The next timer is still scheduled so a transient error cannot stop monitoring.

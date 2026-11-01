@@ -447,6 +447,29 @@ test("series searches are globally limited, cached and retried once", async (t) 
   assert.equal(calls.get("重试测试"), 2);
 });
 
+test("screenshot search does not retry again when the shared scheduler owns retries", async (t) => {
+  const requestScheduler = { name: "shared-scheduler" };
+  let calls = 0;
+  let receivedScheduler = null;
+  const service = new ScreenshotImportService({
+    requestScheduler,
+    searchRetryDelayMs: 0,
+    fetchDetail: async (seriesId) => detailResponse(seriesId),
+    searchSeries: async (_query, options) => {
+      calls += 1;
+      receivedScheduler = options.requestScheduler;
+      const error = new Error("temporary upstream failure");
+      error.statusCode = 502;
+      throw error;
+    },
+  });
+  t.after(() => service.stop());
+
+  await assert.rejects(service.getSearchResults("只请求一次"));
+  assert.equal(calls, 1);
+  assert.equal(receivedScheduler, requestScheduler);
+});
+
 test("screenshot analysis rejects a fourth concurrent OCR request", async (t) => {
   let resolveRecognition;
   const service = new ScreenshotImportService({

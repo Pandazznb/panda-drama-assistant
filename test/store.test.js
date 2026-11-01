@@ -172,6 +172,73 @@ test("normalizeState keeps only valid event records and bounds settings", () => 
   assert.equal(normalized.events[0].notified, false);
 });
 
+test("normalizeState keeps account sync baseline and bidirectional removal counts", () => {
+  const normalized = normalizeState({
+    settings: {
+      accountSync: {
+        removedLocalCount: 3,
+        syncBaseline: {
+          initializedAt: "2026-11-01T01:00:00.000Z",
+          favorites: [
+            "7694653385668037657",
+            "7694653385668037657",
+            "invalid",
+          ],
+          reservationsOnline: [],
+          localSubscriptions: [
+            {
+              subscriptionId: "sub_test",
+              title: "测试短剧第一季",
+              seriesGroupId: "7698938199183215640",
+              seriesIds: ["7694653385668037657"],
+            },
+            {
+              subscriptionId: "sub_invalid",
+              seriesIds: ["invalid"],
+            },
+          ],
+        },
+        history: [
+          {
+            id: "sync_test",
+            trigger: "manual",
+            startedAt: "2026-11-01T01:00:00.000Z",
+            completedAt: "2026-11-01T01:01:00.000Z",
+            result: "success",
+            removedLocalCount: 1,
+            items: [{ kind: "removedLocal", title: "测试短剧第一季" }],
+          },
+        ],
+      },
+    },
+  });
+
+  assert.equal(normalized.settings.accountSync.removedLocalCount, 3);
+  assert.deepEqual(
+    normalized.settings.accountSync.syncBaseline.favorites,
+    ["7694653385668037657"],
+  );
+  assert.deepEqual(
+    normalized.settings.accountSync.syncBaseline.localSubscriptions,
+    [
+      {
+        subscriptionId: "sub_test",
+        title: "测试短剧第一季",
+        seriesGroupId: "7698938199183215640",
+        seriesIds: ["7694653385668037657"],
+      },
+    ],
+  );
+  assert.equal(
+    normalized.settings.accountSync.history[0].removedLocalCount,
+    1,
+  );
+  assert.equal(
+    normalized.settings.accountSync.history[0].items[0].kind,
+    "removedLocal",
+  );
+});
+
 test("normalizeState validates Cron and migrates representable legacy intervals", () => {
   assert.equal(
     normalizeState({
@@ -233,7 +300,7 @@ test("normalizeState bounds the stale completion window", () => {
   );
 });
 
-test("normalizeState exposes automatic completion as completed and clears overrides", () => {
+test("normalizeState exposes automatic inactivity as inactive and clears overrides", () => {
   const seriesId = "7694653385668037657";
   const normalized = normalizeState({
     subscriptions: [
@@ -260,13 +327,16 @@ test("normalizeState exposes automatic completion as completed and clears overri
     ],
   });
   const subscription = normalized.subscriptions[0];
-  assert.equal(subscription.seriesStatus, "completed");
+  assert.equal(subscription.seriesStatus, "inactive");
   assert.equal(subscription.seriesStatusOverride, null);
   assert.equal(
-    subscription.autoCompletedAt,
+    subscription.autoInactiveAt,
     "2027-02-04T08:00:00.000Z",
   );
+  assert.equal(subscription.autoCompletedAt, undefined);
   assert.match(subscription.seriesStatusReason, /超过 90 天/);
+  assert.match(subscription.seriesStatusReason, /已自动标记为停更/);
+  assert.doesNotMatch(subscription.seriesStatusReason, /自动标记为完结/);
 });
 
 test("normalizeState preserves and derives the next scheduled check", () => {
@@ -702,7 +772,7 @@ test("normalizeState clears a verified legacy completion without a finale marker
     ],
   });
   const subscription = normalized.subscriptions[0];
-  assert.equal(normalized.version, 12);
+  assert.equal(normalized.version, 14);
   assert.equal(subscription.seriesStatus, "unknown");
   assert.match(subscription.seriesStatusReason, /完结篇/);
   assert.equal(subscription.completedAt, null);
@@ -873,7 +943,7 @@ test("store persists a legacy state migration and completion event cleanup", asy
   const store = new JsonStateStore(filePath);
   try {
     const state = await store.init();
-    assert.equal(state.version, 12);
+    assert.equal(state.version, 14);
     assert.deepEqual(
       state.events.map((event) => event.id),
       ["evt_disk_episode"],

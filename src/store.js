@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  DEFAULT_ACCOUNT_SYNC_CRON,
   DEFAULT_CHECK_CRON,
   DEFAULT_DISCOVERY_REMINDER_CRON,
   DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES,
@@ -23,6 +24,10 @@ import {
   createDefaultNotificationSettings,
   normalizeNotificationSettings,
 } from "./notifications.js";
+import {
+  createDefaultNotificationTemplates,
+  normalizeNotificationTemplates,
+} from "./notification-templates.js";
 import { EventLogStore } from "./event-log.js";
 import {
   deriveSeriesStatus,
@@ -42,16 +47,18 @@ import {
   toSafeInteger,
 } from "./utils.js";
 
-const STATE_VERSION = 12;
+const STATE_VERSION = 14;
 const STORED_NEXT_CHECK_VERSION = 10;
 const SERIES_COMPLETION_RULE_VERSION = 2;
 export const MAX_EVENTS = 100;
+export const MAX_ACCOUNT_SYNC_HISTORY = 20;
 
 export function createDefaultState() {
   return {
     version: STATE_VERSION,
     settings: {
       notifications: createDefaultNotificationSettings(),
+      notificationTemplates: createDefaultNotificationTemplates(),
       checkCron: DEFAULT_CHECK_CRON,
       staleCompletionDays: DEFAULT_STALE_COMPLETION_DAYS,
       episodeNotificationWindowMinutes:
@@ -59,6 +66,8 @@ export function createDefaultState() {
       discoveryReminderDurationMinutes:
         DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES,
       discoveryReminderCron: DEFAULT_DISCOVERY_REMINDER_CRON,
+      accountSyncCron: DEFAULT_ACCOUNT_SYNC_CRON,
+      accountSync: createDefaultAccountSyncState(),
       nextCheckAt: null,
       lastCheckAt: null,
       lastCheckResult: null,
@@ -67,6 +76,257 @@ export function createDefaultState() {
     events: [],
     pendingNotifications: [],
     discoveryReminders: [],
+  };
+}
+
+function createDefaultAccountSyncState() {
+  return {
+    lastStartedAt: null,
+    lastCompletedAt: null,
+    lastResult: null,
+    lastError: null,
+    importedCount: 0,
+    uploadedCount: 0,
+    removedRemoteCount: 0,
+    removedLocalCount: 0,
+    syncBaseline: null,
+    deleteRetries: [],
+    history: [],
+  };
+}
+
+function normalizeAccountSyncItem(value) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const kind = [
+    "imported",
+    "uploaded",
+    "removed",
+    "removedLocal",
+    "skipped",
+    "failed",
+  ].includes(value.kind)
+    ? value.kind
+    : "failed";
+  return {
+    kind,
+    title: normalizeWhitespace(value.title || ""),
+    subscriptionId: value.subscriptionId
+      ? String(value.subscriptionId)
+      : null,
+    seriesId: value.seriesId ? String(value.seriesId) : null,
+    message: normalizeWhitespace(value.message || ""),
+  };
+}
+
+function normalizeAccountSyncHistory(value) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const startedAtMs = parseTimestamp(value.startedAt);
+  const completedAtMs = parseTimestamp(value.completedAt) || startedAtMs;
+  if (startedAtMs === null || completedAtMs === null) {
+    return null;
+  }
+  const startedAt = new Date(startedAtMs).toISOString();
+  return {
+    id: String(value.id || `sync-${startedAt}`),
+    trigger: ["login", "manual", "cron"].includes(value.trigger)
+      ? value.trigger
+      : "manual",
+    startedAt,
+    completedAt: new Date(completedAtMs).toISOString(),
+    result: ["success", "partial", "error"].includes(value.result)
+      ? value.result
+      : "error",
+    importedCount: Math.max(0, toSafeInteger(value.importedCount, 0)),
+    uploadedCount: Math.max(0, toSafeInteger(value.uploadedCount, 0)),
+    removedRemoteCount: Math.max(
+      0,
+      toSafeInteger(value.removedRemoteCount, 0),
+    ),
+    removedLocalCount: Math.max(
+      0,
+      toSafeInteger(value.removedLocalCount, 0),
+    ),
+    errors: Array.isArray(value.errors)
+      ? value.errors
+          .map((error) => normalizeWhitespace(error || ""))
+          .filter(Boolean)
+          .slice(0, 50)
+      : [],
+    items: Array.isArray(value.items)
+      ? value.items
+          .map(normalizeAccountSyncItem)
+          .filter(Boolean)
+          .slice(0, 200)
+      : [],
+  };
+}
+
+function normalizeAccountSyncCron(value) {
+  const expression = normalizeCronExpression(value);
+  return isValidCronExpression(expression)
+    ? expression
+    : DEFAULT_ACCOUNT_SYNC_CRON;
+}
+
+function normalizeAccountSyncSeriesIds(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return [
+    ...new Set(
+      value
+        .map((seriesId) => String(seriesId || "").trim())
+        .filter((seriesId) => /^\d{8,25}$/.test(seriesId)),
+    ),
+  ];
+}
+
+function normalizeAccountSyncLocalSubscriptions(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value
+    .map((entry) => {
+      if (!isPlainObject(entry) || !entry.subscriptionId) {
+        return null;
+      }
+      const seriesIds = normalizeAccountSyncSeriesIds(entry.seriesIds) || [];
+      if (!seriesIds.length) {
+        return null;
+      }
+      return {
+        subscriptionId: String(entry.subscriptionId),
+        title: normalizeWhitespace(entry.title || ""),
+        seriesGroupId: entry.seriesGroupId
+          ? String(entry.seriesGroupId)
+          : null,
+        seriesIds,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeAccountSyncBaseline(value) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  return {
+    initializedAt: parseTimestamp(value.initializedAt)
+      ? new Date(parseTimestamp(value.initializedAt)).toISOString()
+      : null,
+    updatedAt: parseTimestamp(value.updatedAt)
+      ? new Date(parseTimestamp(value.updatedAt)).toISOString()
+      : null,
+    favorites: normalizeAccountSyncSeriesIds(value.favorites),
+    reservationsOnline: normalizeAccountSyncSeriesIds(
+      value.reservationsOnline,
+    ),
+    reservationsUpcoming: normalizeAccountSyncSeriesIds(
+      value.reservationsUpcoming,
+    ),
+    localSubscriptions: normalizeAccountSyncLocalSubscriptions(
+      value.localSubscriptions,
+    ),
+  };
+}
+
+function normalizeAccountSync(value) {
+  if (!isPlainObject(value)) {
+    return createDefaultAccountSyncState();
+  }
+  const deleteRetries = Array.isArray(value.deleteRetries)
+    ? value.deleteRetries
+        .map((entry) => {
+          if (!isPlainObject(entry) || !entry.subscriptionId) {
+            return null;
+          }
+          return {
+            subscriptionId: String(entry.subscriptionId),
+            title: normalizeWhitespace(entry.title || ""),
+            seriesGroupId: entry.seriesGroupId
+              ? String(entry.seriesGroupId)
+              : null,
+            seriesIds: [
+              ...new Set(
+                (Array.isArray(entry.seriesIds) ? entry.seriesIds : [])
+                  .map((seriesId) => String(seriesId || "").trim())
+                  .filter((seriesId) => /^\d{8,25}$/.test(seriesId)),
+              ),
+            ],
+            pendingOperations: [
+              ...new Map(
+                (Array.isArray(entry.pendingOperations)
+                  ? entry.pendingOperations
+                  : []
+                )
+                  .map((operation) => {
+                    const seriesId = String(
+                      operation?.seriesId || "",
+                    ).trim();
+                    const name = operation?.operation;
+                    if (
+                      !/^\d{8,25}$/.test(seriesId) ||
+                      !["favorite", "reservation"].includes(name)
+                    ) {
+                      return null;
+                    }
+                    return [
+                      `${seriesId}:${name}`,
+                      { seriesId, operation: name },
+                    ];
+                  })
+                  .filter(Boolean),
+              ).values(),
+            ],
+            createdAt: String(entry.createdAt || nowIso()),
+            attempts: Math.max(0, toSafeInteger(entry.attempts, 0)),
+            lastError: entry.lastError
+              ? normalizeWhitespace(entry.lastError)
+              : null,
+          };
+        })
+        .filter(Boolean)
+    : [];
+  return {
+    lastStartedAt: parseTimestamp(value.lastStartedAt)
+      ? new Date(parseTimestamp(value.lastStartedAt)).toISOString()
+      : null,
+    lastCompletedAt: parseTimestamp(value.lastCompletedAt)
+      ? new Date(parseTimestamp(value.lastCompletedAt)).toISOString()
+      : null,
+    lastResult: ["success", "partial", "error"].includes(value.lastResult)
+      ? value.lastResult
+      : null,
+    lastError: value.lastError
+      ? normalizeWhitespace(value.lastError)
+      : null,
+    importedCount: Math.max(0, toSafeInteger(value.importedCount, 0)),
+    uploadedCount: Math.max(0, toSafeInteger(value.uploadedCount, 0)),
+    removedRemoteCount: Math.max(
+      0,
+      toSafeInteger(value.removedRemoteCount, 0),
+    ),
+    removedLocalCount: Math.max(
+      0,
+      toSafeInteger(value.removedLocalCount, 0),
+    ),
+    syncBaseline: normalizeAccountSyncBaseline(value.syncBaseline),
+    deleteRetries,
+    history: Array.isArray(value.history)
+      ? value.history
+          .map(normalizeAccountSyncHistory)
+          .filter(Boolean)
+          .sort(
+            (left, right) =>
+              parseTimestamp(right.startedAt) -
+              parseTimestamp(left.startedAt),
+          )
+          .slice(0, MAX_ACCOUNT_SYNC_HISTORY)
+      : [],
   };
 }
 
@@ -398,14 +658,19 @@ function normalizeSubscription(subscription) {
   const storedSeriesStatusOverride = [
     "updating",
     "completed",
+    "inactive",
     "unknown",
   ].includes(subscription.seriesStatusOverride)
     ? subscription.seriesStatusOverride
     : null;
-  const autoCompletedAt = parseTimestamp(subscription.autoCompletedAt)
-    ? new Date(parseTimestamp(subscription.autoCompletedAt)).toISOString()
-    : null;
-  const seriesStatusOverride = autoCompletedAt
+  const legacyAutoCompletedAt = parseTimestamp(subscription.autoCompletedAt);
+  const autoInactiveAtMs =
+    parseTimestamp(subscription.autoInactiveAt) ?? legacyAutoCompletedAt;
+  const autoInactiveAt =
+    autoInactiveAtMs === null
+      ? null
+      : new Date(autoInactiveAtMs).toISOString();
+  const seriesStatusOverride = autoInactiveAt
     ? null
     : storedSeriesStatusOverride;
   const seriesStatusOverrideAt =
@@ -415,9 +680,24 @@ function normalizeSubscription(subscription) {
           parseTimestamp(subscription.seriesStatusOverrideAt),
         ).toISOString()
       : null;
-  const autoCompletionReason = autoCompletedAt
-    ? normalizeWhitespace(subscription.autoCompletionReason || "")
+  const storedAutoInactiveReason = normalizeWhitespace(
+    subscription.autoInactiveReason ||
+      subscription.autoCompletionReason ||
+      "",
+  );
+  const autoInactiveReason = autoInactiveAt
+    ? storedAutoInactiveReason
+        .replaceAll("已自动标记为完结", "已自动标记为停更")
+        .replaceAll("自动标记为已完结", "自动标记为已停更") ||
+      "超过设定的无更新期限，系列已停更。系统会每天自动核验一次。"
     : "";
+  const inactiveStatusCheckedAt = parseTimestamp(
+    subscription.inactiveStatusCheckedAt,
+  )
+    ? new Date(
+        parseTimestamp(subscription.inactiveStatusCheckedAt),
+      ).toISOString()
+    : null;
   const manualStatusReason = {
     updating: "已手动标记为更新中，将继续自动检查。",
     completed: "已手动标记为已完结，已停止自动检查。",
@@ -425,11 +705,11 @@ function normalizeSubscription(subscription) {
   }[seriesStatusOverride];
   const seriesStatus =
     seriesStatusOverride ||
-    (autoCompletedAt ? "completed" : derivedStatus.status);
+    (autoInactiveAt ? "inactive" : derivedStatus.status);
   const seriesStatusReason =
     manualStatusReason ||
-    (autoCompletedAt
-      ? autoCompletionReason || "超过设定的无更新期限，已自动标记为完结。"
+    (autoInactiveAt
+      ? autoInactiveReason
       : derivedStatus.reason);
 
   return {
@@ -453,8 +733,9 @@ function normalizeSubscription(subscription) {
       hasVerifiedCompletionCycle && subscription.completedAt
         ? String(subscription.completedAt)
         : null,
-    autoCompletedAt,
-    autoCompletionReason: autoCompletionReason || null,
+    autoInactiveAt,
+    autoInactiveReason: autoInactiveReason || null,
+    inactiveStatusCheckedAt,
     seriesCompletionAnnounced:
       hasVerifiedCompletionCycle &&
       subscription.seriesCompletionAnnounced === true,
@@ -465,6 +746,7 @@ function normalizeSubscription(subscription) {
     reminderMutedForCurrentUpdate:
       subscription.reminderEnabled !== false &&
       subscription.reminderMutedForCurrentUpdate === true,
+    trackingPaused: subscription.trackingPaused === true,
     lastWatchedAt: parseTimestamp(subscription.lastWatchedAt)
       ? new Date(parseTimestamp(subscription.lastWatchedAt)).toISOString()
       : null,
@@ -641,6 +923,9 @@ export function normalizeState(input) {
         input.settings?.notifications,
         input.settings?.barkKey,
       ),
+      notificationTemplates: normalizeNotificationTemplates(
+        input.settings?.notificationTemplates,
+      ),
       checkCron,
       staleCompletionDays: normalizeStaleCompletionDays(
         input.settings?.staleCompletionDays,
@@ -655,6 +940,10 @@ export function normalizeState(input) {
       discoveryReminderCron: normalizeDiscoveryReminderCron(
         input.settings?.discoveryReminderCron,
       ),
+      accountSyncCron: normalizeAccountSyncCron(
+        input.settings?.accountSyncCron,
+      ),
+      accountSync: normalizeAccountSync(input.settings?.accountSync),
       nextCheckAt,
       lastCheckAt,
       lastCheckResult: ["success", "partial", "error"].includes(

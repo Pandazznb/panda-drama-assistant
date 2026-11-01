@@ -9,6 +9,10 @@ import {
   parseTimestamp,
   toSafeInteger,
 } from "./utils.js";
+import {
+  performUpstreamFetch,
+  retryAfterMilliseconds,
+} from "./request-scheduler.js";
 
 const MAX_REDIRECTS = 5;
 const MAX_HTML_BYTES = 3 * 1024 * 1024;
@@ -161,12 +165,25 @@ async function readLimitedBody(response, maxBytes = MAX_HTML_BYTES) {
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 }
 
+async function readSuccessfulBody(response, maxBytes) {
+  if (!response.ok) {
+    try {
+      await response.body?.cancel?.();
+    } catch {
+      // Non-success response bodies are not needed by the caller.
+    }
+    return null;
+  }
+  return readLimitedBody(response, maxBytes);
+}
+
 async function fetchWithSafeRedirects(
   initialUrl,
   {
     fetchImpl = globalThis.fetch,
     timeoutMs = REQUEST_TIMEOUT_MS,
     maxRedirects = MAX_REDIRECTS,
+    requestScheduler = null,
   } = {},
 ) {
   let currentUrl = initialUrl;
@@ -178,21 +195,31 @@ async function fetchWithSafeRedirects(
       return { response: null, finalUrl: currentUrl, html: "" };
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    let response;
+    let result;
     try {
-      response = await fetchImpl(parsed.href, {
-        redirect: "manual",
-        signal: controller.signal,
-        headers: {
-          accept: "text/html,application/xhtml+xml",
-          "accept-language": "zh-CN,zh;q=0.9",
-          "user-agent":
-            "Mozilla/5.0 (compatible; HongguoReminder/1.0; +https://hongguoduanju.com)",
+      result = await performUpstreamFetch(
+        fetchImpl,
+        parsed.href,
+        {
+          redirect: "manual",
+          headers: {
+            accept: "text/html,application/xhtml+xml",
+            "accept-language": "zh-CN,zh;q=0.9",
+            "user-agent":
+              "Mozilla/5.0 (compatible; HongguoReminder/1.0; +https://hongguoduanju.com)",
+          },
         },
-      });
+        {
+          scheduler: requestScheduler,
+          timeoutMs,
+          label: "红果分享链接",
+          readBody: (response) => readSuccessfulBody(response),
+        },
+      );
     } catch (error) {
+      if (error?.upstreamBodyRead) {
+        throw error;
+      }
       if (error?.name === "AbortError") {
         throw new HongguoError("请求红果超时，请稍后重试。", "REQUEST_TIMEOUT", 504);
       }
@@ -201,9 +228,8 @@ async function fetchWithSafeRedirects(
         "REQUEST_FAILED",
         502,
       );
-    } finally {
-      clearTimeout(timeout);
     }
+    const response = result.response;
 
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
@@ -216,16 +242,27 @@ async function fetchWithSafeRedirects(
     }
 
     if (!response.ok) {
-      throw new HongguoError(
+      const rateLimited = response.status === 429;
+      const error = new HongguoError(
         response.status === 404
           ? "红果页面不存在，请检查分享链接。"
-          : `红果返回 HTTP ${response.status}。`,
-        "UPSTREAM_HTTP_ERROR",
-        502,
+          : rateLimited
+            ? "红果请求过于频繁，请稍后重试。"
+            : `红果返回 HTTP ${response.status}。`,
+        rateLimited ? "UPSTREAM_RATE_LIMITED" : "UPSTREAM_HTTP_ERROR",
+        rateLimited ? 429 : 502,
       );
+      const retryAfterMs = retryAfterMilliseconds(response);
+      if (rateLimited && retryAfterMs !== null) {
+        error.retryAfterSeconds = Math.max(
+          1,
+          Math.ceil(retryAfterMs / 1_000),
+        );
+      }
+      throw error;
     }
 
-    const html = await readLimitedBody(response);
+    const html = result.body;
     return { response, finalUrl: parsed.href, html };
   }
 
@@ -457,7 +494,11 @@ export function normalizeSeriesDetail(series) {
 
 export async function fetchSeriesDetail(
   seriesId,
-  { fetchImpl = globalThis.fetch, timeoutMs = REQUEST_TIMEOUT_MS } = {},
+  {
+    fetchImpl = globalThis.fetch,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    requestScheduler = null,
+  } = {},
 ) {
   if (!/^\d{8,25}$/.test(String(seriesId))) {
     throw new HongguoError("剧集 ID 格式不正确。", "INVALID_SERIES_ID");
@@ -467,6 +508,7 @@ export async function fetchSeriesDetail(
   const { html } = await fetchWithSafeRedirects(url, {
     fetchImpl,
     timeoutMs,
+    requestScheduler,
   });
   const detail = parseSeriesDetailHtml(html);
 
@@ -485,6 +527,7 @@ export async function fetchAlbumSeriesInfo(
   {
     fetchImpl = globalThis.fetch,
     timeoutMs = ALBUM_REQUEST_TIMEOUT_MS,
+    requestScheduler = null,
   } = {},
 ) {
   const normalizedSeriesId = String(seriesId || "");
@@ -492,27 +535,38 @@ export async function fetchAlbumSeriesInfo(
     throw new HongguoError("剧集 ID 格式不正确。", "INVALID_SERIES_ID");
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  let response;
+  let result;
   try {
-    response = await fetchImpl(OFFICIAL_ALBUM_FIELDS_URL, {
-      method: "POST",
-      redirect: "error",
-      credentials: "omit",
-      cache: "no-store",
-      signal: controller.signal,
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        "user-agent":
-          "Mozilla/5.0 (compatible; HongguoReminder/1.0; +https://hongguoduanju.com)",
+    result = await performUpstreamFetch(
+      fetchImpl,
+      OFFICIAL_ALBUM_FIELDS_URL,
+      {
+        method: "POST",
+        redirect: "error",
+        credentials: "omit",
+        cache: "no-store",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "user-agent":
+            "Mozilla/5.0 (compatible; HongguoReminder/1.0; +https://hongguoduanju.com)",
+        },
+        // The upstream model requires a JSON number, while 19-digit IDs exceed
+        // Number.MAX_SAFE_INTEGER. The ID is validated as digits before splicing.
+        body: `{"book_pack_channel":"inner_feed_detail","req_ids":[${normalizedSeriesId}],"req_fields":["album_id","album_serial_count","series_in_album_order","album_series_item"]}`,
       },
-      // The upstream model requires a JSON number, while 19-digit IDs exceed
-      // Number.MAX_SAFE_INTEGER. The ID is validated as digits before splicing.
-      body: `{"book_pack_channel":"inner_feed_detail","req_ids":[${normalizedSeriesId}],"req_fields":["album_id","album_serial_count","series_in_album_order","album_series_item"]}`,
-    });
+      {
+        scheduler: requestScheduler,
+        timeoutMs,
+        label: "红果多季列表",
+        readBody: (response) =>
+          readSuccessfulBody(response, MAX_ALBUM_RESPONSE_BYTES),
+      },
+    );
   } catch (error) {
+    if (error?.upstreamBodyRead) {
+      throw error;
+    }
     if (error?.name === "AbortError") {
       throw new HongguoError(
         "请求红果多季列表超时。",
@@ -525,19 +579,31 @@ export async function fetchAlbumSeriesInfo(
       "ALBUM_REQUEST_FAILED",
       502,
     );
-  } finally {
-    clearTimeout(timeout);
   }
+  const response = result.response;
 
   if (!response.ok) {
-    throw new HongguoError(
-      `红果多季列表返回 HTTP ${response.status}。`,
-      "ALBUM_UPSTREAM_HTTP_ERROR",
-      502,
+    const rateLimited = response.status === 429;
+    const error = new HongguoError(
+      rateLimited
+        ? "红果多季列表请求过于频繁，请稍后重试。"
+        : `红果多季列表返回 HTTP ${response.status}。`,
+      rateLimited
+        ? "ALBUM_UPSTREAM_RATE_LIMITED"
+        : "ALBUM_UPSTREAM_HTTP_ERROR",
+      rateLimited ? 429 : 502,
     );
+    const retryAfterMs = retryAfterMilliseconds(response);
+    if (rateLimited && retryAfterMs !== null) {
+      error.retryAfterSeconds = Math.max(
+        1,
+        Math.ceil(retryAfterMs / 1_000),
+      );
+    }
+    throw error;
   }
 
-  const body = await readLimitedBody(response, MAX_ALBUM_RESPONSE_BYTES);
+  const body = result.body;
   let payload;
   try {
     payload = JSON.parse(body);
@@ -670,6 +736,7 @@ export async function searchOfficialSeries(
   {
     fetchImpl = globalThis.fetch,
     timeoutMs = SEARCH_REQUEST_TIMEOUT_MS,
+    requestScheduler = null,
   } = {},
 ) {
   const query = normalizeWhitespace(input);
@@ -685,24 +752,35 @@ export async function searchOfficialSeries(
 
   const url = new URL(OFFICIAL_SEARCH_URL);
   url.searchParams.set("query", query);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  let response;
+  let result;
   try {
-    response = await fetchImpl(url, {
-      method: "GET",
-      redirect: "error",
-      credentials: "omit",
-      cache: "no-store",
-      signal: controller.signal,
-      headers: {
-        accept: "application/json",
-        "accept-language": "zh-CN,zh;q=0.9",
-        "user-agent":
-          "Mozilla/5.0 (compatible; HongguoReminder/1.0; +https://hongguoduanju.com)",
+    result = await performUpstreamFetch(
+      fetchImpl,
+      url,
+      {
+        method: "GET",
+        redirect: "error",
+        credentials: "omit",
+        cache: "no-store",
+        headers: {
+          accept: "application/json",
+          "accept-language": "zh-CN,zh;q=0.9",
+          "user-agent":
+            "Mozilla/5.0 (compatible; HongguoReminder/1.0; +https://hongguoduanju.com)",
+        },
       },
-    });
+      {
+        scheduler: requestScheduler,
+        timeoutMs,
+        label: "红果搜索",
+        readBody: (response) =>
+          readSuccessfulBody(response, MAX_SEARCH_RESPONSE_BYTES),
+      },
+    );
   } catch (error) {
+    if (error?.upstreamBodyRead) {
+      throw error;
+    }
     if (error?.name === "AbortError") {
       throw new HongguoError(
         "搜索红果剧集超时，请稍后重试。",
@@ -715,19 +793,31 @@ export async function searchOfficialSeries(
       "SEARCH_REQUEST_FAILED",
       502,
     );
-  } finally {
-    clearTimeout(timeout);
   }
+  const response = result.response;
 
   if (!response.ok) {
-    throw new HongguoError(
-      `红果搜索返回 HTTP ${response.status}。`,
-      "SEARCH_UPSTREAM_HTTP_ERROR",
-      502,
+    const rateLimited = response.status === 429;
+    const error = new HongguoError(
+      rateLimited
+        ? "红果搜索请求过于频繁，请稍后重试。"
+        : `红果搜索返回 HTTP ${response.status}。`,
+      rateLimited
+        ? "SEARCH_UPSTREAM_RATE_LIMITED"
+        : "SEARCH_UPSTREAM_HTTP_ERROR",
+      rateLimited ? 429 : 502,
     );
+    const retryAfterMs = retryAfterMilliseconds(response);
+    if (rateLimited && retryAfterMs !== null) {
+      error.retryAfterSeconds = Math.max(
+        1,
+        Math.ceil(retryAfterMs / 1_000),
+      );
+    }
+    throw error;
   }
 
-  const body = await readLimitedBody(response, MAX_SEARCH_RESPONSE_BYTES);
+  const body = result.body;
   let payload;
   try {
     payload = JSON.parse(body);

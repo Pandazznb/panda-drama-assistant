@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createApplication } from "../server.js";
+
+const ROOT_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 function createScreenshotImportMock(overrides = {}) {
   const calls = {
@@ -73,14 +79,178 @@ function createScreenshotImportMock(overrides = {}) {
   };
 }
 
+function createAccountServiceMock(overrides = {}) {
+  const calls = {
+    cancelLogin: [],
+    cancelSmsLogin: [],
+    createLogin: 0,
+    createSmsLogin: [],
+    getLoginQr: [],
+    logout: 0,
+    pollLogin: [],
+    pollSmsLogin: [],
+    refresh: 0,
+    requireCredentials: 0,
+    sendSmsCode: [],
+    setFavorite: [],
+    setReservation: [],
+    status: 0,
+    verifySmsCode: [],
+  };
+  const account = {
+    authenticated: true,
+    profile: {
+      id: "1234567890123456789",
+      name: "测试用户",
+    },
+    savedAt: "2026-10-31T08:00:00.000Z",
+    snapshot: {
+      profile: {
+        id: "1234567890123456789",
+        name: "测试用户",
+      },
+      fetchedAt: "2026-10-31T08:01:00.000Z",
+      categories: {
+        favorites: {
+          key: "favorites",
+          status: "ok",
+          items: [],
+          count: 0,
+          fetchedAt: "2026-10-31T08:01:00.000Z",
+        },
+      },
+    },
+    refreshing: false,
+    issue: "",
+    message: "",
+  };
+  return {
+    calls,
+    async start() {
+      return account;
+    },
+    async stop() {},
+    status() {
+      calls.status += 1;
+      return account;
+    },
+    async createLogin() {
+      calls.createLogin += 1;
+      return {
+        loginId: "login-test",
+        status: "pending",
+        expiresAt: "2026-10-31T08:05:00.000Z",
+      };
+    },
+    getLoginQr(loginId) {
+      calls.getLoginQr.push(loginId);
+      return Buffer.from("fake-png");
+    },
+    async pollLogin(loginId) {
+      calls.pollLogin.push(loginId);
+      return {
+        loginId,
+        status: "confirmed",
+        expiresAt: "2026-10-31T08:05:00.000Z",
+        profile: account.profile,
+        error: "",
+      };
+    },
+    async cancelLogin(loginId) {
+      calls.cancelLogin.push(loginId);
+      return { canceled: true };
+    },
+    async createSmsLogin({ countryCode, mobile }) {
+      calls.createSmsLogin.push({ countryCode, mobile });
+      return {
+        loginId: "sms-login-test",
+        status: "pending_code",
+        maskedMobile: "+86 *******8000",
+        expiresAt: "2026-10-31T08:05:00.000Z",
+        retryAfterSeconds: 0,
+        profile: null,
+        error: "",
+      };
+    },
+    async sendSmsCode(loginId) {
+      calls.sendSmsCode.push(loginId);
+      return {
+        loginId,
+        status: "pending_verify",
+        maskedMobile: "+86 *******8000",
+        expiresAt: "2026-10-31T08:05:00.000Z",
+        retryAfterSeconds: 60,
+        profile: null,
+        error: "",
+        message: "验证码已发送，请查看手机短信。",
+      };
+    },
+    async verifySmsCode(loginId, code) {
+      calls.verifySmsCode.push({ loginId, code });
+      return {
+        loginId,
+        status: "profile_loading",
+        maskedMobile: "+86 *******8000",
+        expiresAt: "2026-10-31T08:05:00.000Z",
+        retryAfterSeconds: 0,
+        profile: null,
+        error: "",
+      };
+    },
+    pollSmsLogin(loginId) {
+      calls.pollSmsLogin.push(loginId);
+      return {
+        loginId,
+        status: "succeeded",
+        maskedMobile: "+86 *******8000",
+        expiresAt: "2026-10-31T08:05:00.000Z",
+        retryAfterSeconds: 0,
+        profile: account.profile,
+        error: "",
+      };
+    },
+    async cancelSmsLogin(loginId) {
+      calls.cancelSmsLogin.push(loginId);
+      return { canceled: true };
+    },
+    async logout() {
+      calls.logout += 1;
+      return { ...account, authenticated: false, profile: null, snapshot: null };
+    },
+    async refresh() {
+      calls.refresh += 1;
+      return account;
+    },
+    requireCredentials() {
+      calls.requireCredentials += 1;
+      return {
+        userId: account.profile.id,
+        cookie: "test-cookie",
+      };
+    },
+    async setFavorite(credentials, seriesId, add) {
+      calls.setFavorite.push({ credentials, seriesId, add });
+      return { ok: true };
+    },
+    async setReservation(credentials, seriesId, add) {
+      calls.setReservation.push({ credentials, seriesId, add });
+      return { ok: true };
+    },
+    ...overrides,
+  };
+}
+
 async function startHarness(t, options = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hongguo-server-"));
   const stateFile = path.join(directory, "state.json");
   const screenshotImport =
     options.screenshotImport || createScreenshotImportMock();
+  const accountService =
+    options.accountService || createAccountServiceMock();
   const app = await createApplication({
     stateFile,
     screenshotImport,
+    accountService,
     ...options,
   });
   await new Promise((resolve) => {
@@ -89,7 +259,9 @@ async function startHarness(t, options = {}) {
   const address = app.server.address();
   t.after(async () => {
     app.service.stop();
+    app.accountSyncService.stop();
     await app.screenshotImport.stop();
+    await app.accountService.stop();
     await new Promise((resolve) => app.server.close(resolve));
     await app.store.close();
     await fs.rm(directory, { recursive: true, force: true });
@@ -119,6 +291,19 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     pageResponse.headers.get("content-security-policy"),
     /worker-src 'self'/,
   );
+  assert.match(
+    pageResponse.headers.get("content-security-policy"),
+    /style-src 'self' 'unsafe-inline'/,
+  );
+  const stylesResponse = await fetch(`${harness.origin}/styles.css`);
+  assert.match(
+    stylesResponse.headers.get("content-security-policy"),
+    /style-src 'self'(?:;|$)/,
+  );
+  assert.doesNotMatch(
+    stylesResponse.headers.get("content-security-policy"),
+    /unsafe-inline/,
+  );
   const page = await pageResponse.text();
   assert.match(page, /短剧助手/);
   assert.equal((page.match(/data-theme-toggle/g) || []).length, 1);
@@ -136,6 +321,14 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /id="watchlist-search-clear"/);
   assert.match(page, /symbol id="icon-bell-minus"/);
   assert.match(page, /symbol id="icon-bell-off"/);
+  assert.match(page, /symbol id="icon-minus"/);
+  assert.match(page, /id="account-sync-details"/);
+  assert.match(page, /id="settings-account-summary"/);
+  assert.match(page, /id="settings-account-sync-details-panel"/);
+  assert.match(page, /id="settings-account-sync-details"/);
+  assert.doesNotMatch(page, /id="settings-account-details"/);
+  assert.match(page, /同步明细/);
+  assert.match(page, /href="\/logs#system"/);
   assert.match(
     page,
     /href="\/assets\/panda-drama-assistant-icon\.svg"/,
@@ -257,8 +450,106 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     2 * 24 * 60,
   );
   assert.equal(state.settings.discoveryReminderCron, "0 */4 * * *");
+  assert.equal(state.settings.accountSyncCron, "0 3 * * *");
   assert.equal(state.settings.pendingDiscoveryReminderCount, 0);
   assert.equal(state.settings.notifications.enabledCount, 0);
+  assert.deepEqual(state.settings.notificationTemplates, {
+    detailed: { title: "", body: "" },
+    batch: { title: "", body: "" },
+    reminder: { title: "", body: "" },
+  });
+});
+
+test("account QR polling continues after switching to SMS while loading profile", async () => {
+  const appScript = await fs.readFile(
+    path.join(ROOT_DIR, "public", "app.js"),
+    "utf8",
+  );
+  assert.match(
+    appScript,
+    /function accountQrPollIsCurrent\(generation, loginId\) \{\s*return \(\s*accountRunIsCurrent\(generation\) &&\s*\(appState\.account\.loginId === loginId \|\|\s*appState\.account\.loginStatus === "profile_loading"\)\s*\);/,
+  );
+  assert.match(
+    appScript,
+    /function scheduleAccountLoginPoll\([\s\S]*?!accountRunIsCurrent\(generation\) \|\|\s*!appState\.account\.loginId/,
+  );
+  assert.match(
+    appScript,
+    /if \(appState\.account\.loginMethod === "sms"\) \{\s*elements\.accountSmsLoginStatus\.textContent =\s*"登录已确认，正在读取账号资料…";/,
+  );
+});
+
+test("QR login failures recover in place and report scan confirmation", async () => {
+  const [page, appScript] = await Promise.all([
+    fs.readFile(path.join(ROOT_DIR, "public", "index.html"), "utf8"),
+    fs.readFile(path.join(ROOT_DIR, "public", "app.js"), "utf8"),
+  ]);
+  const placeholderIndex = page.indexOf('id="account-qr-placeholder"');
+  const retryIndex = page.indexOf('id="account-login-retry"');
+  const copyIndex = page.indexOf('class="account-login__copy"');
+  assert.ok(placeholderIndex >= 0);
+  assert.ok(retryIndex > placeholderIndex);
+  assert.ok(copyIndex > retryIndex);
+  assert.match(page, />重新生成<\/span>/);
+  assert.match(
+    appScript,
+    /function restartAccountQrLogin\(\) \{\s*const run = newAccountRun\(\);\s*void beginAccountLogin\(run\);/,
+  );
+  assert.match(
+    appScript,
+    /nextMethod === "qr" &&\s*\["failed", "expired"\]\.includes\(appState\.account\.loginStatus\)/,
+  );
+  assert.match(
+    appScript,
+    /function scheduleAccountLoginCreationRetry\(generation, controller\)/,
+  );
+  assert.match(
+    appScript,
+    /if \(qrImageAttempt <= 1\) \{[\s\S]*?ACCOUNT_QR_IMAGE_RETRY_DELAY_MS/,
+  );
+  assert.match(
+    appScript,
+    /elements\.accountQrPlaceholderText\.textContent = title;[\s\S]*?setAccountLoginRetryLabel\(retryLabel\);[\s\S]*?title: initializationFailed \? "账号初始化失败" : "登录确认失败",\s*retryLabel: "重新登录"/,
+  );
+  assert.match(
+    appScript,
+    /if \(loginStatus === "2" \|\| loginStatus === "scanned"\) \{\s*elements\.accountLoginStatus\.textContent =\s*"已扫码，请在红果短剧 App 中确认登录。"/,
+  );
+});
+
+test("SMS security verification offers a direct QR login fallback", async () => {
+  const [page, appScript] = await Promise.all([
+    fs.readFile(path.join(ROOT_DIR, "public", "index.html"), "utf8"),
+    fs.readFile(path.join(ROOT_DIR, "public", "app.js"), "utf8"),
+  ]);
+  assert.match(
+    page,
+    /id="account-sms-use-qr"[\s\S]*?改用扫码登录/,
+  );
+  assert.match(
+    appScript,
+    /accountSmsUseQr: document\.querySelector\("#account-sms-use-qr"\)/,
+  );
+  assert.match(
+    appScript,
+    /showSmsLoginFailure\(error\.message, \{ offerQr: true \}\)/,
+  );
+  assert.match(
+    appScript,
+    /accountSmsUseQr\.addEventListener\("click", \(\) => \{\s*switchAccountLoginMethod\("qr", \{ focus: true \}\);/,
+  );
+  assert.match(
+    appScript,
+    /accountSmsUseQr\.scrollIntoView\(\{\s*block: "nearest",[\s\S]*?accountSmsUseQr\.focus\(\{ preventScroll: true \}\);/,
+  );
+  assert.match(
+    appScript,
+    /appState\.account\.smsQrFallbackRequired = offerQr;/,
+  );
+  assert.match(
+    appScript,
+    /appState\.account\.smsRetryAfterSeconds > 0 \|\|\s*appState\.account\.smsQrFallbackRequired/,
+  );
 });
 
 test("HTTP app serves the full log page and paginated event log API", async (t) => {
@@ -267,7 +558,9 @@ test("HTTP app serves the full log page and paginated event log API", async (t) 
   const pageResponse = await fetch(`${harness.origin}/logs`);
   assert.equal(pageResponse.status, 200);
   const page = await pageResponse.text();
-  assert.match(page, /全部动态/);
+  assert.match(page, /运行记录/);
+  assert.match(page, /系统操作/);
+  assert.match(page, /data-log-view="system"/);
   assert.match(page, /id="logs-load-more"/);
   assert.match(page, /rel="manifest" href="\/manifest\.webmanifest"/);
   assert.match(
@@ -369,6 +662,91 @@ test("HTTP app serves the full log page and paginated event log API", async (t) 
   assert.doesNotMatch(fileContent, /hongguo-server-/);
 });
 
+test("system log API exposes paginated readable actions and the complete file", async (t) => {
+  const harness = await startHarness(t);
+  await harness.systemLog.append([
+    {
+      id: "system-route-old",
+      category: "subscription",
+      action: "subscription.created",
+      message: "已开始追更《较早短剧》。",
+      createdAt: "2026-11-02T01:00:00.000Z",
+    },
+    {
+      id: "system-route-new",
+      category: "account",
+      action: "account.sync.completed",
+      level: "success",
+      message: "登录全量同步完成：导入 1 部短剧。",
+      createdAt: "2026-11-02T02:00:00.000Z",
+    },
+  ]);
+
+  const response = await fetch(
+    `${harness.origin}/api/system-logs?offset=0&limit=1`,
+  );
+  assert.equal(response.status, 200);
+  const page = await response.json();
+  assert.equal(page.total, 2);
+  assert.equal(page.hasMore, true);
+  assert.equal(page.nextOffset, 1);
+  assert.deepEqual(
+    page.entries.map((entry) => entry.id),
+    ["system-route-new"],
+  );
+  assert.deepEqual(page.storage, {
+    policy: "daily-size",
+    maxFileBytes: 1024 * 1024,
+    timeZone: "Asia/Shanghai",
+  });
+
+  const fileResponse = await fetch(
+    `${harness.origin}/api/system-logs/file`,
+  );
+  assert.equal(fileResponse.status, 200);
+  assert.equal(
+    fileResponse.headers.get("content-disposition"),
+    'inline; filename="hongguo-system-actions-all.jsonl"',
+  );
+  assert.equal(fileResponse.headers.get("cache-control"), "no-store");
+  const fileContent = await fileResponse.text();
+  assert.match(fileContent, /system-route-old/);
+  assert.match(fileContent, /system-route-new/);
+});
+
+test("account sync API distinguishes login and manual sync triggers", async (t) => {
+  const harness = await startHarness(t);
+
+  let response = await fetch(`${harness.origin}/api/account/sync`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ trigger: "login" }),
+  });
+  assert.equal(response.status, 200);
+  let payload = await response.json();
+  assert.equal(payload.result.trigger, "login");
+  assert.equal(payload.sync.latest.trigger, "login");
+
+  response = await fetch(`${harness.origin}/api/account/sync`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ trigger: "manual" }),
+  });
+  assert.equal(response.status, 200);
+  payload = await response.json();
+  assert.equal(payload.result.trigger, "manual");
+  assert.equal(payload.sync.latest.trigger, "manual");
+
+  response = await fetch(`${harness.origin}/api/account/sync`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ trigger: "unexpected" }),
+  });
+  assert.equal(response.status, 400);
+  payload = await response.json();
+  assert.equal(payload.error.code, "INVALID_ACCOUNT_SYNC_TRIGGER");
+});
+
 test("settings API saves a custom Cron schedule and all notification channels without leaking secrets", async (t) => {
   const harness = await startHarness(t);
   const response = await fetch(`${harness.origin}/api/settings`, {
@@ -463,7 +841,7 @@ test("settings API saves a custom Cron schedule and all notification channels wi
   assert.equal(JSON.stringify(state).includes("proxy-pass"), false);
 
   const onDisk = await harness.store.read();
-  assert.equal(onDisk.version, 12);
+  assert.equal(onDisk.version, 14);
   assert.equal(onDisk.settings.checkCron, "0 0 * * 0");
   assert.equal(onDisk.settings.staleCompletionDays, 120);
   assert.equal(onDisk.settings.discoveryReminderDurationMinutes, 1440);
@@ -478,6 +856,103 @@ test("settings API saves a custom Cron schedule and all notification channels wi
       wecom: false,
       dingtalk: false,
     },
+  });
+});
+
+test("settings API saves and returns custom notification templates", async (t) => {
+  const harness = await startHarness(t);
+  const notificationTemplates = {
+    detailed: {
+      title: "{appName}｜{seriesTitle}",
+      body: "检查于 {checkTime}\n{updates}\n共 {seasonCount} 季",
+    },
+    batch: {
+      title: "{appName}汇总 {updateCount} 个系列",
+      body: "{checkTime}\n{updates}",
+    },
+    reminder: {
+      title: "{appName}持续提醒",
+      body: "提醒于 {reminderTime}\n{updates}",
+    },
+  };
+
+  const response = await fetch(`${harness.origin}/api/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ notificationTemplates }),
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.deepEqual(
+    payload.settings.notificationTemplates,
+    notificationTemplates,
+  );
+
+  const stateResponse = await fetch(`${harness.origin}/api/state`);
+  const state = await stateResponse.json();
+  assert.deepEqual(
+    state.settings.notificationTemplates,
+    notificationTemplates,
+  );
+
+  const onDisk = await harness.store.read();
+  assert.deepEqual(
+    onDisk.settings.notificationTemplates,
+    notificationTemplates,
+  );
+
+  const partialResponse = await fetch(`${harness.origin}/api/settings`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      notificationTemplates: {
+        batch: { title: "自定义汇总" },
+      },
+    }),
+  });
+  assert.equal(partialResponse.status, 200);
+  const partialPayload = await partialResponse.json();
+  assert.deepEqual(partialPayload.settings.notificationTemplates, {
+    ...notificationTemplates,
+    batch: {
+      title: "自定义汇总",
+      body: notificationTemplates.batch.body,
+    },
+  });
+});
+
+test("settings API validates notification template structure, variables and length", async (t) => {
+  const harness = await startHarness(t);
+  for (const [notificationTemplates, code] of [
+    [
+      { detailed: "不是对象" },
+      "INVALID_NOTIFICATION_TEMPLATE",
+    ],
+    [
+      { batch: { body: "{seriesTitle}" } },
+      "INVALID_NOTIFICATION_TEMPLATE_VARIABLE",
+    ],
+    [
+      { reminder: { title: "剧".repeat(81) } },
+      "INVALID_NOTIFICATION_TEMPLATE_LENGTH",
+    ],
+  ]) {
+    const response = await fetch(`${harness.origin}/api/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ notificationTemplates }),
+    });
+    assert.equal(response.status, 400);
+    const payload = await response.json();
+    assert.equal(payload.error.code, code);
+  }
+
+  const stateResponse = await fetch(`${harness.origin}/api/state`);
+  const state = await stateResponse.json();
+  assert.deepEqual(state.settings.notificationTemplates, {
+    detailed: { title: "", body: "" },
+    batch: { title: "", body: "" },
+    reminder: { title: "", body: "" },
   });
 });
 
@@ -680,7 +1155,96 @@ test("batch check API reports completed series as skipped", async (t) => {
   assert.equal(response.status, 200);
   const payload = await response.json();
   assert.equal(payload.result.skippedCompleted, 2);
-  assert.match(payload.message, /2 个已完结系列已跳过/);
+  assert.match(payload.message, /2 个已完结已跳过/);
+});
+
+test("tracking API stops and restores automatic checks", async (t) => {
+  const harness = await startHarness(t);
+  const calls = [];
+  harness.service.setSubscriptionTrackingState = async (
+    subscriptionId,
+    paused,
+  ) => {
+    calls.push({ subscriptionId, paused });
+    return {
+      id: subscriptionId,
+      title: "测试短剧第一季",
+      trackingPaused: paused,
+    };
+  };
+
+  const stopResponse = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/tracking`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paused: true }),
+    },
+  );
+  assert.equal(stopResponse.status, 200);
+  assert.equal(
+    (await stopResponse.json()).result.trackingPaused,
+    true,
+  );
+
+  const restoreResponse = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/tracking`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ trackingPaused: false }),
+    },
+  );
+  assert.equal(restoreResponse.status, 200);
+  assert.equal(
+    (await restoreResponse.json()).result.trackingPaused,
+    false,
+  );
+  assert.deepEqual(calls, [
+    { subscriptionId: "sub_test", paused: true },
+    { subscriptionId: "sub_test", paused: false },
+  ]);
+});
+
+test("tracking API rejects a non-boolean state", async (t) => {
+  const harness = await startHarness(t);
+  const response = await fetch(
+    `${harness.origin}/api/subscriptions/sub_test/tracking`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ paused: "true" }),
+    },
+  );
+  assert.equal(response.status, 400);
+  assert.equal(
+    (await response.json()).error.code,
+    "INVALID_TRACKING_STATE",
+  );
+});
+
+test("batch check API reports paused series as skipped", async (t) => {
+  const harness = await startHarness(t);
+  harness.service.checkAll = async () => ({
+    subscriptions: 2,
+    checkedSubscriptions: 0,
+    skippedCompleted: 1,
+    skippedPaused: 1,
+    seasonsChecked: 0,
+    updatedSeasons: 0,
+    discoveredSeasons: 0,
+    errors: 0,
+  });
+
+  const response = await fetch(`${harness.origin}/api/check`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.result.skippedPaused, 1);
+  assert.match(payload.message, /1 个已完结、1 个已暂停/);
 });
 
 test("watched API marks a subscription as viewed", async (t) => {
@@ -1109,18 +1673,251 @@ test("screenshot import delegates selected IDs and reports the outcome", async (
   );
 });
 
-test("account login routes have been removed", async (t) => {
-  const harness = await startHarness(t);
+test("account routes expose only public status and QR images", async (t) => {
+  const accountService = createAccountServiceMock();
+  const harness = await startHarness(t, { accountService });
 
-  const response = await fetch(
-    `${harness.origin}/api/account/login-sessions`,
+  const statusResponse = await fetch(
+    `${harness.origin}/api/account/status`,
+  );
+  assert.equal(statusResponse.status, 200);
+  assert.equal(statusResponse.headers.get("cache-control"), "no-store");
+  const statusPayload = await statusResponse.json();
+  assert.equal(statusPayload.account.profile.name, "测试用户");
+  assert.doesNotMatch(
+    JSON.stringify(statusPayload),
+    /cookie|deviceId|installId|signature/i,
+  );
+
+  const createResponse = await fetch(
+    `${harness.origin}/api/account/login`,
+    { method: "POST" },
+  );
+  assert.equal(createResponse.status, 201);
+  assert.equal((await createResponse.json()).login.loginId, "login-test");
+
+  const qrResponse = await fetch(
+    `${harness.origin}/api/account/login/login-test/qrcode`,
+  );
+  assert.equal(qrResponse.status, 200);
+  assert.equal(qrResponse.headers.get("content-type"), "image/png");
+  assert.equal(qrResponse.headers.get("cache-control"), "no-store");
+  assert.equal(await qrResponse.text(), "fake-png");
+
+  const pollResponse = await fetch(
+    `${harness.origin}/api/account/login/login-test`,
+  );
+  assert.equal(pollResponse.status, 200);
+  assert.equal((await pollResponse.json()).login.status, "confirmed");
+
+  const cancelResponse = await fetch(
+    `${harness.origin}/api/account/login/login-test`,
+    { method: "DELETE" },
+  );
+  assert.equal(cancelResponse.status, 200);
+  assert.deepEqual(
+    await cancelResponse.json(),
+    { ok: true, result: { canceled: true } },
+  );
+  assert.deepEqual(accountService.calls.pollLogin, ["login-test"]);
+  assert.deepEqual(accountService.calls.getLoginQr, ["login-test"]);
+  assert.deepEqual(accountService.calls.cancelLogin, ["login-test"]);
+});
+
+test("SMS login routes validate input and expose only public session data", async (t) => {
+  const accountService = createAccountServiceMock();
+  const harness = await startHarness(t, { accountService });
+
+  const createResponse = await fetch(
+    `${harness.origin}/api/account/sms-login`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        countryCode: "+86",
+        mobile: "138 0013 8000",
+      }),
+    },
+  );
+  assert.equal(createResponse.status, 201);
+  const createPayload = await createResponse.json();
+  assert.equal(createPayload.login.loginId, "sms-login-test");
+  assert.doesNotMatch(
+    JSON.stringify(createPayload),
+    /13800138000|passport_csrf|sessionid|cookie/i,
+  );
+  assert.deepEqual(accountService.calls.createSmsLogin, [
+    { countryCode: "86", mobile: "138 0013 8000" },
+  ]);
+
+  const sendResponse = await fetch(
+    `${harness.origin}/api/account/sms-login/sms-login-test/send-code`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "{}",
     },
   );
-  assert.equal(response.status, 404);
-  const payload = await response.json();
-  assert.equal(payload.error.code, "NOT_FOUND");
+  assert.equal(sendResponse.status, 200);
+  assert.equal(
+    (await sendResponse.json()).login.status,
+    "pending_verify",
+  );
+
+  const verifyResponse = await fetch(
+    `${harness.origin}/api/account/sms-login/sms-login-test/verify`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "123456" }),
+    },
+  );
+  assert.equal(verifyResponse.status, 200);
+  assert.equal(
+    (await verifyResponse.json()).login.status,
+    "profile_loading",
+  );
+
+  const pollResponse = await fetch(
+    `${harness.origin}/api/account/sms-login/sms-login-test`,
+  );
+  assert.equal(pollResponse.status, 200);
+  assert.equal((await pollResponse.json()).login.status, "succeeded");
+
+  const cancelResponse = await fetch(
+    `${harness.origin}/api/account/sms-login/sms-login-test`,
+    { method: "DELETE" },
+  );
+  assert.equal(cancelResponse.status, 200);
+  assert.deepEqual(await cancelResponse.json(), {
+    ok: true,
+    result: { canceled: true },
+  });
+  assert.deepEqual(accountService.calls.sendSmsCode, ["sms-login-test"]);
+  assert.deepEqual(accountService.calls.verifySmsCode, [
+    { loginId: "sms-login-test", code: "123456" },
+  ]);
+  assert.deepEqual(accountService.calls.pollSmsLogin, [
+    "sms-login-test",
+  ]);
+  assert.deepEqual(accountService.calls.cancelSmsLogin, [
+    "sms-login-test",
+  ]);
+});
+
+test("SMS login routes reject missing mobile and verification code", async (t) => {
+  const harness = await startHarness(t);
+
+  const missingMobile = await fetch(
+    `${harness.origin}/api/account/sms-login`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ countryCode: "86", mobile: "" }),
+    },
+  );
+  assert.equal(missingMobile.status, 400);
+  assert.equal(
+    (await missingMobile.json()).error.code,
+    "ACCOUNT_SMS_MOBILE_REQUIRED",
+  );
+
+  const missingCode = await fetch(
+    `${harness.origin}/api/account/sms-login/sms-login-test/verify`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  assert.equal(missingCode.status, 400);
+  assert.equal(
+    (await missingCode.json()).error.code,
+    "ACCOUNT_SMS_CODE_REQUIRED",
+  );
+});
+
+test("account refresh, logout and import delegate through existing services", async (t) => {
+  const screenshotImport = createScreenshotImportMock();
+  const accountService = createAccountServiceMock();
+  const harness = await startHarness(t, {
+    screenshotImport,
+    accountService,
+  });
+
+  const refreshResponse = await fetch(
+    `${harness.origin}/api/account/refresh`,
+    { method: "POST" },
+  );
+  assert.equal(refreshResponse.status, 200);
+  assert.equal(accountService.calls.refresh, 1);
+
+  const seriesIds = [
+    "7694653385668037657",
+    "7694653385668037657",
+    "7694653385668037658",
+  ];
+  const importResponse = await fetch(
+    `${harness.origin}/api/account/import`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ seriesIds }),
+    },
+  );
+  assert.equal(importResponse.status, 200);
+  const importPayload = await importResponse.json();
+  assert.equal(importPayload.message, "已导入 2 部。");
+  assert.deepEqual(
+    screenshotImport.calls.importSeriesIds[0].seriesIds,
+    [seriesIds[0], seriesIds[2]],
+  );
+  assert.equal(
+    screenshotImport.calls.importSeriesIds[0].service,
+    harness.service,
+  );
+
+  const logoutResponse = await fetch(
+    `${harness.origin}/api/account/logout`,
+    { method: "POST" },
+  );
+  assert.equal(logoutResponse.status, 200);
+  assert.equal((await logoutResponse.json()).account.authenticated, false);
+  assert.equal(accountService.calls.logout, 1);
+});
+
+test("account import validates selection count and series IDs", async (t) => {
+  const harness = await startHarness(t);
+  const tooMany = Array.from(
+    { length: 21 },
+    (_, index) => String(7694653385668037600n + BigInt(index)),
+  );
+
+  const limitResponse = await fetch(
+    `${harness.origin}/api/account/import`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ seriesIds: tooMany }),
+    },
+  );
+  assert.equal(limitResponse.status, 400);
+  assert.equal(
+    (await limitResponse.json()).error.code,
+    "ACCOUNT_IMPORT_LIMIT",
+  );
+
+  const invalidResponse = await fetch(
+    `${harness.origin}/api/account/import`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ seriesIds: ["not-a-series"] }),
+    },
+  );
+  assert.equal(invalidResponse.status, 400);
+  assert.equal(
+    (await invalidResponse.json()).error.code,
+    "ACCOUNT_IMPORT_INVALID_ID",
+  );
 });

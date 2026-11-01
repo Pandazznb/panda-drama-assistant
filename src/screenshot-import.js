@@ -832,8 +832,8 @@ function withTimeout(promise, timeoutMs, timeoutError) {
 
 export class ScreenshotImportService {
   constructor({
-    searchSeries = searchOfficialSeries,
-    fetchDetail = fetchSeriesDetail,
+    searchSeries = null,
+    fetchDetail = null,
     createOcrWorker = createWorker,
     now = () => new Date(),
     ocrTimeoutMs = OCR_TIMEOUT_MS,
@@ -841,9 +841,22 @@ export class ScreenshotImportService {
     searchCacheMs = SEARCH_CACHE_MS,
     searchRetryDelayMs = SEARCH_RETRY_DELAY_MS,
     detailCacheMs = SERIES_DETAIL_CACHE_MS,
+    requestScheduler = null,
   } = {}) {
-    this.searchSeries = searchSeries;
-    this.fetchDetail = fetchDetail;
+    this.searchSeries = searchSeries
+      ? (query) =>
+          requestScheduler
+            ? searchSeries(query, { requestScheduler })
+            : searchSeries(query)
+      : (query) =>
+          searchOfficialSeries(query, { requestScheduler });
+    this.fetchDetail = fetchDetail
+      ? (seriesId) =>
+          requestScheduler
+            ? fetchDetail(seriesId, { requestScheduler })
+            : fetchDetail(seriesId)
+      : (seriesId) =>
+          fetchSeriesDetail(seriesId, { requestScheduler });
     this.createOcrWorker = createOcrWorker;
     this.now = now;
     this.ocrTimeoutMs = ocrTimeoutMs;
@@ -851,6 +864,7 @@ export class ScreenshotImportService {
     this.searchCacheMs = searchCacheMs;
     this.searchRetryDelayMs = searchRetryDelayMs;
     this.detailCacheMs = detailCacheMs;
+    this.requestScheduler = requestScheduler;
     this.worker = null;
     this.workerPromise = null;
     this.recognitionQueue = Promise.resolve();
@@ -1038,6 +1052,9 @@ export class ScreenshotImportService {
   }
 
   async searchWithRetry(query) {
+    if (this.requestScheduler) {
+      return this.searchSeries(query);
+    }
     for (let attempt = 0; ; attempt += 1) {
       try {
         return await this.searchSeries(query);

@@ -86,6 +86,11 @@ function latestTime(season) {
   );
 }
 
+function publishedTime(season) {
+  const value = Date.parse(season?.firstVisibleTime || "");
+  return Number.isFinite(value) ? value : null;
+}
+
 export function highestSeason(seasons) {
   const normalized = (Array.isArray(seasons) ? seasons : []).filter(
     (season) => season?.seriesId,
@@ -101,7 +106,7 @@ export function highestSeason(seasons) {
     }))
     .filter((entry) => Number.isInteger(entry.number));
   if (numbered.length) {
-    return numbered.sort(
+    const highestNumbered = numbered.sort(
       (left, right) =>
         right.number - left.number ||
         latestTime(right.season) - latestTime(left.season) ||
@@ -109,6 +114,36 @@ export function highestSeason(seasons) {
           String(left.season.seriesId),
         ),
     )[0].season;
+    const latestUnnumberedFinale = normalized
+      .filter(
+        (season) =>
+          !Number.isInteger(seasonNumber(season.title)) &&
+          hasSeriesFinaleMarker(season),
+      )
+      .sort(
+        (left, right) =>
+          latestTime(right) - latestTime(left) ||
+          String(right.seriesId).localeCompare(String(left.seriesId)),
+      )[0];
+    if (latestUnnumberedFinale) {
+      const numberedPublishedAt = publishedTime(highestNumbered);
+      const finalePublishedAt = publishedTime(latestUnnumberedFinale);
+      if (
+        Number.isFinite(finalePublishedAt) &&
+        (!Number.isFinite(numberedPublishedAt) ||
+          finalePublishedAt >= numberedPublishedAt)
+      ) {
+        return latestUnnumberedFinale;
+      }
+      if (
+        !Number.isFinite(finalePublishedAt) &&
+        !Number.isFinite(numberedPublishedAt) &&
+        latestTime(latestUnnumberedFinale) >= latestTime(highestNumbered)
+      ) {
+        return latestUnnumberedFinale;
+      }
+    }
+    return highestNumbered;
   }
 
   return [...normalized].sort(

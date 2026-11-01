@@ -114,14 +114,14 @@
             class="button button--quiet"
             type="button"
             id="open-settings"
-            aria-label="打开通知设置"
+            aria-label="打开设置"
             aria-haspopup="dialog"
-            title="通知设置"
+            title="设置"
           >
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
               <use href="#icon-settings"></use>
             </svg>
-            <span class="header-action__label">通知设置</span>
+            <span class="header-action__label">设置</span>
             <span class="notification-state" id="notification-state">未配置</span>
           </button>
         </div>
@@ -395,7 +395,7 @@
               ></ul>
             </div>
             <p class="field__help" id="share-help">
-              输入剧名搜索官方结果，也支持红果分享链接和纯数字剧集 ID。
+              输入剧名搜索官方结果；选择后按回车加入追更，也支持分享链接和纯数字剧集 ID。
             </p>
             <p class="field__feedback" id="share-feedback" aria-live="polite"></p>
           </div>
@@ -411,6 +411,17 @@
           </button>
           <div class="dialog__action-group add-dialog__action-group">
             <button
+              class="button button--warning"
+              type="button"
+              id="open-account-import"
+              aria-haspopup="dialog"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-user-round"></use>
+              </svg>
+              <span>从账号同步</span>
+            </button>
+            <button
               class="button button--secondary"
               type="button"
               id="open-screenshot-import"
@@ -421,7 +432,12 @@
               </svg>
               <span>截图导入</span>
             </button>
-            <button class="button button--primary" type="submit" id="add-submit">
+            <button
+              class="button button--primary"
+              type="submit"
+              id="add-submit"
+              hidden
+            >
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
                 <use href="#icon-plus"></use>
               </svg>
@@ -671,21 +687,28 @@
     </dialog>
 
     <dialog
-      class="dialog dialog--settings"
-      id="settings-dialog"
-      aria-labelledby="settings-title"
+      class="dialog dialog--account-import"
+      id="account-import-dialog"
+      aria-labelledby="account-import-title"
+      aria-describedby="account-import-description"
     >
-      <form class="dialog__panel" id="settings-form" novalidate>
+      <div class="dialog__panel">
         <div class="dialog__header">
           <div>
-            <p class="eyebrow">检查频率与通知渠道</p>
-            <h2 id="settings-title">通知设置</h2>
+            <p class="eyebrow">红果账号</p>
+            <h2 id="account-import-title">红果账号同步</h2>
+            <p
+              class="dialog__heading-description"
+              id="account-import-description"
+            >
+              首次合并账号与本地追更，之后双向同步收藏和预约变化。观看历史不会读取。
+            </p>
           </div>
           <button
             class="icon-button"
             type="button"
-            data-close-dialog="settings-dialog"
-            aria-label="关闭通知设置"
+            data-close-dialog="account-import-dialog"
+            aria-label="关闭账号同步"
           >
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
               <use href="#icon-close"></use>
@@ -693,230 +716,615 @@
           </button>
         </div>
 
-        <div class="dialog__body">
-          <div class="field">
-            <label for="check-cron">自动检查间隔（Cron）</label>
-            <input
-              class="field__input--mono"
-              id="check-cron"
-              name="checkCron"
-              type="text"
-              maxlength="120"
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-              enterkeyhint="done"
-              placeholder="11 0,6,10,12,18 * * *"
-              aria-describedby="check-cron-help settings-feedback"
-            >
-            <p class="field__help" id="check-cron-help">
-              标准 5 段 Cron，按 Asia/Shanghai 时区计算。例如
-              <code>*/30 * * * *</code> 每 30 分钟，
-              <code>0 * * * *</code> 每小时，
-              <code>0 8 * * *</code> 每天 08:00。
-            </p>
-          </div>
-
-          <div class="field">
-            <label for="stale-completion-days">无更新自动完结</label>
-            <div class="number-field">
-              <input
-                id="stale-completion-days"
-                name="staleCompletionDays"
-                type="number"
-                min="1"
-                max="3650"
-                step="1"
-                inputmode="numeric"
-                aria-describedby="stale-completion-help settings-feedback"
-              >
-              <span>天</span>
-            </div>
-            <p class="field__help" id="stale-completion-help">
-              默认 90 天。仅对更新中或状态未知的系列生效，按实际新季、新集时间计算，不按检查时间。
-            </p>
-          </div>
-
-          <div class="field">
-            <label for="episode-notification-window">加集提醒汇总</label>
-            <select
-              id="episode-notification-window"
-              name="episodeNotificationWindowMinutes"
-              aria-describedby="episode-notification-window-help settings-feedback"
-            >
-              <option value="0">立即通知</option>
-              <option value="60">1 小时</option>
-              <option value="120">2 小时</option>
-              <option value="360">6 小时</option>
-              <option value="720">12 小时</option>
-              <option value="1440">24 小时</option>
-            </select>
-            <p class="field__help" id="episode-notification-window-help">
-              批量或定时检查按此窗口合并加集，到期后所有待发系列汇总为一条；新季也随当次检查合并。手动检查单个系列会立即发送一条详情。
-            </p>
-          </div>
-
-          <fieldset class="notification-channel discovery-reminder-settings">
-            <legend>新内容持续提醒</legend>
-            <div class="discovery-reminder-settings__body">
-              <div class="field">
-                <div class="field__label-row">
-                  <label for="discovery-reminder-duration">
-                    持续提醒时长
-                  </label>
-                  <span
-                    class="channel-status"
-                    data-discovery-reminder-status
-                  >未启用</span>
-                </div>
-                <div class="number-field">
-                  <input
-                    id="discovery-reminder-duration"
-                    name="discoveryReminderDuration"
-                    type="number"
-                    min="0"
-                    max="43200"
-                    step="any"
-                    inputmode="numeric"
-                    aria-describedby="discovery-reminder-help settings-feedback"
-                  >
-                  <select
-                    id="discovery-reminder-unit"
-                    name="discoveryReminderUnit"
-                    aria-label="持续提醒时长单位"
-                  >
-                    <option value="minutes">分钟</option>
-                    <option value="hours">小时</option>
-                    <option value="days">天</option>
-                  </select>
-                </div>
-              </div>
-
-              <div class="field">
-                <label for="discovery-reminder-cron">提醒频率</label>
-                <input
-                  id="discovery-reminder-cron"
-                  name="discoveryReminderCron"
-                  type="text"
-                  autocomplete="off"
-                  autocapitalize="off"
-                  spellcheck="false"
-                  placeholder="0 */4 * * *"
-                  aria-describedby="discovery-reminder-help settings-feedback"
-                >
-              </div>
-
-              <p class="field__help" id="discovery-reminder-help">
-                0 关闭；Cron 使用 5 段格式，仅控制有效期内新季/新集的重复提醒，不改变自动检查频率。
+        <div
+          class="dialog__body account-import__body"
+          id="account-import-content"
+          aria-busy="false"
+        >
+          <div class="account-privacy-note">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-shield-check"></use>
+            </svg>
+            <div>
+              <strong>无需输入密码或 Cookie</strong>
+              <p>
+                使用红果官方扫码或短信验证码登录。登录凭据加密保存在本机
+                data 目录，前端和日志都不会读取。
               </p>
             </div>
-          </fieldset>
+          </div>
 
-          <fieldset
-            class="notification-channel proxy-settings"
-            data-proxy-settings
+          <section
+            class="account-login"
+            id="account-login-view"
+            aria-labelledby="account-login-title"
+            hidden
           >
-            <legend>发送代理</legend>
-            <div class="notification-channel__summary">
-              <div>
-                <p>仅为勾选的通知渠道启用 HTTP 或 HTTPS 代理。</p>
-                <span class="channel-status" data-proxy-status>未配置</span>
-              </div>
-              <label class="channel-toggle" for="proxy-enabled">
-                <input id="proxy-enabled" type="checkbox">
-                <span class="channel-toggle__track" aria-hidden="true"></span>
-                <span>启用</span>
-              </label>
+            <div
+              class="account-login-methods"
+              role="tablist"
+              aria-label="登录方式"
+            >
+              <button
+                class="account-login-method"
+                type="button"
+                role="tab"
+                id="account-login-tab-qr"
+                aria-selected="true"
+                aria-controls="account-login-panel-qr"
+                tabindex="0"
+                data-account-login-method="qr"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-scan-text"></use>
+                </svg>
+                <span>扫码登录</span>
+              </button>
+              <button
+                class="account-login-method"
+                type="button"
+                role="tab"
+                id="account-login-tab-sms"
+                aria-selected="false"
+                aria-controls="account-login-panel-sms"
+                tabindex="-1"
+                data-account-login-method="sms"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-message"></use>
+                </svg>
+                <span>验证码登录</span>
+              </button>
             </div>
-            <div class="notification-channel__config" data-proxy-config hidden>
-              <div class="field">
-                <label for="proxy-url">代理地址</label>
-                <div class="input-with-action">
-                  <input
-                    id="proxy-url"
-                    name="proxyUrl"
-                    type="password"
-                    autocomplete="new-password"
-                    spellcheck="false"
-                    placeholder="例如 http://127.0.0.1:7890"
-                    aria-describedby="proxy-help settings-feedback"
-                  >
-                  <button
-                    class="input-action"
-                    type="button"
-                    data-toggle-secret="proxy-url"
-                    aria-label="显示代理地址"
-                    aria-pressed="false"
-                  >
-                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                      <use href="#icon-eye"></use>
-                    </svg>
-                  </button>
+
+            <div
+              class="account-login-panel"
+              id="account-login-panel-qr"
+              role="tabpanel"
+              aria-labelledby="account-login-tab-qr"
+              data-account-login-panel="qr"
+            >
+              <div class="account-login__layout">
+                <div class="account-login__qr-column">
+                  <div class="account-qr-frame">
+                    <img
+                      id="account-qr-image"
+                      alt="红果官方登录二维码"
+                      width="220"
+                      height="220"
+                      hidden
+                    >
+                    <div
+                      class="account-qr-placeholder"
+                      id="account-qr-placeholder"
+                    >
+                      <span class="spinner account-qr-spinner"></span>
+                      <span
+                        id="account-qr-placeholder-text"
+                        role="status"
+                        aria-live="polite"
+                      >
+                        正在生成二维码…
+                      </span>
+                      <button
+                        class="button button--secondary account-qr-retry"
+                        type="button"
+                        id="account-login-retry"
+                        hidden
+                      >
+                        <svg
+                          class="icon"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                        >
+                          <use href="#icon-refresh"></use>
+                        </svg>
+                        <span>重新生成</span>
+                      </button>
+                    </div>
+                  </div>
+                  <p class="account-qr-expiry" id="account-qr-expiry"></p>
                 </div>
-                <p class="field__help" id="proxy-help">
-                  支持 http:// 和 https:// 代理，可包含用户名和密码；留空会保留已保存的地址。
+                <div class="account-login__copy">
+                  <p class="eyebrow">扫码登录</p>
+                  <h3 id="account-login-title">使用红果短剧 App 登录</h3>
+                  <ol class="account-login__steps">
+                    <li>打开红果短剧 App。</li>
+                    <li>进入“我的”，点击右上角扫一扫。</li>
+                    <li>扫描二维码，并在手机上确认登录。</li>
+                  </ol>
+                  <p
+                    class="account-login__hint"
+                    id="account-login-status"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    正在准备登录二维码…
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div
+              class="account-login-panel"
+              id="account-login-panel-sms"
+              role="tabpanel"
+              aria-labelledby="account-login-tab-sms"
+              data-account-login-panel="sms"
+              hidden
+            >
+              <form
+                class="account-sms-login"
+                id="account-sms-form"
+                novalidate
+              >
+                <div class="account-sms-login__heading">
+                  <div>
+                    <p class="eyebrow">短信验证码</p>
+                    <h3>使用手机号登录</h3>
+                  </div>
+                  <span class="account-sms-login__shield" aria-hidden="true">
+                    <svg class="icon" viewBox="0 0 24 24">
+                      <use href="#icon-shield-check"></use>
+                    </svg>
+                  </span>
+                </div>
+
+                <div class="field">
+                  <label for="account-sms-mobile">手机号</label>
+                  <div class="account-sms-login__mobile">
+                    <select
+                      id="account-sms-country-code"
+                      name="countryCode"
+                      aria-label="手机号区号"
+                    >
+                      <option value="86" selected>+86</option>
+                      <option value="852">+852</option>
+                      <option value="853">+853</option>
+                      <option value="886">+886</option>
+                      <option value="1">+1</option>
+                      <option value="44">+44</option>
+                      <option value="81">+81</option>
+                      <option value="82">+82</option>
+                      <option value="65">+65</option>
+                    </select>
+                    <input
+                      id="account-sms-mobile"
+                      name="mobile"
+                      type="tel"
+                      autocomplete="tel-national"
+                      inputmode="tel"
+                      placeholder="请输入手机号"
+                      aria-describedby="account-sms-mobile-help account-sms-login-status"
+                      required
+                    >
+                  </div>
+                  <p class="field__help" id="account-sms-mobile-help">
+                    仅用于本次登录接收验证码，不会保存手机号。
+                  </p>
+                </div>
+
+                <div class="field">
+                  <label for="account-sms-code">短信验证码</label>
+                  <div class="account-sms-login__code">
+                    <input
+                      id="account-sms-code"
+                      name="code"
+                      type="text"
+                      autocomplete="one-time-code"
+                      inputmode="numeric"
+                      pattern="[0-9]*"
+                      maxlength="8"
+                      placeholder="请输入验证码"
+                      aria-describedby="account-sms-code-help account-sms-login-status"
+                      required
+                    >
+                    <button
+                      class="button button--secondary account-sms-login__send"
+                      type="button"
+                      id="account-sms-send-code"
+                    >
+                      <span data-button-label>发送验证码</span>
+                    </button>
+                  </div>
+                  <p class="field__help" id="account-sms-code-help">
+                    输入红果发送的 4 至 8 位数字验证码。
+                  </p>
+                </div>
+
+                <p
+                  class="account-login__hint account-sms-login__hint"
+                  id="account-sms-login-status"
+                  role="status"
+                  aria-live="polite"
+                >
+                  输入手机号后获取验证码。
                 </p>
+
+                <button
+                  class="button button--secondary account-sms-login__fallback"
+                  type="button"
+                  id="account-sms-use-qr"
+                  hidden
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-scan-text"></use>
+                  </svg>
+                  <span>改用扫码登录</span>
+                </button>
+
+                <button
+                  class="button button--primary account-sms-login__submit"
+                  type="submit"
+                  id="account-sms-submit"
+                  disabled
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-log-in"></use>
+                  </svg>
+                  <span data-button-label>登录红果账号</span>
+                </button>
+              </form>
+            </div>
+          </section>
+
+          <section
+            class="account-profile-view"
+            id="account-profile-view"
+            aria-labelledby="account-profile-title"
+            hidden
+          >
+            <div class="account-profile">
+              <span class="account-profile__avatar" aria-hidden="true">
+                <svg class="icon" viewBox="0 0 24 24">
+                  <use href="#icon-user-round"></use>
+                </svg>
+              </span>
+              <div class="account-profile__identity">
+                <p id="account-profile-title">已登录红果账号</p>
+                <strong id="account-profile-name">红果用户</strong>
+                <span id="account-snapshot-time">尚未读取账号内容</span>
+              </div>
+              <div class="account-profile__actions">
+                <button
+                  class="button button--quiet"
+                  type="button"
+                  id="account-refresh"
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-refresh"></use>
+                  </svg>
+                  <span data-button-label>立即同步</span>
+                </button>
+                <button
+                  class="button button--quiet account-logout-button"
+                  type="button"
+                  id="account-logout"
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-log-out"></use>
+                  </svg>
+                  <span data-button-label>退出登录</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="account-sync-summary" aria-live="polite">
+              <div class="account-sync-summary__item">
+                <span>收藏</span>
+                <strong id="account-favorite-count">—</strong>
+              </div>
+              <div class="account-sync-summary__item">
+                <span>预约</span>
+                <strong id="account-reservation-count">—</strong>
+              </div>
+              <div class="account-sync-summary__item">
+                <span>上次同步</span>
+                <strong id="account-sync-last-time">尚未同步</strong>
+              </div>
+            </div>
+
+            <div class="account-sync-state" id="account-sync-state">
+              <span class="account-sync-state__icon" aria-hidden="true">
+                <svg class="icon" viewBox="0 0 24 24">
+                  <use href="#icon-refresh"></use>
+                </svg>
+              </span>
+              <div>
+                <strong>双向同步</strong>
+                <p id="account-sync-message">
+                  首次同步会合并账号与本地记录；之后账号或本地新增、删除都会同步到另一边。
+                </p>
+              </div>
+            </div>
+
+            <div class="account-sync-details">
+              <div class="account-sync-details__toolbar">
+                <div>
+                  <strong>同步明细</strong>
+                  <p>逐部显示本次导入、写入账号和两边移除结果。</p>
+                </div>
+                <a
+                  class="account-sync-details__log-link"
+                  href="/logs#system"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-history"></use>
+                  </svg>
+                  <span>系统日志</span>
+                </a>
               </div>
               <div
-                class="proxy-channel-field"
-                role="group"
-                aria-labelledby="proxy-channel-label"
-                aria-describedby="proxy-channel-help settings-feedback"
+                class="account-sync-details__content"
+                id="account-sync-details"
+                aria-live="polite"
+                tabindex="-1"
               >
-                <p id="proxy-channel-label">走代理的通知渠道</p>
-                <div class="proxy-channel-options">
-                  <label class="check-field" for="proxy-channel-bark">
-                    <input
-                      id="proxy-channel-bark"
-                      type="checkbox"
-                      data-proxy-channel="bark"
-                    >
-                    <span>Bark</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-ntfy">
-                    <input
-                      id="proxy-channel-ntfy"
-                      type="checkbox"
-                      data-proxy-channel="ntfy"
-                    >
-                    <span>ntfy</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-telegram">
-                    <input
-                      id="proxy-channel-telegram"
-                      type="checkbox"
-                      data-proxy-channel="telegram"
-                    >
-                    <span>Telegram</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-wecom">
-                    <input
-                      id="proxy-channel-wecom"
-                      type="checkbox"
-                      data-proxy-channel="wecom"
-                    >
-                    <span>企业微信</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-dingtalk">
-                    <input
-                      id="proxy-channel-dingtalk"
-                      type="checkbox"
-                      data-proxy-channel="dingtalk"
-                    >
-                    <span>钉钉</span>
-                  </label>
+                <div class="account-sync-details__empty">
+                  <strong>还没有同步记录</strong>
+                  <p>完成一次账号同步后，这里会逐部显示导入和写入结果。</p>
                 </div>
-                <p class="field__help" id="proxy-channel-help">
-                  只勾选网络受限的渠道；未勾选的渠道继续直连。
+              </div>
+            </div>
+          </section>
+
+          <p
+            class="field__feedback account-import-feedback"
+            id="account-import-feedback"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </div>
+
+        <div class="dialog__actions dialog__actions--split">
+          <button
+            class="button button--quiet"
+            type="button"
+            data-close-dialog="account-import-dialog"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog
+      class="dialog dialog--settings"
+      id="settings-dialog"
+      aria-labelledby="settings-title"
+    >
+      <form class="dialog__panel" id="settings-form" novalidate>
+        <div class="dialog__header">
+          <div>
+            <p class="eyebrow">检查计划、通知与消息格式</p>
+            <h2 id="settings-title">设置</h2>
+          </div>
+          <button
+            class="icon-button"
+            type="button"
+            data-close-dialog="settings-dialog"
+            aria-label="关闭设置"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-close"></use>
+            </svg>
+          </button>
+        </div>
+
+        <div
+          class="settings-tabs"
+          role="tablist"
+          aria-label="设置分类"
+        >
+          <button
+            class="settings-tab"
+            id="settings-tab-account"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="settings-panel-account"
+            tabindex="0"
+            data-settings-tab="account"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-user-round"></use>
+            </svg>
+            <span>账号同步</span>
+          </button>
+          <button
+            class="settings-tab"
+            id="settings-tab-general"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="settings-panel-general"
+            tabindex="-1"
+            data-settings-tab="general"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-settings"></use>
+            </svg>
+            <span>常规设置</span>
+          </button>
+          <button
+            class="settings-tab"
+            id="settings-tab-notification"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="settings-panel-notification"
+            tabindex="-1"
+            data-settings-tab="notification"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-bell"></use>
+            </svg>
+            <span>通知设置</span>
+          </button>
+          <button
+            class="settings-tab"
+            id="settings-tab-templates"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="settings-panel-templates"
+            tabindex="-1"
+            data-settings-tab="templates"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-layers"></use>
+            </svg>
+            <span>消息模板</span>
+          </button>
+        </div>
+
+        <div class="dialog__body">
+          <p
+            class="field__feedback settings-feedback"
+            id="settings-feedback"
+            role="status"
+            aria-live="polite"
+          ></p>
+
+          <section
+            class="settings-panel"
+            id="settings-panel-general"
+            role="tabpanel"
+            aria-labelledby="settings-tab-general"
+            tabindex="0"
+            data-settings-panel="general"
+            hidden
+          >
+            <div class="field">
+              <label for="check-cron">自动检查间隔（Cron）</label>
+              <input
+                class="field__input--mono"
+                id="check-cron"
+                name="checkCron"
+                type="text"
+                maxlength="120"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                enterkeyhint="done"
+                placeholder="11 0,6,10,12,18 * * *"
+                aria-describedby="check-cron-help settings-feedback"
+              >
+              <p class="field__help" id="check-cron-help">
+                标准 5 段 Cron，按 Asia/Shanghai 时区计算。例如
+                <code>*/30 * * * *</code> 每 30 分钟，
+                <code>0 * * * *</code> 每小时，
+                <code>0 8 * * *</code> 每天 08:00。
+              </p>
+            </div>
+
+            <div class="field">
+              <label for="stale-completion-days">无更新自动停更</label>
+              <div class="number-field settings-number-field">
+                <input
+                  id="stale-completion-days"
+                  name="staleCompletionDays"
+                  type="number"
+                  min="1"
+                  max="3650"
+                  step="1"
+                  inputmode="numeric"
+                  aria-describedby="stale-completion-help settings-feedback"
+                >
+                <span>天</span>
+              </div>
+              <p class="field__help" id="stale-completion-help">
+                默认 90 天。按实际新集、新季时间计算；超过期限仍无新内容时转为停更，停更不代表官方完结，系统每天会自动核验一次。
+              </p>
+            </div>
+
+            <div class="field">
+              <label for="episode-notification-window">加集提醒汇总</label>
+              <select
+                id="episode-notification-window"
+                name="episodeNotificationWindowMinutes"
+                aria-describedby="episode-notification-window-help settings-feedback"
+              >
+                <option value="0">立即通知</option>
+                <option value="60">1 小时</option>
+                <option value="120">2 小时</option>
+                <option value="360">6 小时</option>
+                <option value="720">12 小时</option>
+                <option value="1440">24 小时</option>
+              </select>
+              <p class="field__help" id="episode-notification-window-help">
+                批量或定时检查按此窗口合并加集，到期后所有待发系列汇总为一条；新季也随当次检查合并。手动检查单个系列会立即发送一条详情。
+              </p>
+            </div>
+
+            <fieldset class="notification-channel discovery-reminder-settings">
+              <legend>新内容持续提醒</legend>
+              <div class="discovery-reminder-settings__body">
+                <div class="field">
+                  <div class="field__label-row">
+                    <label for="discovery-reminder-duration">
+                      持续提醒时长
+                    </label>
+                    <span
+                      class="channel-status"
+                      data-discovery-reminder-status
+                    >未启用</span>
+                  </div>
+                  <div class="number-field settings-number-field">
+                    <input
+                      id="discovery-reminder-duration"
+                      name="discoveryReminderDuration"
+                      type="number"
+                      min="0"
+                      max="43200"
+                      step="any"
+                      inputmode="numeric"
+                      aria-describedby="discovery-reminder-help settings-feedback"
+                    >
+                    <select
+                      id="discovery-reminder-unit"
+                      name="discoveryReminderUnit"
+                      aria-label="持续提醒时长单位"
+                    >
+                      <option value="minutes">分钟</option>
+                      <option value="hours">小时</option>
+                      <option value="days">天</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="discovery-reminder-cron">提醒频率</label>
+                  <input
+                    id="discovery-reminder-cron"
+                    name="discoveryReminderCron"
+                    type="text"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    placeholder="0 */4 * * *"
+                    aria-describedby="discovery-reminder-help settings-feedback"
+                  >
+                </div>
+
+                <p class="field__help" id="discovery-reminder-help">
+                  0 关闭；Cron 使用 5 段格式，仅控制有效期内新季/新集的重复提醒，不改变自动检查频率。
                 </p>
               </div>
-              <label class="check-field channel-clear" for="clear-proxy">
-                <input id="clear-proxy" type="checkbox">
-                <span>清除已保存的代理配置</span>
-              </label>
-            </div>
-          </fieldset>
+            </fieldset>
+          </section>
 
+          <section
+            class="settings-panel"
+            id="settings-panel-notification"
+            role="tabpanel"
+            aria-labelledby="settings-tab-notification"
+            tabindex="0"
+            data-settings-panel="notification"
+            hidden
+          >
           <div class="notification-settings">
             <p class="notification-settings__label">通知渠道</p>
             <p class="notification-settings__help">
@@ -1253,12 +1661,643 @@
             </fieldset>
           </div>
 
-          <p
-            class="field__feedback settings-feedback"
-            id="settings-feedback"
-            role="status"
-            aria-live="polite"
-          ></p>
+          <fieldset
+            class="notification-channel proxy-settings"
+            data-proxy-settings
+          >
+            <legend>发送代理</legend>
+            <div class="notification-channel__summary">
+              <div>
+                <p>仅为勾选的通知渠道启用 HTTP 或 HTTPS 代理。</p>
+                <span class="channel-status" data-proxy-status>未配置</span>
+              </div>
+              <label class="channel-toggle" for="proxy-enabled">
+                <input id="proxy-enabled" type="checkbox">
+                <span class="channel-toggle__track" aria-hidden="true"></span>
+                <span>启用</span>
+              </label>
+            </div>
+            <div class="notification-channel__config" data-proxy-config hidden>
+              <div class="field">
+                <label for="proxy-url">代理地址</label>
+                <div class="input-with-action">
+                  <input
+                    id="proxy-url"
+                    name="proxyUrl"
+                    type="password"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                    placeholder="例如 http://127.0.0.1:7890"
+                    aria-describedby="proxy-help settings-feedback"
+                  >
+                  <button
+                    class="input-action"
+                    type="button"
+                    data-toggle-secret="proxy-url"
+                    aria-label="显示代理地址"
+                    aria-pressed="false"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-eye"></use>
+                    </svg>
+                  </button>
+                </div>
+                <p class="field__help" id="proxy-help">
+                  支持 http:// 和 https:// 代理，可包含用户名和密码；留空会保留已保存的地址。
+                </p>
+              </div>
+              <div
+                class="proxy-channel-field"
+                role="group"
+                aria-labelledby="proxy-channel-label"
+                aria-describedby="proxy-channel-help settings-feedback"
+              >
+                <p id="proxy-channel-label">走代理的通知渠道</p>
+                <div class="proxy-channel-options">
+                  <label class="check-field" for="proxy-channel-bark">
+                    <input
+                      id="proxy-channel-bark"
+                      type="checkbox"
+                      data-proxy-channel="bark"
+                    >
+                    <span>Bark</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-ntfy">
+                    <input
+                      id="proxy-channel-ntfy"
+                      type="checkbox"
+                      data-proxy-channel="ntfy"
+                    >
+                    <span>ntfy</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-telegram">
+                    <input
+                      id="proxy-channel-telegram"
+                      type="checkbox"
+                      data-proxy-channel="telegram"
+                    >
+                    <span>Telegram</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-wecom">
+                    <input
+                      id="proxy-channel-wecom"
+                      type="checkbox"
+                      data-proxy-channel="wecom"
+                    >
+                    <span>企业微信</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-dingtalk">
+                    <input
+                      id="proxy-channel-dingtalk"
+                      type="checkbox"
+                      data-proxy-channel="dingtalk"
+                    >
+                    <span>钉钉</span>
+                  </label>
+                </div>
+                <p class="field__help" id="proxy-channel-help">
+                  只勾选网络受限的渠道；未勾选的渠道继续直连。
+                </p>
+              </div>
+              <label class="check-field channel-clear" for="clear-proxy">
+                <input id="clear-proxy" type="checkbox">
+                <span>清除已保存的代理配置</span>
+              </label>
+            </div>
+          </fieldset>
+
+          </section>
+
+          <section
+            class="settings-panel"
+            id="settings-panel-account"
+            role="tabpanel"
+            aria-labelledby="settings-tab-account"
+            tabindex="0"
+            data-settings-panel="account"
+          >
+            <div class="settings-account-card">
+              <div class="settings-account-card__heading">
+                <h3>红果账号</h3>
+                <p id="settings-account-description">
+                  登录后可读取收藏和预约，并与“我的追更”双向同步。
+                </p>
+              </div>
+              <div class="account-profile">
+                <span class="account-profile__avatar" aria-hidden="true">
+                  <svg class="icon" viewBox="0 0 24 24">
+                    <use href="#icon-user-round"></use>
+                  </svg>
+                </span>
+                <div class="account-profile__identity">
+                  <p>登录状态</p>
+                  <strong id="settings-account-name">未登录</strong>
+                  <span id="settings-account-snapshot-time">
+                    登录后显示账号内容更新时间
+                  </span>
+                </div>
+                <div class="account-profile__actions">
+                  <button
+                    class="button button--secondary"
+                    type="button"
+                    id="settings-account-login"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-log-in"></use>
+                    </svg>
+                    <span data-button-label>账号登录</span>
+                  </button>
+                  <button
+                    class="button button--quiet"
+                    type="button"
+                    id="settings-account-sync"
+                    hidden
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-refresh"></use>
+                    </svg>
+                    <span data-button-label>立即同步</span>
+                  </button>
+                  <button
+                    class="button button--quiet settings-account-card__logout"
+                    type="button"
+                    id="settings-account-logout"
+                    hidden
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-log-out"></use>
+                    </svg>
+                    <span data-button-label>退出登录</span>
+                  </button>
+                </div>
+              </div>
+              <div
+                class="account-sync-summary settings-account-card__summary"
+                id="settings-account-summary"
+                aria-live="polite"
+                hidden
+              >
+                <div class="account-sync-summary__item">
+                  <span>收藏</span>
+                  <strong id="settings-account-favorite-count">—</strong>
+                </div>
+                <div class="account-sync-summary__item">
+                  <span>预约</span>
+                  <strong id="settings-account-reservation-count">—</strong>
+                </div>
+                <div class="account-sync-summary__item">
+                  <span>上次同步</span>
+                  <strong id="settings-account-last-time">尚未同步</strong>
+                </div>
+              </div>
+              <div
+                class="account-sync-state settings-account-card__status"
+                id="settings-account-status"
+                data-state="signed-out"
+              >
+                <span class="account-sync-state__icon" aria-hidden="true">
+                  <svg class="icon" viewBox="0 0 24 24">
+                    <use href="#icon-refresh"></use>
+                  </svg>
+                </span>
+                <div>
+                  <strong id="settings-account-status-title">账号同步</strong>
+                  <p
+                    class="settings-account-card__status-summary"
+                    id="settings-account-status-summary"
+                    role="status"
+                    aria-live="polite"
+                  >尚未登录红果账号。</p>
+                </div>
+              </div>
+
+              <div
+                class="account-sync-details settings-account-card__sync-details"
+                id="settings-account-sync-details-panel"
+                hidden
+              >
+                <div class="account-sync-details__toolbar">
+                  <div>
+                    <strong>同步明细</strong>
+                    <p>逐部显示本次导入、写入账号和两边移除结果。</p>
+                  </div>
+                  <a
+                    class="account-sync-details__log-link"
+                    href="/logs#system"
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-history"></use>
+                    </svg>
+                    <span>系统日志</span>
+                  </a>
+                </div>
+                <div
+                  class="account-sync-details__content"
+                  id="settings-account-sync-details"
+                  aria-live="polite"
+                  tabindex="-1"
+                >
+                  <div class="account-sync-details__empty">
+                    <strong>还没有同步记录</strong>
+                    <p>完成一次账号同步后，这里会逐部显示导入和写入结果。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="account-sync-cron">自动同步计划（Cron）</label>
+              <input
+                class="field__input--mono"
+                id="account-sync-cron"
+                name="accountSyncCron"
+                type="text"
+                maxlength="120"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                enterkeyhint="done"
+                placeholder="0 3 * * *"
+                aria-describedby="account-sync-cron-help settings-feedback"
+              >
+              <p class="field__help" id="account-sync-cron-help">
+                标准 5 段 Cron，按 Asia/Shanghai 时区计算。默认每天 03:00
+                自动同步账号收藏和预约。
+              </p>
+            </div>
+
+            <div class="account-sync-settings-note">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-shield-check"></use>
+              </svg>
+              <p>
+                登录凭据只保存在本机 data 目录。首次同步会合并账号与本地追更，之后账号或本地新增、删除记录都会双向同步；删除追更时会移除对应收藏和已有预约。
+              </p>
+            </div>
+          </section>
+
+          <section
+            class="settings-panel notification-template-settings"
+            id="settings-panel-templates"
+            role="tabpanel"
+            aria-labelledby="settings-tab-templates"
+            tabindex="0"
+            data-settings-panel="templates"
+            hidden
+          >
+            <div class="notification-template-settings__heading">
+              <div>
+                <h3 id="notification-template-settings-title">通知模板</h3>
+                <p>
+                  留空的标题或正文会使用系统内置内容。每类消息可单独设置。
+                </p>
+              </div>
+            </div>
+
+            <details
+              class="template-editor"
+              data-notification-template="detailed"
+            >
+              <summary>
+                <span class="template-editor__summary-copy">
+                  <span class="template-editor__title">单系列详情</span>
+                  <span class="template-editor__description">
+                    手动检查单个系列时使用
+                  </span>
+                </span>
+                <span class="template-editor__summary-action">
+                  <span class="template-editor__state" data-template-state>
+                    内置默认
+                  </span>
+                  <svg
+                    class="icon template-editor__chevron"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <use href="#icon-chevron-down"></use>
+                  </svg>
+                </span>
+              </summary>
+              <div class="template-editor__body">
+                <div class="field">
+                  <label for="template-detailed-title">标题</label>
+                  <input
+                    id="template-detailed-title"
+                    name="notificationTemplateDetailedTitle"
+                    type="text"
+                    maxlength="80"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="留空使用内置标题"
+                    data-template-field="title"
+                  >
+                </div>
+
+                <div class="template-variable-field">
+                  <p>可用变量</p>
+                  <p class="template-variable-help">
+                    先点选标题或正文，再插入变量。
+                  </p>
+                  <div class="template-variable-list">
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="appName"
+                      aria-label="插入变量 {appName}"
+                    >{appName}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="seriesTitle"
+                      aria-label="插入变量 {seriesTitle}"
+                    >{seriesTitle}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="checkTime"
+                      aria-label="插入变量 {checkTime}"
+                    >{checkTime}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="updates"
+                      aria-label="插入变量 {updates}"
+                    >{updates}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="seasonCount"
+                      aria-label="插入变量 {seasonCount}"
+                    >{seasonCount}</button>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="template-detailed-body">正文</label>
+                  <textarea
+                    id="template-detailed-body"
+                    name="notificationTemplateDetailedBody"
+                    rows="5"
+                    maxlength="1200"
+                    spellcheck="false"
+                    placeholder="留空使用系统自动生成的正文"
+                    data-template-field="body"
+                  ></textarea>
+                </div>
+
+                <div class="template-preview">
+                  <p class="template-preview__label">预览</p>
+                  <p
+                    class="template-preview__title"
+                    data-template-preview-title
+                  ></p>
+                  <p
+                    class="template-preview__body"
+                    data-template-preview-body
+                  ></p>
+                </div>
+
+                <div class="template-editor__actions">
+                  <button
+                    class="text-button template-editor__restore"
+                    type="button"
+                    data-restore-template
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-refresh"></use>
+                    </svg>
+                    恢复内置内容
+                  </button>
+                </div>
+              </div>
+            </details>
+
+            <details
+              class="template-editor"
+              data-notification-template="batch"
+            >
+              <summary>
+                <span class="template-editor__summary-copy">
+                  <span class="template-editor__title">批量汇总</span>
+                  <span class="template-editor__description">
+                    定时检查或延迟汇总时使用
+                  </span>
+                </span>
+                <span class="template-editor__summary-action">
+                  <span class="template-editor__state" data-template-state>
+                    内置默认
+                  </span>
+                  <svg
+                    class="icon template-editor__chevron"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <use href="#icon-chevron-down"></use>
+                  </svg>
+                </span>
+              </summary>
+              <div class="template-editor__body">
+                <div class="field">
+                  <label for="template-batch-title">标题</label>
+                  <input
+                    id="template-batch-title"
+                    name="notificationTemplateBatchTitle"
+                    type="text"
+                    maxlength="80"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="留空使用内置标题"
+                    data-template-field="title"
+                  >
+                </div>
+
+                <div class="template-variable-field">
+                  <p>可用变量</p>
+                  <p class="template-variable-help">
+                    先点选标题或正文，再插入变量。
+                  </p>
+                  <div class="template-variable-list">
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="appName"
+                      aria-label="插入变量 {appName}"
+                    >{appName}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="checkTime"
+                      aria-label="插入变量 {checkTime}"
+                    >{checkTime}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="updateCount"
+                      aria-label="插入变量 {updateCount}"
+                    >{updateCount}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="updates"
+                      aria-label="插入变量 {updates}"
+                    >{updates}</button>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="template-batch-body">正文</label>
+                  <textarea
+                    id="template-batch-body"
+                    name="notificationTemplateBatchBody"
+                    rows="5"
+                    maxlength="1200"
+                    spellcheck="false"
+                    placeholder="留空使用系统自动生成的正文"
+                    data-template-field="body"
+                  ></textarea>
+                </div>
+
+                <div class="template-preview">
+                  <p class="template-preview__label">预览</p>
+                  <p
+                    class="template-preview__title"
+                    data-template-preview-title
+                  ></p>
+                  <p
+                    class="template-preview__body"
+                    data-template-preview-body
+                  ></p>
+                </div>
+
+                <div class="template-editor__actions">
+                  <button
+                    class="text-button template-editor__restore"
+                    type="button"
+                    data-restore-template
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-refresh"></use>
+                    </svg>
+                    恢复内置内容
+                  </button>
+                </div>
+              </div>
+            </details>
+
+            <details
+              class="template-editor"
+              data-notification-template="reminder"
+            >
+              <summary>
+                <span class="template-editor__summary-copy">
+                  <span class="template-editor__title">持续提醒</span>
+                  <span class="template-editor__description">
+                    持续提醒有效期内的重复消息使用
+                  </span>
+                </span>
+                <span class="template-editor__summary-action">
+                  <span class="template-editor__state" data-template-state>
+                    内置默认
+                  </span>
+                  <svg
+                    class="icon template-editor__chevron"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <use href="#icon-chevron-down"></use>
+                  </svg>
+                </span>
+              </summary>
+              <div class="template-editor__body">
+                <div class="field">
+                  <label for="template-reminder-title">标题</label>
+                  <input
+                    id="template-reminder-title"
+                    name="notificationTemplateReminderTitle"
+                    type="text"
+                    maxlength="80"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="留空使用内置标题"
+                    data-template-field="title"
+                  >
+                </div>
+
+                <div class="template-variable-field">
+                  <p>可用变量</p>
+                  <p class="template-variable-help">
+                    先点选标题或正文，再插入变量。
+                  </p>
+                  <div class="template-variable-list">
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="appName"
+                      aria-label="插入变量 {appName}"
+                    >{appName}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="reminderTime"
+                      aria-label="插入变量 {reminderTime}"
+                    >{reminderTime}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="updateCount"
+                      aria-label="插入变量 {updateCount}"
+                    >{updateCount}</button>
+                    <button
+                      class="template-variable"
+                      type="button"
+                      data-template-variable="updates"
+                      aria-label="插入变量 {updates}"
+                    >{updates}</button>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="template-reminder-body">正文</label>
+                  <textarea
+                    id="template-reminder-body"
+                    name="notificationTemplateReminderBody"
+                    rows="5"
+                    maxlength="1200"
+                    spellcheck="false"
+                    placeholder="留空使用系统自动生成的正文"
+                    data-template-field="body"
+                  ></textarea>
+                </div>
+
+                <div class="template-preview">
+                  <p class="template-preview__label">预览</p>
+                  <p
+                    class="template-preview__title"
+                    data-template-preview-title
+                  ></p>
+                  <p
+                    class="template-preview__body"
+                    data-template-preview-body
+                  ></p>
+                </div>
+
+                <div class="template-editor__actions">
+                  <button
+                    class="text-button template-editor__restore"
+                    type="button"
+                    data-restore-template
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-refresh"></use>
+                    </svg>
+                    恢复内置内容
+                  </button>
+                </div>
+              </div>
+            </details>
+          </section>
         </div>
 
         <div class="dialog__actions dialog__actions--split">
@@ -1266,6 +2305,7 @@
             class="button button--quiet"
             type="button"
             id="test-notifications"
+            hidden
           >
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
               <use href="#icon-bell"></use>
@@ -1281,7 +2321,7 @@
               取消
             </button>
             <button class="button button--primary" type="submit" id="save-settings">
-              保存设置
+              <span data-save-settings-label>保存常规设置</span>
             </button>
           </div>
         </div>
@@ -1428,13 +2468,13 @@
               <span class="status-choice__copy">
                 <span class="status-choice__label">状态未知</span>
                 <span class="status-choice__description">
-                  继续检查，并按无更新期限自动完结。
+                  继续检查，并按无更新期限自动停更。
                 </span>
               </span>
             </label>
           </fieldset>
           <p class="field__help">
-            “更新中”和“状态未知”会继续检查；超过设置的无更新期限后，系统会自动转为已完结。
+            “更新中”和“状态未知”会继续检查；超过设置的无更新期限后会自动转为停更。停更不代表官方完结，发现新内容后会自动恢复。
           </p>
           <p
             class="field__feedback"
@@ -1467,7 +2507,7 @@
         <div class="dialog__header">
           <div>
             <p class="eyebrow">删除追更</p>
-            <h2 id="delete-title">停止追更这部剧？</h2>
+            <h2 id="delete-title">删除这条追更？</h2>
           </div>
           <button
             class="icon-button"
@@ -1509,11 +2549,46 @@
       <symbol id="icon-play" viewBox="0 0 24 24">
         <path d="m8 5 11 7-11 7Z"></path>
       </symbol>
+      <symbol id="icon-pause" viewBox="0 0 24 24">
+        <path d="M8 5v14M16 5v14"></path>
+      </symbol>
       <symbol id="icon-image-plus" viewBox="0 0 24 24">
         <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"></path>
         <path d="m21 15-5-5L5 21"></path>
         <circle cx="9" cy="9" r="2"></circle>
         <path d="M19 2v6M16 5h6"></path>
+      </symbol>
+      <symbol id="icon-user-round" viewBox="0 0 24 24">
+        <circle cx="12" cy="8" r="4"></circle>
+        <path d="M4.5 21a7.5 7.5 0 0 1 15 0"></path>
+      </symbol>
+      <symbol id="icon-bookmark" viewBox="0 0 24 24">
+        <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"></path>
+      </symbol>
+      <symbol id="icon-history" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
+        <path d="M3 3v5h5M12 7v5l3 2"></path>
+      </symbol>
+      <symbol id="icon-calendar-clock" viewBox="0 0 24 24">
+        <path d="M21 10v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"></path>
+        <path d="M7 2v4M12 2v4M3 9h11"></path>
+        <circle cx="18" cy="6" r="4"></circle>
+        <path d="M18 4v2l1 1"></path>
+      </symbol>
+      <symbol id="icon-log-out" viewBox="0 0 24 24">
+        <path d="M10 17l5-5-5-5M15 12H3"></path>
+        <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"></path>
+      </symbol>
+      <symbol id="icon-log-in" viewBox="0 0 24 24">
+        <path d="M14 17l5-5-5-5M19 12H7"></path>
+        <path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5"></path>
+      </symbol>
+      <symbol id="icon-message" viewBox="0 0 24 24">
+        <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"></path>
+      </symbol>
+      <symbol id="icon-shield-check" viewBox="0 0 24 24">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path>
+        <path d="m9 12 2 2 4-4"></path>
       </symbol>
       <symbol id="icon-scan-text" viewBox="0 0 24 24">
         <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"></path>
@@ -1540,6 +2615,9 @@
       </symbol>
       <symbol id="icon-plus" viewBox="0 0 24 24">
         <path d="M12 5v14M5 12h14"></path>
+      </symbol>
+      <symbol id="icon-minus" viewBox="0 0 24 24">
+        <path d="M5 12h14"></path>
       </symbol>
       <symbol id="icon-close" viewBox="0 0 24 24">
         <path d="m18 6-12 12M6 6l12 12"></path>

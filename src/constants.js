@@ -19,6 +19,7 @@ export const EPISODE_NOTIFICATION_WINDOW_OPTIONS = Object.freeze([
 export const DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES = 2 * 24 * 60;
 export const MAX_DISCOVERY_REMINDER_DURATION_MINUTES = 43_200;
 export const DEFAULT_DISCOVERY_REMINDER_CRON = "0 */4 * * *";
+export const DEFAULT_ACCOUNT_SYNC_CRON = "0 3 * * *";
 export const DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const CANDIDATE_RECHECK_MS = 24 * 60 * 60 * 1000;
 
@@ -40,6 +41,7 @@ export const ALLOWED_SHARE_HOST_SUFFIXES = [
 export const SERIES_STATUS = Object.freeze({
   UPDATING: "updating",
   COMPLETED: "completed",
+  INACTIVE: "inactive",
   UNKNOWN: "unknown",
 });
 

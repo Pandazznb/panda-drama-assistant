@@ -1,25 +1,35 @@
 (() => {
   const APP_TIME_ZONE = "Asia/Shanghai";
   const PAGE_SIZE = 200;
+  const VIEWS = new Set(["events", "system"]);
   const elements = {
+    tabs: [...document.querySelectorAll("[data-log-view]")],
+    listTitle: document.querySelector("#logs-list-title"),
     total: document.querySelector("#logs-total"),
     fileCount: document.querySelector("#logs-file-count"),
     newest: document.querySelector("#logs-newest"),
     storage: document.querySelector("#logs-storage"),
+    openFile: document.querySelector("#logs-open-file"),
     refresh: document.querySelector("#logs-refresh"),
     status: document.querySelector("#logs-status"),
     list: document.querySelector("#logs-list"),
     range: document.querySelector("#logs-range"),
     loadMore: document.querySelector("#logs-load-more"),
   };
+  const initialView = window.location.hash === "#system"
+    ? "system"
+    : "events";
   const state = {
+    view: initialView,
     loading: false,
+    controller: null,
+    requestToken: 0,
     offset: 0,
     nextOffset: null,
     total: 0,
     loadedCount: 0,
     hasMore: false,
-    seenEventIds: new Set(),
+    seenRecordIds: new Set(),
   };
 
   const icon = (name, className = "icon") =>
@@ -60,6 +70,10 @@
       return `${Math.round((bytes / (1024 * 1024)) * 10) / 10} MiB`;
     }
     return `${Math.max(1, Math.round(bytes / 1024))} KiB`;
+  }
+
+  function viewLabel(view = state.view) {
+    return view === "system" ? "系统操作" : "追更动态";
   }
 
   function eventTypeLabel(type) {
@@ -162,12 +176,115 @@
     `;
   }
 
+  function systemLevelMeta(level) {
+    return (
+      {
+        success: {
+          label: "完成",
+          className: "is-success",
+          icon: "check",
+        },
+        warning: {
+          label: "需注意",
+          className: "is-pending",
+          icon: "alert",
+        },
+        error: {
+          label: "失败",
+          className: "is-error",
+          icon: "alert",
+        },
+        info: {
+          label: "操作",
+          className: "is-neutral",
+          icon: "settings",
+        },
+      }[level] || {
+        label: "操作",
+        className: "is-neutral",
+        icon: "settings",
+      }
+    );
+  }
+
+  function systemCategoryLabel(category) {
+    return (
+      {
+        account: "账号",
+        subscription: "追更",
+        monitor: "检查",
+        notification: "通知",
+        settings: "设置",
+        screenshot: "截图导入",
+        system: "系统",
+      }[category] || "系统"
+    );
+  }
+
+  function systemLogHtml(entry) {
+    const level = systemLevelMeta(entry.level);
+    const category = systemCategoryLabel(entry.category);
+    return `
+      <article
+        class="log-entry log-entry--system"
+        aria-label="${escapeHtml(
+          `${category}，${level.label}，${formatDateTime(entry.createdAt)}`,
+        )}"
+      >
+        <span class="log-entry__icon log-entry__icon--${escapeHtml(
+          entry.level || "info",
+        )}">${icon(level.icon)}</span>
+        <div class="log-entry__body">
+          <div class="log-entry__heading">
+            <strong>${escapeHtml(category)} · ${escapeHtml(level.label)}</strong>
+            <time datetime="${escapeHtml(entry.createdAt)}">${escapeHtml(
+              formatDateTime(entry.createdAt),
+            )}</time>
+          </div>
+          <p class="log-entry__message">${escapeHtml(
+            entry.message || "系统已完成一项操作。",
+          )}</p>
+          <div class="log-entry__meta">
+            <span class="log-delivery ${level.className}">${escapeHtml(
+              level.label,
+            )}</span>
+            ${
+              entry.action
+                ? `<code title="动作标识：${escapeHtml(
+                    entry.action,
+                  )}">${escapeHtml(entry.action)}</code>`
+                : ""
+            }
+            ${
+              entry.logFile
+                ? `<code title="日志文件：${escapeHtml(
+                    entry.logFile,
+                  )}">${escapeHtml(entry.logFile)}</code>`
+                : ""
+            }
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  function recordHtml(record) {
+    return state.view === "system"
+      ? systemLogHtml(record)
+      : eventHtml(record);
+  }
+
   function emptyStateHtml() {
+    const isSystem = state.view === "system";
     return `
       <div class="empty-state logs-empty">
         <span class="empty-state__icon">${icon("inbox")}</span>
-        <h3>还没有动态记录</h3>
-        <p>后续产生的更新、新季和检查异常会保存到这里。</p>
+        <h3>还没有${viewLabel()}记录</h3>
+        <p>${
+          isSystem
+            ? "登录、同步、修改设置等操作会以易懂的文字记录在这里。"
+            : "后续产生的更新、新季和检查异常会保存到这里。"
+        }</p>
       </div>
     `;
   }
@@ -176,7 +293,7 @@
     return `
       <div class="empty-state logs-error">
         <span class="empty-state__icon">${icon("alert")}</span>
-        <h3>日志加载失败</h3>
+        <h3>${viewLabel()}加载失败</h3>
         <p>${escapeHtml(message || "请稍后刷新重试。")}</p>
       </div>
     `;
@@ -196,7 +313,7 @@
       ? formatDateTime(page.newestAt)
       : "暂无记录";
     elements.range.textContent = state.total
-      ? `已显示 ${state.loadedCount} / ${state.total} 条`
+      ? `已显示 ${state.loadedCount} / ${state.total} 条${viewLabel()}`
       : "";
     elements.loadMore.hidden = !state.hasMore;
     elements.loadMore.disabled = state.loading;
@@ -208,23 +325,54 @@
     } 个文件`;
   }
 
+  function updateViewChrome() {
+    const isSystem = state.view === "system";
+    const activeTab = isSystem
+      ? document.querySelector("#logs-tab-system")
+      : document.querySelector("#logs-tab-events");
+    for (const tab of elements.tabs) {
+      const selected = tab.dataset.logView === state.view;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    elements.listTitle.textContent = viewLabel();
+    elements.list.setAttribute("aria-labelledby", activeTab.id);
+    elements.openFile.href = isSystem
+      ? "/api/system-logs/file"
+      : "/api/logs/file";
+    elements.openFile.setAttribute(
+      "aria-label",
+      `在新标签页打开全部${viewLabel()}文件`,
+    );
+  }
+
   async function loadLogs({ reset = false } = {}) {
-    if (state.loading) {
+    if (state.loading && !reset) {
       return;
     }
+    if (state.loading) {
+      state.controller?.abort();
+    }
 
+    const requestToken = ++state.requestToken;
+    const controller = new AbortController();
+    state.controller = controller;
     state.loading = true;
     elements.refresh.disabled = true;
     elements.loadMore.disabled = true;
     elements.list.setAttribute("aria-busy", "true");
-    setStatus(reset ? "正在读取日志…" : "正在加载更多…");
+    setStatus(
+      reset
+        ? `正在读取${viewLabel()}…`
+        : `正在加载更多${viewLabel()}…`,
+    );
     if (reset) {
       state.offset = 0;
       state.nextOffset = null;
       state.total = 0;
       state.loadedCount = 0;
       state.hasMore = false;
-      state.seenEventIds.clear();
+      state.seenRecordIds.clear();
       elements.list.innerHTML = "";
       elements.range.textContent = "";
       elements.loadMore.hidden = true;
@@ -233,32 +381,42 @@
     const offset = reset
       ? 0
       : state.nextOffset ?? state.loadedCount;
+    const endpoint =
+      state.view === "system" ? "/api/system-logs" : "/api/logs";
 
     try {
       const response = await fetch(
-        `/api/logs?offset=${encodeURIComponent(offset)}&limit=${PAGE_SIZE}`,
+        `${endpoint}?offset=${encodeURIComponent(offset)}&limit=${PAGE_SIZE}`,
         {
           headers: { accept: "application/json" },
           cache: "no-store",
+          signal: controller.signal,
         },
       );
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) {
         throw new Error(
-          payload?.error?.message || "服务暂时无法读取日志。",
+          payload?.error?.message || `服务暂时无法读取${viewLabel()}。`,
         );
       }
+      if (requestToken !== state.requestToken) {
+        return;
+      }
 
-      const events = Array.isArray(payload.events) ? payload.events : [];
-      const freshEvents = events.filter((event) => {
-        const id = String(event.id || "");
-        if (!id || state.seenEventIds.has(id)) {
+      const records = state.view === "system"
+        ? payload.entries
+        : payload.events;
+      const freshRecords = (
+        Array.isArray(records) ? records : []
+      ).filter((record) => {
+        const id = String(record.id || "");
+        if (!id || state.seenRecordIds.has(id)) {
           return false;
         }
-        state.seenEventIds.add(id);
+        state.seenRecordIds.add(id);
         return true;
       });
-      state.loadedCount += freshEvents.length;
+      state.loadedCount += freshRecords.length;
       state.offset = offset;
       const nextOffset = Number(payload.nextOffset);
       state.nextOffset = Number.isFinite(nextOffset)
@@ -267,38 +425,93 @@
       state.hasMore =
         Boolean(payload.hasMore) && state.nextOffset !== null;
 
-      if (reset && !freshEvents.length && !state.total) {
+      if (reset && !freshRecords.length && !Number(payload.total)) {
         elements.list.innerHTML = emptyStateHtml();
-      } else if (freshEvents.length) {
+      } else if (freshRecords.length) {
         elements.list.insertAdjacentHTML(
           "beforeend",
-          freshEvents.map(eventHtml).join(""),
+          freshRecords.map(recordHtml).join(""),
         );
       }
 
       updateSummary(payload);
       setStatus("");
     } catch (error) {
+      if (error?.name === "AbortError") {
+        return;
+      }
       const message =
-        error?.message || "日志加载失败，请稍后重试。";
-      if (reset && !state.loadedCount) {
+        error?.message || `${viewLabel()}加载失败，请稍后重试。`;
+      if (requestToken === state.requestToken && reset && !state.loadedCount) {
         elements.list.innerHTML = errorStateHtml(message);
       }
-      setStatus(message, true);
+      if (requestToken === state.requestToken) {
+        setStatus(message, true);
+      }
     } finally {
-      state.loading = false;
-      elements.refresh.disabled = false;
-      elements.loadMore.disabled = false;
-      elements.list.setAttribute("aria-busy", "false");
+      if (requestToken === state.requestToken) {
+        state.loading = false;
+        state.controller = null;
+        elements.refresh.disabled = false;
+        elements.loadMore.disabled = false;
+        elements.list.setAttribute("aria-busy", "false");
+      }
     }
   }
 
+  function setView(view, { updateHash = true } = {}) {
+    if (!VIEWS.has(view) || view === state.view) {
+      updateViewChrome();
+      return;
+    }
+    state.view = view;
+    updateViewChrome();
+    if (updateHash) {
+      window.history.replaceState(null, "", `#${view}`);
+    }
+    void loadLogs({ reset: true });
+  }
+
+  for (const tab of elements.tabs) {
+    tab.addEventListener("click", () => {
+      setView(tab.dataset.logView);
+    });
+    tab.addEventListener("keydown", (event) => {
+      const currentIndex = elements.tabs.indexOf(tab);
+      let nextIndex = null;
+      if (event.key === "ArrowRight") {
+        nextIndex = (currentIndex + 1) % elements.tabs.length;
+      } else if (event.key === "ArrowLeft") {
+        nextIndex =
+          (currentIndex - 1 + elements.tabs.length) %
+          elements.tabs.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = elements.tabs.length - 1;
+      }
+      if (nextIndex === null) {
+        return;
+      }
+      event.preventDefault();
+      const nextTab = elements.tabs[nextIndex];
+      setView(nextTab.dataset.logView);
+      nextTab.focus();
+    });
+  }
+
   elements.refresh.addEventListener("click", () => {
-    loadLogs({ reset: true });
+    void loadLogs({ reset: true });
   });
   elements.loadMore.addEventListener("click", () => {
-    loadLogs();
+    void loadLogs();
+  });
+  window.addEventListener("hashchange", () => {
+    const view =
+      window.location.hash === "#system" ? "system" : "events";
+    setView(view, { updateHash: false });
   });
 
-  loadLogs({ reset: true });
+  updateViewChrome();
+  void loadLogs({ reset: true });
 })();
