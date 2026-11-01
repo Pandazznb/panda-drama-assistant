@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  SYSTEM_LOG_RETENTION_DAYS,
   SystemLogStore,
   sanitizeSystemLogText,
 } from "../src/system-log.js";
@@ -50,6 +51,7 @@ test("system logs are returned newest first with stable pagination", async (t) =
   const firstPage = await store.readPage({ offset: 0, limit: 2 });
   assert.equal(firstPage.total, 3);
   assert.equal(firstPage.fileCount, 1);
+  assert.equal(firstPage.retentionDays, SYSTEM_LOG_RETENTION_DAYS);
   assert.deepEqual(
     firstPage.entries.map((entry) => entry.id),
     ["system-log-new", "system-log-middle"],
@@ -135,6 +137,83 @@ test("system logs hide phone numbers, cookies, tokens and proxy credentials", as
   }
   assert.match(page.entries[0].message, /手机号已隐藏/);
   assert.match(page.entries[0].message, /已隐藏凭据/);
+});
+
+test("system logs remove files older than 30 days in Shanghai", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "hongguo-system-log-retention-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const entries = [
+    {
+      fileName: "system-2026-09-30-0001.jsonl",
+      entry: {
+        id: "system-log-expired-september",
+        category: "system",
+        action: "system.retention.expired",
+        message: "超过保留期",
+        createdAt: "2026-09-30T01:00:00.000Z",
+      },
+    },
+    {
+      fileName: "system-2026-10-02-0001.jsonl",
+      entry: {
+        id: "system-log-expired-october",
+        category: "system",
+        action: "system.retention.expired",
+        message: "超过保留期",
+        createdAt: "2026-10-02T01:00:00.000Z",
+      },
+    },
+    {
+      fileName: "system-2026-10-03-0001.jsonl",
+      entry: {
+        id: "system-log-boundary",
+        category: "system",
+        action: "system.retention.boundary",
+        message: "保留期边界",
+        createdAt: "2026-10-03T01:00:00.000Z",
+      },
+    },
+    {
+      fileName: "system-2026-11-02-0001.jsonl",
+      entry: {
+        id: "system-log-current",
+        category: "system",
+        action: "system.retention.current",
+        message: "当前记录",
+        createdAt: "2026-11-02T01:00:00.000Z",
+      },
+    },
+  ];
+  await Promise.all(
+    entries.map(({ fileName, entry }) =>
+      fs.writeFile(
+        path.join(directory, fileName),
+        `${JSON.stringify(entry)}\n`,
+        "utf8",
+      ),
+    ),
+  );
+
+  const store = new SystemLogStore(directory, {
+    now: () => new Date("2026-11-02T06:00:00.000Z"),
+  });
+  const page = await store.readPage({ offset: 0, limit: 100 });
+
+  assert.equal(page.retentionDays, 30);
+  assert.equal(page.total, 2);
+  assert.deepEqual(
+    page.entries.map((entry) => entry.id),
+    ["system-log-current", "system-log-boundary"],
+  );
+  assert.deepEqual(
+    (await fs.readdir(directory)).sort(),
+    [
+      "system-2026-10-03-0001.jsonl",
+      "system-2026-11-02-0001.jsonl",
+    ],
+  );
 });
 
 test("system log text sanitizer preserves readable non-sensitive content", () => {

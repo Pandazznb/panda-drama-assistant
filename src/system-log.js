@@ -9,9 +9,11 @@ import {
 
 export const SYSTEM_LOG_TIME_ZONE = "Asia/Shanghai";
 export const SYSTEM_LOG_MAX_FILE_BYTES = 1024 * 1024;
+export const SYSTEM_LOG_RETENTION_DAYS = 30;
 
 const LOG_FILE_PATTERN =
   /^system-(\d{4}-\d{2}-\d{2})-(\d{4})\.jsonl$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const dateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: SYSTEM_LOG_TIME_ZONE,
   year: "numeric",
@@ -114,12 +116,22 @@ function logFileName(dateKey, part) {
 export class SystemLogStore {
   constructor(
     directory,
-    { maxFileBytes = SYSTEM_LOG_MAX_FILE_BYTES } = {},
+    {
+      maxFileBytes = SYSTEM_LOG_MAX_FILE_BYTES,
+      retentionDays = SYSTEM_LOG_RETENTION_DAYS,
+      now = () => new Date(),
+    } = {},
   ) {
     this.directory = path.resolve(directory);
     this.maxFileBytes = Math.max(256, Number(maxFileBytes));
+    this.retentionDays = Math.max(
+      1,
+      Number.parseInt(retentionDays, 10) || SYSTEM_LOG_RETENTION_DAYS,
+    );
+    this.clock = typeof now === "function" ? now : () => new Date(now);
     this.initialized = false;
     this.initialization = null;
+    this.lastRetentionCheckDateKey = null;
     this.entriesById = new Map();
     this.days = new Map();
     this.filePaths = new Set();
@@ -136,11 +148,79 @@ export class SystemLogStore {
     await this.initialization;
   }
 
+  currentDateKey() {
+    const date = new Date(this.clock());
+    return systemLogDateKey(
+      Number.isNaN(date.getTime()) ? new Date() : date,
+    );
+  }
+
+  retentionCutoffDateKey() {
+    const date = new Date(this.clock());
+    const current = Number.isNaN(date.getTime()) ? new Date() : date;
+    return systemLogDateKey(
+      new Date(
+        current.getTime() - this.retentionDays * DAY_MS,
+      ).toISOString(),
+    );
+  }
+
+  async pruneExpiredFiles({ force = false } = {}) {
+    const currentDateKey = this.currentDateKey();
+    if (
+      !force &&
+      this.lastRetentionCheckDateKey === currentDateKey
+    ) {
+      return [];
+    }
+
+    const cutoffDateKey = this.retentionCutoffDateKey();
+    const entries = await fs.readdir(this.directory, {
+      withFileTypes: true,
+    });
+    const expiredFileNames = entries
+      .filter((entry) => {
+        if (!entry.isFile()) {
+          return false;
+        }
+        const match = entry.name.match(LOG_FILE_PATTERN);
+        return Boolean(match && match[1] < cutoffDateKey);
+      })
+      .map((entry) => entry.name);
+
+    if (expiredFileNames.length) {
+      await Promise.all(
+        expiredFileNames.map((fileName) =>
+          fs.rm(path.join(this.directory, fileName), {
+            force: true,
+          }),
+        ),
+      );
+      const expiredFiles = new Set(expiredFileNames);
+      for (const fileName of expiredFileNames) {
+        const match = fileName.match(LOG_FILE_PATTERN);
+        this.filePaths.delete(path.join(this.directory, fileName));
+        if (match) {
+          this.days.delete(match[1]);
+        }
+      }
+      for (const [id, entry] of this.entriesById) {
+        if (expiredFiles.has(entry.logFile)) {
+          this.entriesById.delete(id);
+        }
+      }
+    }
+
+    this.lastRetentionCheckDateKey = currentDateKey;
+    return expiredFileNames;
+  }
+
   async load() {
     await fs.mkdir(this.directory, {
       recursive: true,
       mode: 0o700,
     });
+    await this.pruneExpiredFiles({ force: true });
     const entries = await fs.readdir(this.directory, {
       withFileTypes: true,
     });
@@ -194,6 +274,7 @@ export class SystemLogStore {
     const list = Array.isArray(entries) ? entries : [entries];
     const operation = this.appendQueue.then(async () => {
       await this.init();
+      await this.pruneExpiredFiles();
       const written = [];
       for (const input of list) {
         const log = normalizedSystemLog(input);
@@ -259,6 +340,7 @@ export class SystemLogStore {
   async readPage({ offset = 0, limit = 200 } = {}) {
     await this.init();
     await this.appendQueue;
+    await this.pruneExpiredFiles();
     const entries = [...this.entriesById.values()].sort((left, right) => {
       const timeDifference =
         (parseTimestamp(right.createdAt) || 0) -
@@ -274,6 +356,7 @@ export class SystemLogStore {
       newestAt: entries[0]?.createdAt || null,
       oldestAt: entries.at(-1)?.createdAt || null,
       maxFileBytes: this.maxFileBytes,
+      retentionDays: this.retentionDays,
       timeZone: SYSTEM_LOG_TIME_ZONE,
     };
   }
@@ -281,6 +364,7 @@ export class SystemLogStore {
   async readAllFiles() {
     await this.init();
     await this.appendQueue;
+    await this.pruneExpiredFiles();
     const fileNames = [...this.filePaths]
       .map((filePath) => path.basename(filePath))
       .filter((fileName) => LOG_FILE_PATTERN.test(fileName))

@@ -1,6 +1,6 @@
 (() => {
   const APP_TIME_ZONE = "Asia/Shanghai";
-  const PAGE_SIZE = 200;
+  const PAGE_SIZE = 100;
   const VIEWS = new Set(["events", "system"]);
   const elements = {
     tabs: [...document.querySelectorAll("[data-log-view]")],
@@ -14,7 +14,6 @@
     status: document.querySelector("#logs-status"),
     list: document.querySelector("#logs-list"),
     range: document.querySelector("#logs-range"),
-    loadMore: document.querySelector("#logs-load-more"),
   };
   const initialView = window.location.hash === "#system"
     ? "system"
@@ -24,11 +23,8 @@
     loading: false,
     controller: null,
     requestToken: 0,
-    offset: 0,
-    nextOffset: null,
     total: 0,
     loadedCount: 0,
-    hasMore: false,
     seenRecordIds: new Set(),
   };
 
@@ -313,16 +309,18 @@
       ? formatDateTime(page.newestAt)
       : "暂无记录";
     elements.range.textContent = state.total
-      ? `已显示 ${state.loadedCount} / ${state.total} 条${viewLabel()}`
+      ? state.total > state.loadedCount
+        ? `共 ${state.total} 条${viewLabel()}，显示最近 ${state.loadedCount} 条`
+        : `共 ${state.total} 条${viewLabel()}`
       : "";
-    elements.loadMore.hidden = !state.hasMore;
-    elements.loadMore.disabled = state.loading;
     const storage = page.storage || {};
+    const retentionDays =
+      Math.max(1, Number(storage.retentionDays) || 30);
     elements.storage.textContent = `${
       storage.timeZone === APP_TIME_ZONE ? "北京时间按天归档" : "按天归档"
-    } · 单卷上限 ${formatBytes(storage.maxFileBytes)} · 当前 ${
-      Number(page.fileCount) || 0
-    } 个文件`;
+    } · 单卷上限 ${formatBytes(storage.maxFileBytes)} · 仅保留最近 ${
+      retentionDays
+    } 天 · 当前 ${Number(page.fileCount) || 0} 个文件`;
   }
 
   function updateViewChrome() {
@@ -347,9 +345,6 @@
   }
 
   async function loadLogs({ reset = false } = {}) {
-    if (state.loading && !reset) {
-      return;
-    }
     if (state.loading) {
       state.controller?.abort();
     }
@@ -359,34 +354,22 @@
     state.controller = controller;
     state.loading = true;
     elements.refresh.disabled = true;
-    elements.loadMore.disabled = true;
     elements.list.setAttribute("aria-busy", "true");
-    setStatus(
-      reset
-        ? `正在读取${viewLabel()}…`
-        : `正在加载更多${viewLabel()}…`,
-    );
+    setStatus(`正在读取${viewLabel()}…`);
     if (reset) {
-      state.offset = 0;
-      state.nextOffset = null;
       state.total = 0;
       state.loadedCount = 0;
-      state.hasMore = false;
       state.seenRecordIds.clear();
       elements.list.innerHTML = "";
       elements.range.textContent = "";
-      elements.loadMore.hidden = true;
     }
 
-    const offset = reset
-      ? 0
-      : state.nextOffset ?? state.loadedCount;
     const endpoint =
       state.view === "system" ? "/api/system-logs" : "/api/logs";
 
     try {
       const response = await fetch(
-        `${endpoint}?offset=${encodeURIComponent(offset)}&limit=${PAGE_SIZE}`,
+        `${endpoint}?offset=0&limit=${PAGE_SIZE}`,
         {
           headers: { accept: "application/json" },
           cache: "no-store",
@@ -417,13 +400,6 @@
         return true;
       });
       state.loadedCount += freshRecords.length;
-      state.offset = offset;
-      const nextOffset = Number(payload.nextOffset);
-      state.nextOffset = Number.isFinite(nextOffset)
-        ? nextOffset
-        : null;
-      state.hasMore =
-        Boolean(payload.hasMore) && state.nextOffset !== null;
 
       if (reset && !freshRecords.length && !Number(payload.total)) {
         elements.list.innerHTML = emptyStateHtml();
@@ -453,7 +429,6 @@
         state.loading = false;
         state.controller = null;
         elements.refresh.disabled = false;
-        elements.loadMore.disabled = false;
         elements.list.setAttribute("aria-busy", "false");
       }
     }
@@ -502,9 +477,6 @@
 
   elements.refresh.addEventListener("click", () => {
     void loadLogs({ reset: true });
-  });
-  elements.loadMore.addEventListener("click", () => {
-    void loadLogs();
   });
   window.addEventListener("hashchange", () => {
     const view =

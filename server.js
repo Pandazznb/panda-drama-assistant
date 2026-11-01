@@ -532,6 +532,7 @@ export function createRequestHandler(
           storage: {
             policy: "daily-size",
             maxFileBytes: page.maxFileBytes,
+            retentionDays: page.retentionDays,
             timeZone: page.timeZone,
           },
         });
@@ -578,6 +579,7 @@ export function createRequestHandler(
           storage: {
             policy: "daily-size",
             maxFileBytes: page.maxFileBytes,
+            retentionDays: page.retentionDays,
             timeZone: page.timeZone,
           },
         });

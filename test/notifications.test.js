@@ -8,11 +8,18 @@ import {
   buildDingTalkRequest,
   buildNtfyRequest,
   buildTelegramRequest,
+  buildWeComAppRequest,
+  buildWeComAppTokenRequest,
   buildWeComRequest,
   describeNotificationSettings,
   normalizeNotificationSettings,
   normalizeProxyUrl,
+  normalizeWeComAppAgentId,
+  normalizeWeComAppCorpId,
+  normalizeWeComAppSecret,
+  normalizeWeComAppToUser,
   sendNotificationChannels,
+  sendWeComAppNotification,
   summarizeNotificationDelivery,
   __test,
 } from "../src/notifications.js";
@@ -36,6 +43,13 @@ const ALL_CHANNELS = {
     enabled: true,
     key: "wecom_KEY-123",
   },
+  wecomApp: {
+    enabled: true,
+    corpId: "ww1234567890abcdef",
+    secret: "wecom-app_SECRET-123",
+    agentId: "1000002",
+    toUser: "UserID1|UserID2",
+  },
   dingtalk: {
     enabled: true,
     accessToken: "ding-access_TOKEN-123",
@@ -55,6 +69,14 @@ function successfulFetch(calls) {
     if (url.startsWith("https://api.telegram.org/")) {
       return Response.json({ ok: true, result: { message_id: 1 } });
     }
+    if (url.startsWith("https://qyapi.weixin.qq.com/cgi-bin/gettoken")) {
+      return Response.json({
+        errcode: 0,
+        errmsg: "ok",
+        access_token: "wecom-app-access-token-123",
+        expires_in: 7200,
+      });
+    }
     if (url.startsWith("https://qyapi.weixin.qq.com/")) {
       return Response.json({ errcode: 0, errmsg: "ok" });
     }
@@ -73,8 +95,8 @@ test("notification settings migrate a legacy Bark key and never expose secrets",
   });
 
   const described = describeNotificationSettings(ALL_CHANNELS);
-  assert.equal(described.enabledCount, 5);
-  assert.equal(described.configuredCount, 5);
+  assert.equal(described.enabledCount, 6);
+  assert.equal(described.configuredCount, 6);
   const serialized = JSON.stringify(described);
   assert.equal(serialized.includes("abc_DEF-123"), false);
   assert.equal(serialized.includes("hongguo-test-topic"), false);
@@ -84,6 +106,9 @@ test("notification settings migrate a legacy Bark key and never expose secrets",
     false,
   );
   assert.equal(serialized.includes("wecom_KEY-123"), false);
+  assert.equal(serialized.includes("ww1234567890abcdef"), false);
+  assert.equal(serialized.includes("wecom-app_SECRET-123"), false);
+  assert.equal(serialized.includes("wecom-app-access-token-123"), false);
   assert.equal(serialized.includes("ding-access_TOKEN-123"), false);
   assert.equal(serialized.includes("SEC0123456789+/abcdef"), false);
 });
@@ -135,6 +160,7 @@ test("notification proxy accepts HTTP(S) origins and masks credentials", () => {
       ntfy: false,
       telegram: true,
       wecom: false,
+      wecomApp: false,
       dingtalk: false,
     },
   });
@@ -182,6 +208,7 @@ test("notification proxy patch requires a URL and selected channel", () => {
     ntfy: false,
     telegram: true,
     wecom: false,
+    wecomApp: false,
     dingtalk: false,
   });
 
@@ -197,12 +224,23 @@ test("notification patches preserve blank secrets and clearing disables a channe
     ntfy: { enabled: true, token: "" },
     telegram: { enabled: true, botToken: "", chatId: "" },
     wecom: { enabled: true, key: "" },
+    wecomApp: {
+      enabled: true,
+      corpId: "",
+      secret: "",
+      agentId: "",
+      toUser: "",
+    },
     dingtalk: { enabled: true, accessToken: "", secret: "" },
   });
   assert.equal(unchanged.bark.key, ALL_CHANNELS.bark.key);
   assert.equal(unchanged.ntfy.token, ALL_CHANNELS.ntfy.token);
   assert.equal(unchanged.telegram.botToken, ALL_CHANNELS.telegram.botToken);
   assert.equal(unchanged.wecom.key, ALL_CHANNELS.wecom.key);
+  assert.equal(unchanged.wecomApp.corpId, ALL_CHANNELS.wecomApp.corpId);
+  assert.equal(unchanged.wecomApp.secret, ALL_CHANNELS.wecomApp.secret);
+  assert.equal(unchanged.wecomApp.agentId, ALL_CHANNELS.wecomApp.agentId);
+  assert.equal(unchanged.wecomApp.toUser, ALL_CHANNELS.wecomApp.toUser);
   assert.equal(
     unchanged.dingtalk.accessToken,
     ALL_CHANNELS.dingtalk.accessToken,
@@ -214,6 +252,7 @@ test("notification patches preserve blank secrets and clearing disables a channe
     ntfy: { clear: true },
     telegram: { clear: true },
     wecom: { clear: true },
+    wecomApp: { clear: true },
     dingtalk: { clear: true },
   });
   assert.deepEqual(cleared.bark, { enabled: false, key: "" });
@@ -230,6 +269,13 @@ test("notification patches preserve blank secrets and clearing disables a channe
   assert.deepEqual(cleared.wecom, {
     enabled: false,
     key: "",
+  });
+  assert.deepEqual(cleared.wecomApp, {
+    enabled: false,
+    corpId: "",
+    secret: "",
+    agentId: "",
+    toUser: "",
   });
   assert.deepEqual(cleared.dingtalk, {
     enabled: false,
@@ -263,6 +309,45 @@ test("notification requests stay on their fixed API origins", () => {
   assert.equal(new URL(wecom.endpoint).origin, "https://qyapi.weixin.qq.com");
   assert.equal(wecom.payload.msgtype, "text");
   assert.match(wecom.payload.text.content, /【短剧助手】/);
+
+  const wecomAppToken = buildWeComAppTokenRequest(ALL_CHANNELS.wecomApp);
+  const wecomAppTokenUrl = new URL(wecomAppToken.endpoint);
+  assert.equal(wecomAppTokenUrl.origin, "https://qyapi.weixin.qq.com");
+  assert.equal(wecomAppTokenUrl.pathname, "/cgi-bin/gettoken");
+  assert.equal(
+    wecomAppTokenUrl.searchParams.get("corpid"),
+    ALL_CHANNELS.wecomApp.corpId,
+  );
+  assert.equal(
+    wecomAppTokenUrl.searchParams.get("corpsecret"),
+    ALL_CHANNELS.wecomApp.secret,
+  );
+
+  const wecomApp = buildWeComAppRequest(
+    ALL_CHANNELS.wecomApp,
+    {
+      title: "测试",
+      body: "正文",
+    },
+    "wecom-app-access-token-123",
+  );
+  const wecomAppUrl = new URL(wecomApp.endpoint);
+  assert.equal(wecomAppUrl.origin, "https://qyapi.weixin.qq.com");
+  assert.equal(wecomAppUrl.pathname, "/cgi-bin/message/send");
+  assert.equal(
+    wecomAppUrl.searchParams.get("access_token"),
+    "wecom-app-access-token-123",
+  );
+  assert.deepEqual(wecomApp.payload, {
+    touser: "UserID1|UserID2",
+    msgtype: "text",
+    agentid: 1000002,
+    text: {
+      content: wecomApp.payload.text.content,
+    },
+    safe: 0,
+  });
+  assert.match(wecomApp.payload.text.content, /【短剧助手】/);
 
   const timestamp = 1_700_000_000_000;
   const dingtalk = buildDingTalkRequest(
@@ -301,6 +386,46 @@ test("robot webhook text is safely limited to 2048 UTF-8 bytes", () => {
   assert.equal(content.includes("�"), false);
 });
 
+test("enterprise app credentials and recipients reject unsafe values", () => {
+  assert.throws(
+    () => normalizeWeComAppCorpId("ww-invalid corp"),
+    (error) => error.code === "INVALID_WECOM_APP_CORP_ID",
+  );
+  assert.throws(
+    () => normalizeWeComAppSecret("invalid secret"),
+    (error) => error.code === "INVALID_WECOM_APP_SECRET",
+  );
+  assert.throws(
+    () => normalizeWeComAppAgentId("0"),
+    (error) => error.code === "INVALID_WECOM_APP_AGENT_ID",
+  );
+
+  for (const invalidToUser of [
+    "@someone",
+    "@all|UserID1",
+    Array.from({ length: 101 }, (_, index) => `user${index}`).join("|"),
+  ]) {
+    assert.throws(
+      () => normalizeWeComAppToUser(invalidToUser),
+      (error) => error.code === "INVALID_WECOM_APP_TO_USER",
+    );
+  }
+
+  assert.equal(
+    normalizeWeComAppToUser("UserID1, UserID2 UserID3"),
+    "UserID1|UserID2|UserID3",
+  );
+  assert.equal(normalizeWeComAppToUser("@all"), "@all");
+
+  const overlongStored = normalizeNotificationSettings({
+    wecomApp: {
+      ...ALL_CHANNELS.wecomApp,
+      toUser: "A".repeat(1_025),
+    },
+  });
+  assert.equal(overlongStored.wecomApp.toUser, "");
+});
+
 test("robot keys reject full webhook URLs", () => {
   assert.throws(
     () =>
@@ -332,14 +457,14 @@ test("all enabled notification channels are delivered in parallel", async () => 
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.total, 5);
-  assert.equal(result.delivered, 5);
+  assert.equal(result.total, 6);
+  assert.equal(result.delivered, 6);
   assert.equal(result.failed, 0);
   assert.deepEqual(
     result.results.map((item) => item.channel),
-    ["bark", "ntfy", "telegram", "wecom", "dingtalk"],
+    ["bark", "ntfy", "telegram", "wecom", "wecomApp", "dingtalk"],
   );
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 7);
 });
 
 test("notification proxy is injected only into selected channels", async () => {
@@ -359,6 +484,7 @@ test("notification proxy is injected only into selected channels", async () => {
       channels: {
         bark: true,
         telegram: true,
+        wecomApp: true,
       },
     },
   };
@@ -383,7 +509,9 @@ test("notification proxy is injected only into selected channels", async () => {
   for (const call of calls) {
     const proxied =
       call.url.startsWith("https://api.day.app/") ||
-      call.url.startsWith("https://api.telegram.org/");
+      call.url.startsWith("https://api.telegram.org/") ||
+      call.url.includes("/cgi-bin/gettoken?") ||
+      call.url.includes("/cgi-bin/message/send?");
     assert.equal(
       Object.hasOwn(call.options, "dispatcher"),
       proxied,
@@ -393,6 +521,10 @@ test("notification proxy is injected only into selected channels", async () => {
       assert.equal(call.options.dispatcher, dispatcher);
     }
   }
+  assert.equal(
+    calls.filter((call) => Object.hasOwn(call.options, "dispatcher")).length,
+    4,
+  );
 });
 
 test("a partial channel failure does not block successful channels", async () => {
@@ -417,11 +549,12 @@ test("a partial channel failure does not block successful channels", async () =>
 
   assert.equal(result.ok, false);
   assert.equal(result.delivered, 1);
-  assert.equal(result.failed, 4);
+  assert.equal(result.failed, 5);
   assert.match(summarizeNotificationDelivery(result), /已送达 Bark/);
   assert.match(summarizeNotificationDelivery(result), /ntfy/);
   assert.match(summarizeNotificationDelivery(result), /Telegram/);
   assert.match(summarizeNotificationDelivery(result), /企业微信/);
+  assert.match(summarizeNotificationDelivery(result), /企业微信应用/);
   assert.match(summarizeNotificationDelivery(result), /钉钉/);
 });
 
@@ -438,9 +571,70 @@ test("all channel failures return structured results without throwing", async ()
 
   assert.equal(result.ok, false);
   assert.equal(result.delivered, 0);
-  assert.equal(result.failed, 5);
+  assert.equal(result.failed, 6);
   assert.equal(result.results.every((item) => item.ok === false), true);
   assert.match(summarizeNotificationDelivery(result), /发送失败/);
+});
+
+test("enterprise app delivery masks credentials in upstream errors", async () => {
+  const config = normalizeNotificationSettings(ALL_CHANNELS).wecomApp;
+  const accessToken = "wecom-app-secret-access-token";
+
+  await assert.rejects(
+    sendWeComAppNotification(
+      config,
+      { title: "测试", body: "正文" },
+      {
+        fetchImpl: async () =>
+          Response.json(
+            {
+              errcode: 40001,
+              errmsg: `bad ${config.corpId} ${config.secret} corpsecret=${config.secret}`,
+            },
+            { status: 400 },
+          ),
+      },
+    ),
+    (error) => {
+      assert.equal(error.code, "WECOM_APP_TOKEN_HTTP_ERROR");
+      assert.equal(error.message.includes(config.corpId), false);
+      assert.equal(error.message.includes(config.secret), false);
+      assert.match(error.message, /corpsecret=\*\*\*/);
+      return true;
+    },
+  );
+
+  let calls = 0;
+  await assert.rejects(
+    sendWeComAppNotification(
+      config,
+      { title: "测试", body: "正文" },
+      {
+        fetchImpl: async () => {
+          calls += 1;
+          if (calls === 1) {
+            return Response.json({
+              errcode: 0,
+              access_token: accessToken,
+              expires_in: 7200,
+            });
+          }
+          return Response.json({
+            errcode: 40003,
+            errmsg: `bad ${config.corpId} ${config.secret} access_token=${accessToken}`,
+          });
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.code, "WECOM_APP_HTTP_ERROR");
+      assert.equal(error.message.includes(config.corpId), false);
+      assert.equal(error.message.includes(config.secret), false);
+      assert.equal(error.message.includes(accessToken), false);
+      assert.match(error.message, /access_token=\*\*\*/);
+      return true;
+    },
+  );
 });
 
 test("sending without an enabled channel is rejected", async () => {

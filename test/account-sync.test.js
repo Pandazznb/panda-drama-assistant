@@ -768,7 +768,7 @@ test("account sync Cron can be updated and scheduled", async (t) => {
   const harness = await createHarness(t);
   await harness.service.start();
   const before = await harness.service.status();
-  assert.equal(before.cron, "0 3 * * *");
+  assert.equal(before.cron, "50 23 * * *");
   assert.ok(before.nextSyncAt);
 
   const cron = await harness.service.updateSettings({

@@ -456,6 +456,15 @@ code {
   font-weight: 700;
 }
 
+.overview__tagline {
+  margin-top: 7px;
+  color: var(--color-hero-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
 .eyebrow {
   margin-bottom: 10px;
   color: var(--color-accent-dark);
@@ -1312,7 +1321,8 @@ code {
   line-height: 1;
   text-shadow: none;
   pointer-events: none;
-  animation: update-filter-badge-in var(--motion-enter) var(--ease-spring) both;
+  animation: update-filter-badge-pulse 2.4s var(--ease-in-out-fluid) infinite;
+  animation-play-state: paused;
 }
 
 .watchlist-update-filter__badge[hidden] {
@@ -1333,20 +1343,16 @@ code {
 }
 
 .watchlist-update-filter.has-updates:not(:disabled)::before {
-  opacity: 0.12;
+  opacity: 0.1;
   transform: scale(1);
-  animation: update-filter-halo 3.2s var(--ease-in-out-fluid) infinite;
-  animation-play-state: paused;
 }
 
 .watchlist-update-filter.has-updates:not(:disabled) .icon {
-  filter: drop-shadow(0 2px 5px var(--color-update-glow));
-  animation: update-filter-ready 3.2s var(--ease-in-out-fluid) infinite;
-  animation-play-state: paused;
+  filter: none;
 }
 
-.watchlist-update-filter.has-updates.is-glow-visible::before,
-.watchlist-update-filter.has-updates.is-glow-visible .icon {
+.watchlist-update-filter.has-updates.is-glow-visible:not(.is-active)
+  .watchlist-update-filter__badge {
   animation-play-state: running;
 }
 
@@ -1394,58 +1400,24 @@ code {
   color: var(--color-update-button);
   background: var(--color-surface);
   box-shadow: none;
+  animation: none;
 }
 
-@keyframes update-filter-ready {
+@keyframes update-filter-badge-pulse {
   0%,
   100% {
-    opacity: 0.86;
-    transform: scale(1);
+    opacity: 0.72;
+    transform: scale(0.92);
   }
 
-  84% {
-    opacity: 0.94;
-    transform: scale(1.03);
-  }
-
-  89% {
+  42% {
     opacity: 1;
-    transform: scale(1.09);
+    transform: scale(1.1);
   }
 
-  94% {
+  58% {
     opacity: 0.96;
-    transform: scale(1.04);
-  }
-}
-
-@keyframes update-filter-halo {
-  0%,
-  100% {
-    opacity: 0.08;
-    transform: scale(0.94);
-  }
-
-  88% {
-    opacity: 0.2;
-    transform: scale(1.04);
-  }
-
-  94% {
-    opacity: 0.12;
     transform: scale(1);
-  }
-}
-
-@keyframes update-filter-badge-in {
-  from {
-    opacity: 0;
-    transform: scale(0.62) translateY(2px);
-  }
-
-  to {
-    opacity: 1;
-    transform: scale(1) translateY(0);
   }
 }
 
@@ -3196,29 +3168,6 @@ a.latest-season__title .icon {
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-}
-
-.dialog__all-link {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-  gap: 5px;
-  padding: 0 7px;
-  color: var(--color-info);
-  border-radius: var(--radius-small);
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.dialog__all-link:hover {
-  background: var(--color-info-soft);
-}
-
-.dialog__all-link .icon {
-  width: 14px;
-  height: 14px;
 }
 
 .dialog__heading-description {
@@ -5033,7 +4982,7 @@ a.latest-season__title .icon {
   line-height: 1.45;
 }
 
-.account-sync-details__log-link {
+.log-link-button {
   display: inline-flex;
   min-height: 32px;
   flex: 0 0 auto;
@@ -5046,22 +4995,23 @@ a.latest-season__title .icon {
   font-size: 0.6875rem;
   font-weight: 700;
   text-decoration: none;
+  white-space: nowrap;
   transition:
     color var(--motion-fast) var(--ease-out-fluid),
     background-color var(--motion-fast) var(--ease-out-fluid),
     transform var(--motion-fast) var(--ease-out-fluid);
 }
 
-.account-sync-details__log-link .icon {
+.log-link-button .icon {
   width: 14px;
   height: 14px;
 }
 
-.account-sync-details__log-link:hover {
+.log-link-button:hover {
   background: var(--color-info-soft);
 }
 
-.account-sync-details__log-link:active {
+.log-link-button:active {
   transform: scale(0.98);
 }
 
@@ -6548,11 +6498,6 @@ a.latest-season__title .icon {
     gap: 10px;
   }
 
-  .dialog__all-link {
-    padding-right: 5px;
-    padding-left: 5px;
-  }
-
   .dialog__actions {
     flex-wrap: wrap;
     padding-right: 18px;
@@ -6616,7 +6561,7 @@ a.latest-season__title .icon {
   }
 
   .settings-account-card__sync-details
-    .account-sync-details__log-link {
+    .log-link-button {
     margin-left: auto;
   }
 
@@ -7232,12 +7177,8 @@ a.latest-season__title .icon {
   animation-delay: calc(var(--motion-stagger) * 5);
 }
 
-.subscription-list.is-list-entering .subscription-group {
-  animation: list-item-enter var(--motion-enter) var(--ease-out-fluid) both;
-}
-
 .subscription-list.is-list-entering .subscription-row {
-  animation: list-item-enter 340ms var(--ease-out-fluid) both;
+  animation: list-item-enter 460ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
 
 .subscription-list.is-list-entering .subscription-row:nth-child(2) {
@@ -7432,8 +7373,8 @@ a.latest-season__title .icon,
 
 @keyframes list-item-enter {
   from {
-    opacity: 0;
-    transform: translateY(8px);
+    opacity: 0.16;
+    transform: translateY(6px);
   }
 
   to {
@@ -7649,7 +7590,6 @@ a.latest-season__title .icon,
   .series-search-panel:not([hidden]),
   .watchlist-search-result,
   .series-search-option,
-  .subscription-list.is-list-entering .subscription-group,
   .subscription-list.is-list-entering .subscription-row,
   .subscription-row__details.is-revealing,
   .subscription-row__details.is-collapsing,
@@ -7671,15 +7611,9 @@ a.latest-season__title .icon,
     transform: none;
   }
 
-  .watchlist-update-filter.has-updates:not(:disabled) .icon,
+  .watchlist-update-filter__badge,
   .theme-switcher.is-theme-changing .icon {
     animation: none !important;
-  }
-
-  .watchlist-update-filter.has-updates:not(:disabled)::before {
-    animation: none !important;
-    opacity: 0.12;
-    transform: none;
   }
 
   .channel-toggle input:checked + .channel-toggle__track::after {

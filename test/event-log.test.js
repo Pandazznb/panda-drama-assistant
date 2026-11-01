@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   EVENT_LOG_MAX_FILE_BYTES,
+  EVENT_LOG_RETENTION_DAYS,
   EventLogStore,
 } from "../src/event-log.js";
 
@@ -56,6 +57,7 @@ test("event logs split by Shanghai day, paginate, and deduplicate on reload", as
   assert.equal(firstPage.total, 3);
   assert.equal(firstPage.fileCount, 2);
   assert.equal(firstPage.maxFileBytes, EVENT_LOG_MAX_FILE_BYTES);
+  assert.equal(firstPage.retentionDays, EVENT_LOG_RETENTION_DAYS);
   assert.equal(firstPage.timeZone, "Asia/Shanghai");
   assert.deepEqual(
     firstPage.events.map((event) => event.id),
@@ -117,4 +119,74 @@ test("event logs rotate to a new part when one MiB-equivalent limit is reached",
     files.map(async (file) => (await fs.stat(path.join(directory, file))).size),
   );
   assert.ok(sizes.every((size) => size <= 300));
+});
+
+test("event logs remove files older than 30 days in Shanghai", async (t) => {
+  const directory = await temporaryLogDirectory(t);
+  const events = [
+    {
+      fileName: "events-2026-09-30-0001.jsonl",
+      event: {
+        id: "event-expired-september",
+        type: "episode",
+        message: "超过保留期",
+        createdAt: "2026-09-30T01:00:00.000Z",
+      },
+    },
+    {
+      fileName: "events-2026-10-02-0001.jsonl",
+      event: {
+        id: "event-expired-october",
+        type: "episode",
+        message: "超过保留期",
+        createdAt: "2026-10-02T01:00:00.000Z",
+      },
+    },
+    {
+      fileName: "events-2026-10-03-0001.jsonl",
+      event: {
+        id: "event-boundary",
+        type: "baseline",
+        message: "保留期边界",
+        createdAt: "2026-10-03T01:00:00.000Z",
+      },
+    },
+    {
+      fileName: "events-2026-11-02-0001.jsonl",
+      event: {
+        id: "event-current",
+        type: "episode",
+        message: "当前记录",
+        createdAt: "2026-11-02T01:00:00.000Z",
+      },
+    },
+  ];
+  await Promise.all(
+    events.map(({ fileName, event }) =>
+      fs.writeFile(
+        path.join(directory, fileName),
+        `${JSON.stringify(event)}\n`,
+        "utf8",
+      ),
+    ),
+  );
+
+  const store = new EventLogStore(directory, {
+    now: () => new Date("2026-11-02T06:00:00.000Z"),
+  });
+  const page = await store.readPage({ offset: 0, limit: 100 });
+
+  assert.equal(page.retentionDays, 30);
+  assert.equal(page.total, 2);
+  assert.deepEqual(
+    page.events.map((event) => event.id),
+    ["event-current", "event-boundary"],
+  );
+  assert.deepEqual(
+    (await fs.readdir(directory)).sort(),
+    [
+      "events-2026-10-03-0001.jsonl",
+      "events-2026-11-02-0001.jsonl",
+    ],
+  );
 });

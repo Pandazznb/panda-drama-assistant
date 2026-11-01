@@ -24,6 +24,12 @@ const MAX_TELEGRAM_TOKEN_LENGTH = 96;
 const MAX_TELEGRAM_CHAT_ID_LENGTH = 64;
 const MAX_WECOM_KEY_LENGTH = 128;
 const MAX_WECOM_TEXT_BYTES = 2_048;
+const MAX_WECOM_APP_CORP_ID_LENGTH = 64;
+const MAX_WECOM_APP_SECRET_LENGTH = 256;
+const MAX_WECOM_APP_AGENT_ID = 2_147_483_647;
+const MAX_WECOM_APP_TO_USER_LENGTH = 1_024;
+const MAX_WECOM_APP_TO_USER_MEMBERS = 100;
+const MAX_WECOM_APP_ACCESS_TOKEN_LENGTH = 512;
 const MAX_DINGTALK_ACCESS_TOKEN_LENGTH = 256;
 const MAX_DINGTALK_SECRET_LENGTH = 256;
 const MAX_PROXY_URL_LENGTH = 2_048;
@@ -32,6 +38,10 @@ const NTFY_TOKEN_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
 const TELEGRAM_TOKEN_PATTERN = /^\d{5,20}:[A-Za-z0-9_-]{20,64}$/;
 const TELEGRAM_CHAT_ID_PATTERN = /^(?:-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{3,31})$/;
 const WECOM_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
+const WECOM_APP_CORP_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const WECOM_APP_SECRET_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
+const WECOM_APP_USER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const WECOM_APP_ACCESS_TOKEN_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
 const DINGTALK_ACCESS_TOKEN_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
 const DINGTALK_SECRET_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
 const PROXY_PROTOCOLS = new Set(["http:", "https:"]);
@@ -42,6 +52,7 @@ export const NOTIFICATION_CHANNELS = Object.freeze([
   "ntfy",
   "telegram",
   "wecom",
+  "wecomApp",
   "dingtalk",
 ]);
 
@@ -49,7 +60,8 @@ const CHANNEL_LABELS = Object.freeze({
   bark: "Bark",
   ntfy: "ntfy",
   telegram: "Telegram",
-  wecom: "企业微信",
+  wecom: "企业微信群机器人",
+  wecomApp: "企业微信应用",
   dingtalk: "钉钉",
 });
 
@@ -124,6 +136,47 @@ function validStoredTelegramChatId(value) {
 function validStoredWeComKey(value) {
   const key = storedString(value, MAX_WECOM_KEY_LENGTH);
   return WECOM_KEY_PATTERN.test(key) ? key : "";
+}
+
+function validStoredWeComAppCorpId(value) {
+  const corpId = storedString(value, MAX_WECOM_APP_CORP_ID_LENGTH);
+  return WECOM_APP_CORP_ID_PATTERN.test(corpId) ? corpId : "";
+}
+
+function validStoredWeComAppSecret(value) {
+  const secret = storedString(value, MAX_WECOM_APP_SECRET_LENGTH);
+  return WECOM_APP_SECRET_PATTERN.test(secret) ? secret : "";
+}
+
+function validStoredWeComAppAgentId(value) {
+  const agentId = storedString(value, 10);
+  if (!/^\d+$/.test(agentId)) {
+    return "";
+  }
+  const number = Number(agentId);
+  return Number.isInteger(number) &&
+    number >= 1 &&
+    number <= MAX_WECOM_APP_AGENT_ID
+    ? String(number)
+    : "";
+}
+
+function validStoredWeComAppToUser(value) {
+  const toUser = String(value || "").trim();
+  if (!toUser || toUser.length > MAX_WECOM_APP_TO_USER_LENGTH) {
+    return "";
+  }
+  const members = toUser.split("|");
+  if (members.length === 1 && members[0] === "@all") {
+    return "@all";
+  }
+  return members.length <= MAX_WECOM_APP_TO_USER_MEMBERS &&
+    members.every(
+      (member) =>
+        member.length <= 64 && WECOM_APP_USER_ID_PATTERN.test(member),
+    )
+    ? members.join("|")
+    : "";
 }
 
 function validStoredDingTalkAccessToken(value) {
@@ -249,6 +302,13 @@ export function createDefaultNotificationSettings() {
       enabled: false,
       key: "",
     },
+    wecomApp: {
+      enabled: false,
+      corpId: "",
+      secret: "",
+      agentId: "",
+      toUser: "",
+    },
     dingtalk: {
       enabled: false,
       accessToken: "",
@@ -264,6 +324,7 @@ export function normalizeNotificationSettings(input, legacyBarkKey = "") {
   const ntfy = isPlainObject(source.ntfy) ? source.ntfy : {};
   const telegram = isPlainObject(source.telegram) ? source.telegram : {};
   const wecom = isPlainObject(source.wecom) ? source.wecom : {};
+  const wecomApp = isPlainObject(source.wecomApp) ? source.wecomApp : {};
   const dingtalk = isPlainObject(source.dingtalk) ? source.dingtalk : {};
   const migratedBarkKey = validStoredBarkKey(legacyBarkKey);
   const barkKey = validStoredBarkKey(bark.key) || migratedBarkKey;
@@ -287,6 +348,13 @@ export function normalizeNotificationSettings(input, legacyBarkKey = "") {
     wecom: {
       enabled: wecom.enabled === true,
       key: validStoredWeComKey(wecom.key),
+    },
+    wecomApp: {
+      enabled: wecomApp.enabled === true,
+      corpId: validStoredWeComAppCorpId(wecomApp.corpId),
+      secret: validStoredWeComAppSecret(wecomApp.secret),
+      agentId: validStoredWeComAppAgentId(wecomApp.agentId),
+      toUser: validStoredWeComAppToUser(wecomApp.toUser),
     },
     dingtalk: {
       enabled: dingtalk.enabled === true,
@@ -378,6 +446,112 @@ export function normalizeWeComKey(value) {
   return key;
 }
 
+export function normalizeWeComAppCorpId(value) {
+  const corpId = String(value || "").trim();
+  if (
+    !corpId ||
+    corpId.length > MAX_WECOM_APP_CORP_ID_LENGTH ||
+    !WECOM_APP_CORP_ID_PATTERN.test(corpId)
+  ) {
+    throw new NotificationError(
+      "企业微信应用的企业 ID 格式不正确。",
+      "INVALID_WECOM_APP_CORP_ID",
+      400,
+    );
+  }
+  return corpId;
+}
+
+export function normalizeWeComAppSecret(value) {
+  const secret = String(value || "").trim();
+  if (
+    !secret ||
+    secret.length > MAX_WECOM_APP_SECRET_LENGTH ||
+    !WECOM_APP_SECRET_PATTERN.test(secret)
+  ) {
+    throw new NotificationError(
+      "企业微信应用的 Secret 格式不正确。",
+      "INVALID_WECOM_APP_SECRET",
+      400,
+    );
+  }
+  return secret;
+}
+
+export function normalizeWeComAppAgentId(value) {
+  const agentId = String(value ?? "").trim();
+  const number = Number(agentId);
+  if (
+    !/^\d+$/.test(agentId) ||
+    !Number.isInteger(number) ||
+    number < 1 ||
+    number > MAX_WECOM_APP_AGENT_ID
+  ) {
+    throw new NotificationError(
+      "企业微信应用的 AgentId 必须是正整数。",
+      "INVALID_WECOM_APP_AGENT_ID",
+      400,
+    );
+  }
+  return String(number);
+}
+
+export function normalizeWeComAppToUser(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    throw new NotificationError(
+      "启用企业微信应用前请填写接收成员。",
+      "INVALID_WECOM_APP_TO_USER",
+      400,
+    );
+  }
+  const members = raw
+    .split(/[|,，\s]+/)
+    .map((member) => member.trim())
+    .filter(Boolean);
+  if (
+    !members.length ||
+    members.length > MAX_WECOM_APP_TO_USER_MEMBERS ||
+    members.some((member) => member.length > 64) ||
+    (members.includes("@all") && members.length !== 1) ||
+    members.some(
+      (member) =>
+        member !== "@all" && !WECOM_APP_USER_ID_PATTERN.test(member),
+    )
+  ) {
+    throw new NotificationError(
+      "企业微信应用接收成员仅支持 @all，或使用 | 分隔的 UserID。",
+      "INVALID_WECOM_APP_TO_USER",
+      400,
+    );
+  }
+  const normalized = members.join("|");
+  if (normalized.length > MAX_WECOM_APP_TO_USER_LENGTH) {
+    throw new NotificationError(
+      "企业微信应用接收成员不能超过 1024 个字符。",
+      "INVALID_WECOM_APP_TO_USER",
+      400,
+    );
+  }
+  return normalized;
+}
+
+function normalizeWeComAppAccessToken(value) {
+  const token = String(value || "").trim();
+  if (
+    !token ||
+    token.length > MAX_WECOM_APP_ACCESS_TOKEN_LENGTH ||
+    !WECOM_APP_ACCESS_TOKEN_PATTERN.test(token)
+  ) {
+    throw new NotificationError(
+      "企业微信应用返回的 access token 无效。",
+      "INVALID_WECOM_APP_ACCESS_TOKEN",
+      502,
+    );
+  }
+  return token;
+}
+
 export function normalizeDingTalkAccessToken(value) {
   const token = String(value || "").trim();
   if (
@@ -439,6 +613,14 @@ export function isNotificationChannelConfigured(channel, config) {
   if (channel === "wecom") {
     return Boolean(validStoredWeComKey(config?.key));
   }
+  if (channel === "wecomApp") {
+    return Boolean(
+      validStoredWeComAppCorpId(config?.corpId) &&
+        validStoredWeComAppSecret(config?.secret) &&
+        validStoredWeComAppAgentId(config?.agentId) &&
+        validStoredWeComAppToUser(config?.toUser),
+    );
+  }
   if (channel === "dingtalk") {
     return Boolean(validStoredDingTalkAccessToken(config?.accessToken));
   }
@@ -481,6 +663,10 @@ export function describeNotificationSettings(settings) {
   channels.telegram.tokenHint = maskSecret(normalized.telegram.botToken);
   channels.telegram.chatIdHint = maskSecret(normalized.telegram.chatId);
   channels.wecom.keyHint = maskSecret(normalized.wecom.key);
+  channels.wecomApp.corpIdConfigured = Boolean(normalized.wecomApp.corpId);
+  channels.wecomApp.secretConfigured = Boolean(normalized.wecomApp.secret);
+  channels.wecomApp.agentIdConfigured = Boolean(normalized.wecomApp.agentId);
+  channels.wecomApp.toUserConfigured = Boolean(normalized.wecomApp.toUser);
   channels.dingtalk.accessTokenConfigured = Boolean(
     normalized.dingtalk.accessToken,
   );
@@ -579,6 +765,28 @@ function applyChannelPatch(current, patch, channel) {
     }
   }
 
+  if (channel === "wecomApp") {
+    if (patch.clear === true) {
+      next.corpId = "";
+      next.secret = "";
+      next.agentId = "";
+      next.toUser = "";
+    } else {
+      if (Object.hasOwn(patch, "corpId") && optionalString(patch.corpId)) {
+        next.corpId = normalizeWeComAppCorpId(patch.corpId);
+      }
+      if (Object.hasOwn(patch, "secret") && optionalString(patch.secret)) {
+        next.secret = normalizeWeComAppSecret(patch.secret);
+      }
+      if (Object.hasOwn(patch, "agentId") && optionalString(patch.agentId)) {
+        next.agentId = normalizeWeComAppAgentId(patch.agentId);
+      }
+      if (Object.hasOwn(patch, "toUser") && optionalString(patch.toUser)) {
+        next.toUser = normalizeWeComAppToUser(patch.toUser);
+      }
+    }
+  }
+
   if (channel === "dingtalk") {
     if (patch.clear === true) {
       next.accessToken = "";
@@ -606,7 +814,9 @@ function applyChannelPatch(current, patch, channel) {
             ? "启用 Telegram 前请先填写 Bot token 和 chat ID。"
             : channel === "wecom"
               ? "启用企业微信前请先填写机器人 key。"
-              : "启用钉钉前请先填写机器人 access token。";
+              : channel === "wecomApp"
+                ? "启用企业微信应用前请先填写企业 ID、Secret、AgentId 和接收成员。"
+                : "启用钉钉前请先填写机器人 access token。";
     throw new NotificationError(
       message,
       "INCOMPLETE_NOTIFICATION_SETTINGS",
@@ -879,6 +1089,28 @@ function webhookMessageText(message, maxBytes = MAX_WECOM_TEXT_BYTES) {
   );
 }
 
+function notificationErrorDetail(value, sensitiveValues = []) {
+  let detail = String(value || "");
+  for (const sensitiveValue of sensitiveValues) {
+    const text = String(sensitiveValue || "");
+    if (text) {
+      detail = detail.split(text).join("***");
+    }
+  }
+  detail = detail
+    .replace(/corpsecret=[^&\s]+/gi, "corpsecret=***")
+    .replace(/access_token=[^&\s]+/gi, "access_token=***");
+  return truncate(detail, 160);
+}
+
+async function readJsonResponse(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 export function buildWeComRequest(config, message) {
   const key = normalizeWeComKey(config?.key);
   const endpoint = new URL("/cgi-bin/webhook/send", WECOM_API_ORIGIN);
@@ -898,6 +1130,50 @@ export function buildWeComRequest(config, message) {
       text: {
         content: webhookMessageText(message),
       },
+    },
+  };
+}
+
+export function buildWeComAppTokenRequest(config) {
+  const corpId = normalizeWeComAppCorpId(config?.corpId);
+  const secret = normalizeWeComAppSecret(config?.secret);
+  const endpoint = new URL("/cgi-bin/gettoken", WECOM_API_ORIGIN);
+  endpoint.searchParams.set("corpid", corpId);
+  endpoint.searchParams.set("corpsecret", secret);
+  if (endpoint.origin !== WECOM_API_ORIGIN) {
+    throw new NotificationError(
+      "企业微信应用授权地址无效。",
+      "INVALID_WECOM_APP_ENDPOINT",
+      400,
+    );
+  }
+  return { endpoint: endpoint.href };
+}
+
+export function buildWeComAppRequest(config, message, accessToken) {
+  const agentId = normalizeWeComAppAgentId(config?.agentId);
+  const toUser = normalizeWeComAppToUser(config?.toUser);
+  const token = normalizeWeComAppAccessToken(accessToken);
+  const endpoint = new URL("/cgi-bin/message/send", WECOM_API_ORIGIN);
+  endpoint.searchParams.set("access_token", token);
+  if (endpoint.origin !== WECOM_API_ORIGIN) {
+    throw new NotificationError(
+      "企业微信应用消息地址无效。",
+      "INVALID_WECOM_APP_ENDPOINT",
+      400,
+    );
+  }
+
+  return {
+    endpoint: endpoint.href,
+    payload: {
+      touser: toUser,
+      msgtype: "text",
+      agentid: Number(agentId),
+      text: {
+        content: webhookMessageText(message),
+      },
+      safe: 0,
     },
   };
 }
@@ -1013,6 +1289,84 @@ export function sendWeComNotification(
   });
 }
 
+export async function sendWeComAppNotification(
+  config,
+  message,
+  { fetchImpl = globalThis.fetch, timeoutMs = NOTIFICATION_TIMEOUT_MS } = {},
+) {
+  const tokenRequest = buildWeComAppTokenRequest(config);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let accessToken = "";
+
+  try {
+    const tokenResponse = await fetchImpl(tokenRequest.endpoint, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+      },
+    });
+    const tokenResult = await readJsonResponse(tokenResponse);
+    if (!tokenResponse.ok || tokenResult?.errcode !== 0) {
+      const detail = notificationErrorDetail(tokenResult?.errmsg, [
+        config?.corpId,
+        config?.secret,
+      ]);
+      throw new NotificationError(
+        detail
+          ? `企业微信应用授权失败：${detail}`
+          : `企业微信应用授权返回 HTTP ${tokenResponse.status}，请检查企业 ID 和 Secret。`,
+        "WECOM_APP_TOKEN_HTTP_ERROR",
+      );
+    }
+    accessToken = normalizeWeComAppAccessToken(tokenResult?.access_token);
+
+    const request = buildWeComAppRequest(config, message, accessToken);
+    const response = await fetchImpl(request.endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        accept: "application/json",
+      },
+      body: JSON.stringify(request.payload),
+    });
+    const result = await readJsonResponse(response);
+    if (!response.ok || result?.errcode !== 0) {
+      const detail = notificationErrorDetail(result?.errmsg, [
+        config?.corpId,
+        config?.secret,
+        accessToken,
+      ]);
+      throw new NotificationError(
+        detail
+          ? `企业微信应用返回错误：${detail}`
+          : `企业微信应用返回 HTTP ${response.status}，请检查 AgentId 和接收成员。`,
+        "WECOM_APP_HTTP_ERROR",
+      );
+    }
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof NotificationError) {
+      throw error;
+    }
+    if (error?.name === "AbortError") {
+      throw new NotificationError(
+        "企业微信应用请求超时。",
+        "WECOM_APP_TIMEOUT",
+        504,
+      );
+    }
+    throw new NotificationError(
+      "无法连接企业微信应用，请检查网络或代理。",
+      "WECOM_APP_REQUEST_FAILED",
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export function sendDingTalkNotification(
   config,
   message,
@@ -1055,6 +1409,12 @@ function sendToChannel(
   }
   if (channel === "wecom") {
     return sendWeComNotification(config, message, {
+      fetchImpl,
+      timeoutMs,
+    });
+  }
+  if (channel === "wecomApp") {
+    return sendWeComAppNotification(config, message, {
       fetchImpl,
       timeoutMs,
     });

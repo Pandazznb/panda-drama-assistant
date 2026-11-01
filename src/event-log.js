@@ -4,9 +4,11 @@ import { isPlainObject, nowIso, parseTimestamp } from "./utils.js";
 
 export const EVENT_LOG_TIME_ZONE = "Asia/Shanghai";
 export const EVENT_LOG_MAX_FILE_BYTES = 1024 * 1024;
+export const EVENT_LOG_RETENTION_DAYS = 30;
 
 const LOG_FILE_PATTERN =
   /^events-(\d{4}-\d{2}-\d{2})-(\d{4})\.jsonl$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const dateKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: EVENT_LOG_TIME_ZONE,
   year: "numeric",
@@ -46,12 +48,22 @@ function logFileName(dateKey, part) {
 export class EventLogStore {
   constructor(
     directory,
-    { maxFileBytes = EVENT_LOG_MAX_FILE_BYTES } = {},
+    {
+      maxFileBytes = EVENT_LOG_MAX_FILE_BYTES,
+      retentionDays = EVENT_LOG_RETENTION_DAYS,
+      now = () => new Date(),
+    } = {},
   ) {
     this.directory = path.resolve(directory);
     this.maxFileBytes = Math.max(256, Number(maxFileBytes));
+    this.retentionDays = Math.max(
+      1,
+      Number.parseInt(retentionDays, 10) || EVENT_LOG_RETENTION_DAYS,
+    );
+    this.clock = typeof now === "function" ? now : () => new Date(now);
     this.initialized = false;
     this.initialization = null;
+    this.lastRetentionCheckDateKey = null;
     this.eventsById = new Map();
     this.days = new Map();
     this.filePaths = new Set();
@@ -68,11 +80,79 @@ export class EventLogStore {
     await this.initialization;
   }
 
+  currentDateKey() {
+    const date = new Date(this.clock());
+    return eventLogDateKey(
+      Number.isNaN(date.getTime()) ? new Date() : date,
+    );
+  }
+
+  retentionCutoffDateKey() {
+    const date = new Date(this.clock());
+    const current = Number.isNaN(date.getTime()) ? new Date() : date;
+    return eventLogDateKey(
+      new Date(
+        current.getTime() - this.retentionDays * DAY_MS,
+      ).toISOString(),
+    );
+  }
+
+  async pruneExpiredFiles({ force = false } = {}) {
+    const currentDateKey = this.currentDateKey();
+    if (
+      !force &&
+      this.lastRetentionCheckDateKey === currentDateKey
+    ) {
+      return [];
+    }
+
+    const cutoffDateKey = this.retentionCutoffDateKey();
+    const entries = await fs.readdir(this.directory, {
+      withFileTypes: true,
+    });
+    const expiredFileNames = entries
+      .filter((entry) => {
+        if (!entry.isFile()) {
+          return false;
+        }
+        const match = entry.name.match(LOG_FILE_PATTERN);
+        return Boolean(match && match[1] < cutoffDateKey);
+      })
+      .map((entry) => entry.name);
+
+    if (expiredFileNames.length) {
+      await Promise.all(
+        expiredFileNames.map((fileName) =>
+          fs.rm(path.join(this.directory, fileName), {
+            force: true,
+          }),
+        ),
+      );
+      const expiredFiles = new Set(expiredFileNames);
+      for (const fileName of expiredFileNames) {
+        const match = fileName.match(LOG_FILE_PATTERN);
+        this.filePaths.delete(path.join(this.directory, fileName));
+        if (match) {
+          this.days.delete(match[1]);
+        }
+      }
+      for (const [id, event] of this.eventsById) {
+        if (expiredFiles.has(event.logFile)) {
+          this.eventsById.delete(id);
+        }
+      }
+    }
+
+    this.lastRetentionCheckDateKey = currentDateKey;
+    return expiredFileNames;
+  }
+
   async load() {
     await fs.mkdir(this.directory, {
       recursive: true,
       mode: 0o700,
     });
+    await this.pruneExpiredFiles({ force: true });
     const entries = await fs.readdir(this.directory, {
       withFileTypes: true,
     });
@@ -127,6 +207,7 @@ export class EventLogStore {
     const list = Array.isArray(events) ? events : [events];
     const operation = this.appendQueue.then(async () => {
       await this.init();
+      await this.pruneExpiredFiles();
       for (const input of list) {
         const event = normalizedLogEvent(input);
         if (!event || this.eventsById.has(event.id)) {
@@ -188,6 +269,7 @@ export class EventLogStore {
   async readPage({ offset = 0, limit = 200 } = {}) {
     await this.init();
     await this.appendQueue;
+    await this.pruneExpiredFiles();
     const events = [...this.eventsById.values()].sort((left, right) => {
       const timeDifference =
         (parseTimestamp(right.createdAt) || 0) -
@@ -203,6 +285,7 @@ export class EventLogStore {
       newestAt: events[0]?.createdAt || null,
       oldestAt: events.at(-1)?.createdAt || null,
       maxFileBytes: this.maxFileBytes,
+      retentionDays: this.retentionDays,
       timeZone: EVENT_LOG_TIME_ZONE,
     };
   }
@@ -210,6 +293,7 @@ export class EventLogStore {
   async readAllFiles() {
     await this.init();
     await this.appendQueue;
+    await this.pruneExpiredFiles();
     const fileNames = [...this.filePaths]
       .map((filePath) => path.basename(filePath))
       .filter((fileName) => LOG_FILE_PATTERN.test(fileName))

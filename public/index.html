@@ -132,6 +132,7 @@
       <section class="overview" aria-labelledby="page-title">
         <div class="overview__copy">
           <h1 id="page-title">我的追更</h1>
+          <p class="overview__tagline">长短都精彩，好剧看不停。</p>
         </div>
         <div class="overview__side">
           <dl class="stats" aria-label="追更概况">
@@ -465,16 +466,14 @@
           </div>
           <div class="dialog__header-actions">
             <a
-              class="dialog__all-link"
-              href="/api/logs/file"
-              target="_blank"
-              rel="noopener"
-              aria-label="在新标签页打开全部日志文件"
+              class="log-link-button"
+              href="/logs#events"
+              aria-label="打开系统日志"
             >
-              <span>显示全部</span>
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                <use href="#icon-external"></use>
+                <use href="#icon-history"></use>
               </svg>
+              <span>系统日志</span>
             </a>
             <button
               class="icon-button"
@@ -1045,7 +1044,7 @@
                   <p>逐部显示本次导入、写入账号和两边移除结果。</p>
                 </div>
                 <a
-                  class="account-sync-details__log-link"
+                  class="log-link-button"
                   href="/logs#system"
                   target="_blank"
                   rel="noopener"
@@ -1198,7 +1197,7 @@
             hidden
           >
             <div class="field">
-              <label for="check-cron">自动检查间隔（Cron）</label>
+              <label for="check-cron">自动检查间隔</label>
               <input
                 class="field__input--mono"
                 id="check-cron"
@@ -1213,10 +1212,8 @@
                 aria-describedby="check-cron-help settings-feedback"
               >
               <p class="field__help" id="check-cron-help">
-                标准 5 段 Cron，按 Asia/Shanghai 时区计算。例如
-                <code>*/30 * * * *</code> 每 30 分钟，
-                <code>0 * * * *</code> 每小时，
-                <code>0 8 * * *</code> 每天 08:00。
+                标准 5 段 Cron，默认
+                <code>11 0,6,10,12,18 * * *</code>。
               </p>
             </div>
 
@@ -1524,7 +1521,7 @@
               class="notification-channel"
               data-notification-channel="wecom"
             >
-              <legend>企业微信</legend>
+              <legend>企业微信群机器人</legend>
               <div class="notification-channel__summary">
                 <div>
                   <p id="wecom-description">通过企业微信群机器人发送消息。</p>
@@ -1572,6 +1569,115 @@
                     data-clear-channel="wecom"
                   >
                   <span>清除已保存的企业微信配置</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset
+              class="notification-channel"
+              data-notification-channel="wecomApp"
+            >
+              <legend>企业微信应用</legend>
+              <div class="notification-channel__summary">
+                <div>
+                  <p id="wecom-app-description">
+                    通过企业微信自建应用发送给指定成员。
+                  </p>
+                  <span class="channel-status" data-channel-status>未配置</span>
+                </div>
+                <label class="channel-toggle" for="enabled-wecom-app">
+                  <input id="enabled-wecom-app" type="checkbox">
+                  <span class="channel-toggle__track" aria-hidden="true"></span>
+                  <span>启用</span>
+                </label>
+              </div>
+              <div class="notification-channel__config" data-channel-config hidden>
+                <div class="field">
+                  <label for="wecom-app-corp-id">企业 ID</label>
+                  <input
+                    id="wecom-app-corp-id"
+                    name="wecomAppCorpId"
+                    type="text"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    placeholder="企业微信管理后台的企业 ID"
+                    aria-describedby="wecom-app-corp-id-help settings-feedback"
+                  >
+                  <p class="field__help" id="wecom-app-corp-id-help">
+                    在“我的企业”页面查看企业 ID；留空会保留已保存的值。
+                  </p>
+                </div>
+                <div class="field">
+                  <label for="wecom-app-secret">应用 Secret</label>
+                  <div class="input-with-action">
+                    <input
+                      id="wecom-app-secret"
+                      name="wecomAppSecret"
+                      type="password"
+                      autocomplete="new-password"
+                      spellcheck="false"
+                      placeholder="自建应用的 Secret"
+                      aria-describedby="wecom-app-secret-help settings-feedback"
+                    >
+                    <button
+                      class="input-action"
+                      type="button"
+                      data-toggle-secret="wecom-app-secret"
+                      aria-label="显示企业微信应用 Secret"
+                      aria-pressed="false"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#icon-eye"></use>
+                      </svg>
+                    </button>
+                  </div>
+                  <p class="field__help" id="wecom-app-secret-help">
+                    在自建应用的“开发者接口”中查看；留空会保留已保存的值。
+                  </p>
+                </div>
+                <div class="field">
+                  <label for="wecom-app-agent-id">AgentId</label>
+                  <input
+                    id="wecom-app-agent-id"
+                    name="wecomAppAgentId"
+                    type="text"
+                    inputmode="numeric"
+                    pattern="[0-9]*"
+                    maxlength="10"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="例如 1000002"
+                    aria-describedby="wecom-app-agent-id-help settings-feedback"
+                  >
+                  <p class="field__help" id="wecom-app-agent-id-help">
+                    填写自建应用的 AgentId，只填正整数；留空会保留已保存的值。
+                  </p>
+                </div>
+                <div class="field">
+                  <label for="wecom-app-to-user">接收成员</label>
+                  <input
+                    id="wecom-app-to-user"
+                    name="wecomAppToUser"
+                    type="text"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    placeholder="@all 或 UserID1|UserID2"
+                    aria-describedby="wecom-app-to-user-help settings-feedback"
+                  >
+                  <p class="field__help" id="wecom-app-to-user-help">
+                    @all 表示全员且必须单独使用；多个 UserID 使用 | 分隔，最多
+                    100 个。留空会保留已保存的值。
+                  </p>
+                </div>
+                <label class="check-field channel-clear" for="clear-wecom-app">
+                  <input
+                    id="clear-wecom-app"
+                    type="checkbox"
+                    data-clear-channel="wecomApp"
+                  >
+                  <span>清除已保存的企业微信应用配置</span>
                 </label>
               </div>
             </fieldset>
@@ -1744,7 +1850,15 @@
                       type="checkbox"
                       data-proxy-channel="wecom"
                     >
-                    <span>企业微信</span>
+                    <span>企业微信群机器人</span>
+                  </label>
+                  <label class="check-field" for="proxy-channel-wecom-app">
+                    <input
+                      id="proxy-channel-wecom-app"
+                      type="checkbox"
+                      data-proxy-channel="wecomApp"
+                    >
+                    <span>企业微信应用</span>
                   </label>
                   <label class="check-field" for="proxy-channel-dingtalk">
                     <input
@@ -1882,7 +1996,7 @@
                     <p>逐部显示本次导入、写入账号和两边移除结果。</p>
                   </div>
                   <a
-                    class="account-sync-details__log-link"
+                    class="log-link-button"
                     href="/logs#system"
                     target="_blank"
                     rel="noopener"
@@ -1908,7 +2022,7 @@
             </div>
 
             <div class="field">
-              <label for="account-sync-cron">自动同步计划（Cron）</label>
+              <label for="account-sync-cron">自动同步计划</label>
               <input
                 class="field__input--mono"
                 id="account-sync-cron"
@@ -1919,12 +2033,11 @@
                 autocapitalize="off"
                 spellcheck="false"
                 enterkeyhint="done"
-                placeholder="0 3 * * *"
+                placeholder="50 23 * * *"
                 aria-describedby="account-sync-cron-help settings-feedback"
               >
               <p class="field__help" id="account-sync-cron-help">
-                标准 5 段 Cron，按 Asia/Shanghai 时区计算。默认每天 03:00
-                自动同步账号收藏和预约。
+                标准 5 段 Cron，默认每天 23:50 自动同步账号收藏和预约。
               </p>
             </div>
 
@@ -2669,6 +2782,9 @@
       <symbol id="icon-external" viewBox="0 0 24 24">
         <path d="M15 3h6v6M10 14 21 3"></path>
         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+      </symbol>
+      <symbol id="icon-arrow-right" viewBox="0 0 24 24">
+        <path d="m9 18 6-6-6-6"></path>
       </symbol>
       <symbol id="icon-chevron-down" viewBox="0 0 24 24">
         <path d="m6 9 6 6 6-6"></path>

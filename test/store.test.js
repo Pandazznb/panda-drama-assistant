@@ -506,6 +506,7 @@ test("normalizeState migrates legacy Bark settings without losing the key", () =
   assert.equal(normalized.settings.notifications.ntfy.enabled, false);
   assert.equal(normalized.settings.notifications.telegram.enabled, false);
   assert.equal(normalized.settings.notifications.wecom.enabled, false);
+  assert.equal(normalized.settings.notifications.wecomApp.enabled, false);
   assert.equal(normalized.settings.notifications.dingtalk.enabled, false);
   assert.equal(
     normalized.settings.checkCron,
@@ -519,6 +520,7 @@ test("normalizeState migrates legacy Bark settings without losing the key", () =
       ntfy: false,
       telegram: false,
       wecom: false,
+      wecomApp: false,
       dingtalk: false,
     },
   });

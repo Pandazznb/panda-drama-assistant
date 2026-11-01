@@ -229,6 +229,13 @@ test("settings accept a custom Cron schedule and multiple notification channels"
         enabled: true,
         key: "wecom_MONITOR-key-123",
       },
+      wecomApp: {
+        enabled: true,
+        corpId: "wwMONITOR1234567890",
+        secret: "wecom-app_MONITOR-secret-123",
+        agentId: "1000002",
+        toUser: "UserID1|UserID2",
+      },
       dingtalk: {
         enabled: true,
         accessToken: "ding_MONITOR-token-123",
@@ -238,8 +245,8 @@ test("settings accept a custom Cron schedule and multiple notification channels"
   });
 
   assert.equal(settings.checkCron, "0 0 * * 0");
-  assert.equal(settings.notifications.enabledCount, 5);
-  assert.equal(settings.notifications.configuredCount, 5);
+  assert.equal(settings.notifications.enabledCount, 6);
+  assert.equal(settings.notifications.configuredCount, 6);
 
   const state = await harness.store.read();
   assert.equal(state.settings.checkCron, "0 0 * * 0");
@@ -252,6 +259,13 @@ test("settings accept a custom Cron schedule and multiple notification channels"
     state.settings.notifications.dingtalk.secret,
     "SEC_MONITOR-secret-123",
   );
+  assert.deepEqual(state.settings.notifications.wecomApp, {
+    enabled: true,
+    corpId: "wwMONITOR1234567890",
+    secret: "wecom-app_MONITOR-secret-123",
+    agentId: "1000002",
+    toUser: "UserID1|UserID2",
+  });
 
   const dashboard = await harness.service.getDashboard();
   const publicSettings = JSON.stringify(dashboard.settings);
@@ -262,6 +276,10 @@ test("settings accept a custom Cron schedule and multiple notification channels"
     false,
   );
   assert.equal(publicSettings.includes("wecom_MONITOR-key-123"), false);
+  assert.equal(publicSettings.includes("wwMONITOR1234567890"), false);
+  assert.equal(publicSettings.includes("wecom-app_MONITOR-secret-123"), false);
+  assert.equal(publicSettings.includes("1000002"), false);
+  assert.equal(publicSettings.includes("UserID1"), false);
   assert.equal(publicSettings.includes("ding_MONITOR-token-123"), false);
   assert.equal(publicSettings.includes("SEC_MONITOR-secret-123"), false);
 });

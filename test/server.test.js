@@ -308,10 +308,17 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /短剧助手/);
   assert.equal((page.match(/data-theme-toggle/g) || []).length, 1);
   assert.doesNotMatch(page, /data-theme-choice=/);
-  assert.match(page, /href="\/api\/logs\/file"/);
-  assert.match(page, /target="_blank"/);
-  assert.match(page, /aria-label="在新标签页打开全部日志文件"/);
-  assert.match(page, /显示全部/);
+  assert.match(
+    page,
+    /class="log-link-button"\s+href="\/logs#events"\s+aria-label="打开系统日志"/,
+  );
+  const eventLogLink = page.slice(
+    page.indexOf('class="log-link-button"'),
+    page.indexOf("</a>", page.indexOf('class="log-link-button"')),
+  );
+  assert.match(eventLogLink, /href="#icon-history"/);
+  assert.doesNotMatch(page, /aria-label="在新标签页打开全部日志文件"/);
+  assert.doesNotMatch(page, /显示全部/);
   assert.match(page, /id="watchlist-search-input"/);
   assert.match(page, /aria-label="正在追更的短剧搜索结果"/);
   assert.match(page, /搜索剧名、全拼或首字母/);
@@ -328,6 +335,14 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /id="settings-account-sync-details"/);
   assert.doesNotMatch(page, /id="settings-account-details"/);
   assert.match(page, /同步明细/);
+  assert.match(page, /data-notification-channel="wecomApp"/);
+  assert.match(page, /id="wecom-app-corp-id"/);
+  assert.match(page, /id="wecom-app-to-user"/);
+  assert.match(page, /最多\s+100 个/);
+  assert.match(
+    page,
+    /placeholder="50 23 \* \* \*"[\s\S]*?默认每天 23:50/,
+  );
   assert.match(page, /href="\/logs#system"/);
   assert.match(
     page,
@@ -450,7 +465,7 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     2 * 24 * 60,
   );
   assert.equal(state.settings.discoveryReminderCron, "0 */4 * * *");
-  assert.equal(state.settings.accountSyncCron, "0 3 * * *");
+  assert.equal(state.settings.accountSyncCron, "50 23 * * *");
   assert.equal(state.settings.pendingDiscoveryReminderCount, 0);
   assert.equal(state.settings.notifications.enabledCount, 0);
   assert.deepEqual(state.settings.notificationTemplates, {
@@ -464,6 +479,10 @@ test("account QR polling continues after switching to SMS while loading profile"
   const appScript = await fs.readFile(
     path.join(ROOT_DIR, "public", "app.js"),
     "utf8",
+  );
+  assert.match(
+    appScript,
+    /const DEFAULT_ACCOUNT_SYNC_CRON = "50 23 \* \* \*";/,
   );
   assert.match(
     appScript,
@@ -552,7 +571,7 @@ test("SMS security verification offers a direct QR login fallback", async () => 
   );
 });
 
-test("HTTP app serves the full log page and paginated event log API", async (t) => {
+test("HTTP app serves the recent log page and paginated event log API", async (t) => {
   const harness = await startHarness(t);
 
   const pageResponse = await fetch(`${harness.origin}/logs`);
@@ -561,7 +580,8 @@ test("HTTP app serves the full log page and paginated event log API", async (t) 
   assert.match(page, /运行记录/);
   assert.match(page, /系统操作/);
   assert.match(page, /data-log-view="system"/);
-  assert.match(page, /id="logs-load-more"/);
+  assert.doesNotMatch(page, /id="logs-load-more"/);
+  assert.match(page, /超过 30 天的文件自动删除/);
   assert.match(page, /rel="manifest" href="\/manifest\.webmanifest"/);
   assert.match(
     page,
@@ -622,6 +642,7 @@ test("HTTP app serves the full log page and paginated event log API", async (t) 
   assert.deepEqual(firstPage.storage, {
     policy: "daily-size",
     maxFileBytes: 1024 * 1024,
+    retentionDays: 30,
     timeZone: "Asia/Shanghai",
   });
 
@@ -697,6 +718,7 @@ test("system log API exposes paginated readable actions and the complete file", 
   assert.deepEqual(page.storage, {
     policy: "daily-size",
     maxFileBytes: 1024 * 1024,
+    retentionDays: 30,
     timeZone: "Asia/Shanghai",
   });
 
@@ -782,6 +804,13 @@ test("settings API saves a custom Cron schedule and all notification channels wi
           enabled: true,
           key: "wecom_SERVER-key-123",
         },
+        wecomApp: {
+          enabled: true,
+          corpId: "wwSERVER1234567890",
+          secret: "wecom-app_SERVER-secret-123",
+          agentId: "1000002",
+          toUser: "UserID1|UserID2",
+        },
         dingtalk: {
           enabled: true,
           accessToken: "ding_SERVER-token-123",
@@ -797,7 +826,7 @@ test("settings API saves a custom Cron schedule and all notification channels wi
   assert.equal(payload.settings.episodeNotificationWindowMinutes, 60);
   assert.equal(payload.settings.discoveryReminderDurationMinutes, 1440);
   assert.equal(payload.settings.discoveryReminderCron, "0 */8 * * *");
-  assert.equal(payload.settings.notifications.enabledCount, 5);
+  assert.equal(payload.settings.notifications.enabledCount, 6);
   assert.deepEqual(payload.settings.notifications.proxy, {
     enabled: true,
     configured: true,
@@ -807,6 +836,7 @@ test("settings API saves a custom Cron schedule and all notification channels wi
       ntfy: false,
       telegram: true,
       wecom: false,
+      wecomApp: false,
       dingtalk: false,
     },
   });
@@ -818,6 +848,10 @@ test("settings API saves a custom Cron schedule and all notification channels wi
     false,
   );
   assert.equal(serialized.includes("wecom_SERVER-key-123"), false);
+  assert.equal(serialized.includes("wwSERVER1234567890"), false);
+  assert.equal(serialized.includes("wecom-app_SERVER-secret-123"), false);
+  assert.equal(serialized.includes("1000002"), false);
+  assert.equal(serialized.includes("UserID1"), false);
   assert.equal(serialized.includes("ding_SERVER-token-123"), false);
   assert.equal(serialized.includes("SEC_SERVER-secret-123"), false);
   assert.equal(serialized.includes("proxy-user"), false);
@@ -830,7 +864,7 @@ test("settings API saves a custom Cron schedule and all notification channels wi
   assert.equal(state.settings.episodeNotificationWindowMinutes, 60);
   assert.equal(state.settings.discoveryReminderDurationMinutes, 1440);
   assert.equal(state.settings.discoveryReminderCron, "0 */8 * * *");
-  assert.equal(state.settings.notifications.configuredCount, 5);
+  assert.equal(state.settings.notifications.configuredCount, 6);
   assert.equal(state.settings.notifications.proxy.enabled, true);
   assert.equal(state.settings.notifications.proxy.configured, true);
   assert.equal(
@@ -854,8 +888,16 @@ test("settings API saves a custom Cron schedule and all notification channels wi
       ntfy: false,
       telegram: true,
       wecom: false,
+      wecomApp: false,
       dingtalk: false,
     },
+  });
+  assert.deepEqual(onDisk.settings.notifications.wecomApp, {
+    enabled: true,
+    corpId: "wwSERVER1234567890",
+    secret: "wecom-app_SERVER-secret-123",
+    agentId: "1000002",
+    toUser: "UserID1|UserID2",
   });
 });
 

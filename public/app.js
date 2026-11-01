@@ -218,6 +218,21 @@ const elements = {
       key: document.querySelector("#wecom-key"),
       clear: document.querySelector("#clear-wecom"),
     },
+    wecomApp: {
+      root: document.querySelector('[data-notification-channel="wecomApp"]'),
+      enabled: document.querySelector("#enabled-wecom-app"),
+      config: document.querySelector(
+        '[data-notification-channel="wecomApp"] [data-channel-config]',
+      ),
+      status: document.querySelector(
+        '[data-notification-channel="wecomApp"] [data-channel-status]',
+      ),
+      corpId: document.querySelector("#wecom-app-corp-id"),
+      secret: document.querySelector("#wecom-app-secret"),
+      agentId: document.querySelector("#wecom-app-agent-id"),
+      toUser: document.querySelector("#wecom-app-to-user"),
+      clear: document.querySelector("#clear-wecom-app"),
+    },
     dingtalk: {
       root: document.querySelector('[data-notification-channel="dingtalk"]'),
       enabled: document.querySelector("#enabled-dingtalk"),
@@ -369,7 +384,7 @@ const DEFAULT_STALE_COMPLETION_DAYS = 90;
 const DEFAULT_EPISODE_NOTIFICATION_WINDOW_MINUTES = 0;
 const DEFAULT_DISCOVERY_REMINDER_DURATION_MINUTES = 2 * 24 * 60;
 const DEFAULT_DISCOVERY_REMINDER_CRON = "0 */4 * * *";
-const DEFAULT_ACCOUNT_SYNC_CRON = "0 3 * * *";
+const DEFAULT_ACCOUNT_SYNC_CRON = "50 23 * * *";
 const DEFAULT_SUBSCRIPTION_RENDER_LIMIT = 20;
 const SUBSCRIPTION_LOAD_MORE_SIZE = 10;
 const MAX_NOTIFICATION_TEMPLATE_TITLE_LENGTH = 80;
@@ -447,13 +462,15 @@ const notificationChannelOrder = [
   "ntfy",
   "telegram",
   "wecom",
+  "wecomApp",
   "dingtalk",
 ];
 const notificationChannelLabels = {
   bark: "Bark",
   ntfy: "ntfy",
   telegram: "Telegram",
-  wecom: "企业微信",
+  wecom: "企业微信群机器人",
+  wecomApp: "企业微信应用",
   dingtalk: "钉钉",
 };
 const episodeNotificationWindowOptions = new Set([
@@ -2350,7 +2367,7 @@ function renderDashboard({ listMotion = "" } = {}) {
       appState.listMotionTimer = window.setTimeout(() => {
         elements.subscriptionList.classList.remove("is-list-entering");
         elements.subscriptionList.removeAttribute("data-motion");
-      }, 650);
+      }, 760);
     }
   }
   renderWatchlistSearchCandidates(searchMatches);
@@ -6276,11 +6293,13 @@ function setNotificationChannelMetadata(notifications, { resetValues = false } =
   const ntfy = notifications?.ntfy || {};
   const telegram = notifications?.telegram || {};
   const wecom = notifications?.wecom || {};
+  const wecomApp = notifications?.wecomApp || {};
   const dingtalk = notifications?.dingtalk || {};
   const barkChannel = elements.notificationChannels.bark;
   const ntfyChannel = elements.notificationChannels.ntfy;
   const telegramChannel = elements.notificationChannels.telegram;
   const wecomChannel = elements.notificationChannels.wecom;
+  const wecomAppChannel = elements.notificationChannels.wecomApp;
   const dingtalkChannel = elements.notificationChannels.dingtalk;
 
   barkChannel.configured = Boolean(bark.configured);
@@ -6322,6 +6341,30 @@ function setNotificationChannelMetadata(notifications, { resetValues = false } =
   wecomChannel.key.placeholder = wecom.keyHint
     ? `已保存 ${wecom.keyHint}，留空保持不变`
     : "粘贴企业微信机器人 key";
+
+  wecomAppChannel.configured = Boolean(wecomApp.configured);
+  wecomAppChannel.corpIdConfigured = Boolean(wecomApp.corpIdConfigured);
+  wecomAppChannel.secretConfigured = Boolean(wecomApp.secretConfigured);
+  wecomAppChannel.agentIdConfigured = Boolean(wecomApp.agentIdConfigured);
+  wecomAppChannel.toUserConfigured = Boolean(wecomApp.toUserConfigured);
+  wecomAppChannel.clear.hidden = !(
+    wecomAppChannel.corpIdConfigured ||
+    wecomAppChannel.secretConfigured ||
+    wecomAppChannel.agentIdConfigured ||
+    wecomAppChannel.toUserConfigured
+  );
+  wecomAppChannel.corpId.placeholder = wecomAppChannel.corpIdConfigured
+    ? "已保存企业 ID，留空保持不变"
+    : "企业微信管理后台的企业 ID";
+  wecomAppChannel.secret.placeholder = wecomAppChannel.secretConfigured
+    ? "已保存 Secret，留空保持不变"
+    : "自建应用的 Secret";
+  wecomAppChannel.agentId.placeholder = wecomAppChannel.agentIdConfigured
+    ? "已保存 AgentId，留空保持不变"
+    : "例如 1000002";
+  wecomAppChannel.toUser.placeholder = wecomAppChannel.toUserConfigured
+    ? "已保存接收成员，留空保持不变"
+    : "@all 或 UserID1|UserID2";
 
   dingtalkChannel.configured = Boolean(dingtalk.configured);
   dingtalkChannel.accessTokenConfigured = Boolean(
@@ -6619,6 +6662,22 @@ function focusSettingsError(error) {
   const notificationCodes = new Map([
     ["INVALID_NOTIFICATION_PROXY", elements.proxySettings.url],
     ["INCOMPLETE_NOTIFICATION_PROXY", elements.proxySettings.url],
+    [
+      "INVALID_WECOM_APP_CORP_ID",
+      elements.notificationChannels.wecomApp.corpId,
+    ],
+    [
+      "INVALID_WECOM_APP_SECRET",
+      elements.notificationChannels.wecomApp.secret,
+    ],
+    [
+      "INVALID_WECOM_APP_AGENT_ID",
+      elements.notificationChannels.wecomApp.agentId,
+    ],
+    [
+      "INVALID_WECOM_APP_TO_USER",
+      elements.notificationChannels.wecomApp.toUser,
+    ],
   ]);
   const accountCodes = new Map([
     ["INVALID_ACCOUNT_SYNC_CRON", elements.accountSyncCron],
@@ -7058,6 +7117,110 @@ function notificationSettingsPayload() {
     );
   }
 
+  const wecomAppChannel = elements.notificationChannels.wecomApp;
+  const wecomAppCorpId = wecomAppChannel.corpId.value.trim();
+  const wecomAppSecret = wecomAppChannel.secret.value.trim();
+  const wecomAppAgentId = wecomAppChannel.agentId.value.trim();
+  const wecomAppToUserRaw = wecomAppChannel.toUser.value.trim();
+  const wecomAppClear = wecomAppChannel.clear.checked;
+  const wecomAppEnabled =
+    wecomAppChannel.enabled.checked && !wecomAppClear;
+  const wecomAppMembers = wecomAppToUserRaw
+    .split(/[|,，\s]+/)
+    .filter(Boolean);
+  const wecomAppToUser = wecomAppMembers.join("|");
+  const wecomAppMemberPattern = /^[A-Za-z0-9._-]+$/;
+  if (
+    wecomAppCorpId &&
+    (wecomAppCorpId.length > 64 ||
+      !/^[A-Za-z0-9_-]+$/.test(wecomAppCorpId))
+  ) {
+    throw settingsValidationError(
+      "企业微信应用的企业 ID 格式不正确。",
+      wecomAppChannel.corpId,
+    );
+  }
+  if (
+    wecomAppSecret &&
+    (wecomAppSecret.length > 256 ||
+      !/^[A-Za-z0-9._~+/=-]+$/.test(wecomAppSecret))
+  ) {
+    throw settingsValidationError(
+      "企业微信应用的 Secret 格式不正确。",
+      wecomAppChannel.secret,
+    );
+  }
+  const wecomAppAgentIdNumber = Number(wecomAppAgentId);
+  if (
+    wecomAppAgentId &&
+    (!/^\d+$/.test(wecomAppAgentId) ||
+      !Number.isInteger(wecomAppAgentIdNumber) ||
+      wecomAppAgentIdNumber < 1 ||
+      wecomAppAgentIdNumber > 2_147_483_647)
+  ) {
+    throw settingsValidationError(
+      "企业微信应用的 AgentId 必须是正整数。",
+      wecomAppChannel.agentId,
+    );
+  }
+  if (
+    wecomAppToUserRaw &&
+    (!wecomAppMembers.length ||
+      wecomAppMembers.length > 100 ||
+      (wecomAppMembers.includes("@all") && wecomAppMembers.length !== 1) ||
+      wecomAppMembers.some(
+        (member) =>
+          member.length > 64 ||
+          (member !== "@all" && !wecomAppMemberPattern.test(member)),
+      ) ||
+      wecomAppToUser.length > 1024)
+  ) {
+    throw settingsValidationError(
+      "企业微信应用接收成员仅支持 @all，或使用 | 分隔的 UserID。",
+      wecomAppChannel.toUser,
+    );
+  }
+  if (
+    wecomAppEnabled &&
+    !wecomAppCorpId &&
+    !(wecomAppChannel.corpIdConfigured && !wecomAppClear)
+  ) {
+    throw settingsValidationError(
+      "启用企业微信应用前请填写企业 ID。",
+      wecomAppChannel.corpId,
+    );
+  }
+  if (
+    wecomAppEnabled &&
+    !wecomAppSecret &&
+    !(wecomAppChannel.secretConfigured && !wecomAppClear)
+  ) {
+    throw settingsValidationError(
+      "启用企业微信应用前请填写 Secret。",
+      wecomAppChannel.secret,
+    );
+  }
+  if (
+    wecomAppEnabled &&
+    !wecomAppAgentId &&
+    !(wecomAppChannel.agentIdConfigured && !wecomAppClear)
+  ) {
+    throw settingsValidationError(
+      "启用企业微信应用前请填写 AgentId。",
+      wecomAppChannel.agentId,
+    );
+  }
+  if (
+    wecomAppEnabled &&
+    !wecomAppToUser &&
+    !(wecomAppChannel.toUserConfigured && !wecomAppClear)
+  ) {
+    throw settingsValidationError(
+      "启用企业微信应用前请填写接收成员。",
+      wecomAppChannel.toUser,
+    );
+  }
+
   const dingtalkChannel = elements.notificationChannels.dingtalk;
   const dingtalkAccessToken = dingtalkChannel.accessToken.value.trim();
   const dingtalkSecret = dingtalkChannel.secret.value.trim();
@@ -7104,6 +7267,14 @@ function notificationSettingsPayload() {
         enabled: wecomEnabled,
         clear: wecomClear,
         ...(wecomKey ? { key: wecomKey } : {}),
+      },
+      wecomApp: {
+        enabled: wecomAppEnabled,
+        clear: wecomAppClear,
+        ...(wecomAppCorpId ? { corpId: wecomAppCorpId } : {}),
+        ...(wecomAppSecret ? { secret: wecomAppSecret } : {}),
+        ...(wecomAppAgentId ? { agentId: wecomAppAgentId } : {}),
+        ...(wecomAppToUser ? { toUser: wecomAppToUser } : {}),
       },
       dingtalk: {
         enabled: dingtalkEnabled,
