@@ -3473,6 +3473,48 @@ test("batch discovery aligns series that share the same new-season release", asy
   );
 });
 
+test("scheduled checks refresh the album list even within the discovery interval", async () => {
+  const now = new Date("2026-10-27T08:05:00.000Z");
+  const harness = await createHarness({
+    albumSeriesIds: [ROOT_ID],
+    now: () => now,
+    discoveryIntervalMs: 6 * 60 * 60_000,
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.store.mutate((state) => {
+    state.subscriptions[0].discovery.lastRunAt = now.toISOString();
+  });
+
+  harness.albumSeriesIds.push(NEXT_ID);
+  harness.details.set(
+    NEXT_ID,
+    detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧第六季",
+      episodeCount: 220,
+      firstVisibleTime: "2026-10-25T16:04:00.000Z",
+    }),
+  );
+
+  const result = await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    trigger: "cron",
+  });
+  const state = await harness.store.read();
+  const subscription = state.subscriptions.find(
+    (item) => item.id === subscriptionId,
+  );
+
+  assert.equal(result.discoveredSeasons, 1);
+  assert.deepEqual(harness.albumCalls, [ROOT_ID]);
+  assert.equal(subscription.seasons.length, 2);
+  assert.ok(
+    subscription.seasons.some((season) => season.seriesId === NEXT_ID),
+  );
+});
+
 test("a batch check shows only the latest discovered season in one series", async () => {
   const harness = await createHarness({
     rootDetail: detail({ title: "烛九阴第一季" }),

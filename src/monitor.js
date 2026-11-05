@@ -172,21 +172,28 @@ function batchNeedsDiscoveryAlignment(
   subscriptions,
   discoveryIntervalMs,
   nowMs,
-  { discover = true, forceDiscovery = false } = {},
+  { discover = true, forceDiscovery = false, trigger = "manual" } = {},
 ) {
   if (!discover) {
     return false;
   }
-  return subscriptions.some(
+  const eligibleSubscriptions = subscriptions.filter(
     (subscription) =>
       subscription.trackingPaused !== true &&
-      !isKnownCompletedSeries(subscription) &&
-      isDiscoveryDue(
-        subscription,
-        discoveryIntervalMs,
-        nowMs,
-        forceDiscovery,
-      ),
+      !isKnownCompletedSeries(subscription),
+  );
+  if (trigger === "cron") {
+    // Scheduled checks refresh the official album every run. Candidate checks
+    // keep their own cache, so known mismatches are not requested repeatedly.
+    return eligibleSubscriptions.length > 0;
+  }
+  return eligibleSubscriptions.some((subscription) =>
+    isDiscoveryDue(
+      subscription,
+      discoveryIntervalMs,
+      nowMs,
+      forceDiscovery,
+    ),
   );
 }
 
