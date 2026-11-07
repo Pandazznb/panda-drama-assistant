@@ -2864,7 +2864,7 @@ test("a newly discovered season starts a new completion cycle", async () => {
   );
 });
 
-test("adding a later season still displays the first season title", async () => {
+test("adding a later season displays the base series title", async () => {
   const firstDetail = detail({
     title: "万妖图录传第一季",
     status: "completed",
@@ -2884,8 +2884,9 @@ test("adding a later season still displays the first season title", async () => 
   const result = await harness.service.addSubscription(NEXT_ID);
   const state = await harness.store.read();
   const subscription = state.subscriptions[0];
-  assert.equal(result.title, "万妖图录传第一季");
-  assert.equal(subscription.displayTitle, "万妖图录传第一季");
+  assert.equal(result.title, "万妖图录传");
+  assert.equal(subscription.displayTitle, "万妖图录传");
+  assert.equal(subscription.firstSeasonTitle, "万妖图录传第一季");
   assert.equal(subscription.firstSeasonId, ROOT_ID);
   assert.equal(subscription.seasons[0].title, "万妖图录传第六季");
 });

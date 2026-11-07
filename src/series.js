@@ -236,12 +236,13 @@ export function deriveSubscriptionIdentity(subscription) {
   const firstSeasonTitle =
     normalizeWhitespace(knownFirst?.title || storedFirstTitle) ||
     fallbackTitle;
+  const seriesTitle = titleWithoutSeason(firstSeasonTitle) || firstSeasonTitle;
 
   return {
     firstSeasonId,
     firstSeasonTitle,
     displayTitle:
-      normalizeWhitespace(firstSeasonTitle) ||
+      normalizeWhitespace(seriesTitle) ||
       normalizeWhitespace(subscription?.displayTitle) ||
       fallbackTitle,
     firstSeason:

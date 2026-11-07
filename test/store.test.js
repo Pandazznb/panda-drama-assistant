@@ -10,6 +10,7 @@ import {
   createDefaultState,
   databaseFileForStateFile,
   normalizeState,
+  runSqliteMigrations,
 } from "../src/store.js";
 
 async function temporaryStatePath() {
@@ -36,6 +37,155 @@ test("store creates a private SQLite database with defaults", async () => {
     );
   } finally {
     await store.close();
+  }
+});
+
+test("automatic SQLite migrations preserve data and create a secure backup", async () => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "hongguo-migration-"),
+  );
+  const databaseFile = path.join(directory, "state.sqlite3");
+  const database = new DatabaseSync(databaseFile);
+  const migrations = [
+    {
+      version: 1,
+      up() {},
+    },
+    {
+      version: 2,
+      up(db) {
+        db.exec(`
+          ALTER TABLE demo_records
+          ADD COLUMN note TEXT NOT NULL DEFAULT '';
+          UPDATE demo_records SET note = '已升级';
+        `);
+      },
+    },
+  ];
+
+  try {
+    database.exec(`
+      CREATE TABLE demo_records (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL
+      );
+      INSERT INTO demo_records (title) VALUES ('已有追更');
+      PRAGMA user_version = 1;
+    `);
+
+    const result = await runSqliteMigrations(database, {
+      databaseFile,
+      migrations,
+    });
+
+    assert.equal(result.fromVersion, 1);
+    assert.equal(result.toVersion, 2);
+    assert.ok(result.backupPath);
+    assert.equal(
+      database.prepare("PRAGMA user_version").get().user_version,
+      2,
+    );
+    assert.deepEqual(
+      {
+        ...database
+          .prepare("SELECT title, note FROM demo_records")
+          .get(),
+      },
+      { title: "已有追更", note: "已升级" },
+    );
+    assert.equal((await fs.stat(result.backupPath)).mode & 0o777, 0o600);
+
+    const backup = new DatabaseSync(result.backupPath);
+    try {
+      assert.deepEqual(
+        {
+          ...backup.prepare("SELECT title FROM demo_records").get(),
+        },
+        { title: "已有追更" },
+      );
+      assert.equal(
+        backup.prepare("PRAGMA user_version").get().user_version,
+        1,
+      );
+      assert.equal(
+        backup
+          .prepare(
+            "SELECT COUNT(*) AS count FROM pragma_table_info('demo_records') WHERE name = 'note'",
+          )
+          .get().count,
+        0,
+      );
+    } finally {
+      backup.close();
+    }
+
+    const repeated = await runSqliteMigrations(database, {
+      databaseFile,
+      migrations,
+    });
+    assert.equal(repeated.backupPath, null);
+    assert.equal(repeated.fromVersion, 2);
+    assert.equal(repeated.toVersion, 2);
+  } finally {
+    database.close();
+  }
+});
+
+test("a failed automatic SQLite migration rolls back and keeps the old version", async () => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "hongguo-migration-failure-"),
+  );
+  const databaseFile = path.join(directory, "state.sqlite3");
+  const database = new DatabaseSync(databaseFile);
+  const migrations = [
+    {
+      version: 1,
+      up() {},
+    },
+    {
+      version: 2,
+      up(db) {
+        db.exec(`
+          ALTER TABLE demo_records
+          ADD COLUMN must_rollback TEXT NOT NULL DEFAULT 'x';
+        `);
+        throw new Error("模拟迁移失败");
+      },
+    },
+  ];
+
+  try {
+    database.exec(`
+      CREATE TABLE demo_records (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL
+      );
+      INSERT INTO demo_records (title) VALUES ('升级前数据');
+      PRAGMA user_version = 1;
+    `);
+
+    await assert.rejects(
+      runSqliteMigrations(database, { databaseFile, migrations }),
+      /SQLite 数据库自动升级失败.*模拟迁移失败/,
+    );
+    assert.equal(
+      database.prepare("PRAGMA user_version").get().user_version,
+      1,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM pragma_table_info('demo_records') WHERE name = 'must_rollback'",
+        )
+        .get().count,
+      0,
+    );
+    assert.equal(
+      database.prepare("SELECT title FROM demo_records").get().title,
+      "升级前数据",
+    );
+  } finally {
+    database.close();
   }
 });
 
@@ -546,6 +696,44 @@ test("normalizeState preserves the official album discovery source", () => {
     ],
   });
   assert.equal(normalized.subscriptions[0].seasons[0].source, "album");
+});
+
+test("normalizeState derives a base series title without changing season titles", () => {
+  const seriesId = "7621200213801176126";
+  const normalized = normalizeState({
+    subscriptions: [
+      {
+        id: "sub_series_title",
+        primarySeriesId: seriesId,
+        seriesGroupId: "7624475539960499262",
+        title: "万妖图录传第一季",
+        displayTitle: "万妖图录传第一季",
+        firstSeasonTitle: "万妖图录传第一季",
+        seasons: [
+          {
+            seriesId,
+            seriesGroupId: "7624475539960499262",
+            title: "万妖图录传第一季",
+            status: "completed",
+            episodeCount: 84,
+          },
+          {
+            seriesId: "7698938199183215640",
+            seriesGroupId: "7624475539960499262",
+            title: "万妖图录传第六季",
+            status: "updating",
+            episodeCount: 12,
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(normalized.subscriptions[0].title, "万妖图录传");
+  assert.equal(normalized.subscriptions[0].displayTitle, "万妖图录传");
+  assert.equal(normalized.subscriptions[0].firstSeasonTitle, "万妖图录传第一季");
+  assert.equal(normalized.subscriptions[0].seasons[0].title, "万妖图录传第一季");
+  assert.equal(normalized.subscriptions[0].seasons[1].title, "万妖图录传第六季");
 });
 
 test("normalizeState migrates watched update state for legacy subscriptions", () => {

@@ -435,12 +435,13 @@ function applySubscriptionIdentity(subscription, preferredFirstSeason = null) {
   const firstSeasonTitle = normalizeWhitespace(
     firstSeason?.title || identity.firstSeasonTitle,
   );
+  const seriesTitle = titleWithoutSeason(firstSeasonTitle) || firstSeasonTitle;
 
   subscription.firstSeasonId =
     firstSeason?.seriesId || identity.firstSeasonId || null;
   subscription.firstSeasonTitle = firstSeasonTitle;
-  subscription.displayTitle = firstSeasonTitle;
-  subscription.title = firstSeasonTitle;
+  subscription.displayTitle = seriesTitle;
+  subscription.title = seriesTitle;
   subscription.coverUrl =
     firstSeason?.coverUrl || subscription.coverUrl || "";
   return {

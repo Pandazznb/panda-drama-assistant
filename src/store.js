@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { backup as backupSqliteDatabase, DatabaseSync } from "node:sqlite";
 import {
   DEFAULT_ACCOUNT_SYNC_CRON,
   DEFAULT_CHECK_CRON,
@@ -720,7 +720,7 @@ function normalizeSubscription(subscription) {
     seriesGroupId: subscription.seriesGroupId
       ? String(subscription.seriesGroupId)
       : null,
-    title: identity.firstSeasonTitle,
+    title: identity.displayTitle,
     displayTitle: identity.displayTitle,
     firstSeasonId: identity.firstSeasonId,
     firstSeasonTitle: identity.firstSeasonTitle,
@@ -974,11 +974,11 @@ export function appendEvent(state, event) {
   return normalized;
 }
 
-const SQLITE_SCHEMA_VERSION = 1;
 const SQLITE_BUSY_ERROR_CODE = 5;
 const SQLITE_LOCKED_ERROR_CODE = 6;
 const SQLITE_RETRY_BASE_MS = 25;
 const SQLITE_RETRY_MAX_MS = 500;
+const SQLITE_MIGRATION_WRITE_RETRIES = 8;
 
 const SQLITE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS metadata (
@@ -1055,6 +1055,19 @@ const SQLITE_SCHEMA = `
     ON discovery_reminders(next_reminder_at);
 `;
 
+// Released migrations are immutable. Add every future schema change as the
+// next version instead of editing an existing migration in place.
+const SQLITE_MIGRATIONS = Object.freeze([
+  Object.freeze({
+    version: 1,
+    up(database) {
+      database.exec(SQLITE_SCHEMA);
+    },
+  }),
+]);
+
+const SQLITE_SCHEMA_VERSION = SQLITE_MIGRATIONS.at(-1).version;
+
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -1065,6 +1078,170 @@ function isSqliteBusy(error) {
     error?.errcode === SQLITE_LOCKED_ERROR_CODE ||
     /database is (?:busy|locked)/i.test(error?.message || "")
   );
+}
+
+function normalizeSqliteMigrations(migrations) {
+  if (!Array.isArray(migrations) || migrations.length === 0) {
+    throw new Error("SQLite 自动升级列表不能为空。");
+  }
+
+  return migrations.map((migration, index) => {
+    const expectedVersion = index + 1;
+    if (migration?.version !== expectedVersion) {
+      throw new Error(
+        `SQLite 自动升级版本必须连续：预期 v${expectedVersion}。`,
+      );
+    }
+    if (typeof migration.up !== "function") {
+      throw new TypeError(
+        `SQLite 自动升级 v${migration.version} 缺少 up()。`,
+      );
+    }
+    return migration;
+  });
+}
+
+function sqliteSchemaVersion(database) {
+  return Number(
+    database.prepare("PRAGMA user_version").get()?.user_version || 0,
+  );
+}
+
+function sqliteMigrationBackupPath(
+  databaseFile,
+  fromVersion,
+  toVersion,
+) {
+  const timestamp = new Date()
+    .toISOString()
+    .replaceAll(":", "-")
+    .replaceAll(".", "-");
+  return `${databaseFile}.backup-v${fromVersion}-to-v${toVersion}-${timestamp}-${process.pid}.sqlite3`;
+}
+
+async function createSqliteMigrationBackup(
+  database,
+  databaseFile,
+  fromVersion,
+  toVersion,
+) {
+  if (!databaseFile) {
+    throw new Error("无法自动备份 SQLite：缺少数据库文件路径。");
+  }
+  const backupPath = sqliteMigrationBackupPath(
+    databaseFile,
+    fromVersion,
+    toVersion,
+  );
+  await backupSqliteDatabase(database, backupPath);
+  await fs.chmod(backupPath, 0o600);
+  return backupPath;
+}
+
+async function beginSqliteMigrationTransaction(database) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      return;
+    } catch (error) {
+      if (
+        attempt >= SQLITE_MIGRATION_WRITE_RETRIES ||
+        !isSqliteBusy(error)
+      ) {
+        throw error;
+      }
+      await delay(
+        Math.min(
+          SQLITE_RETRY_MAX_MS,
+          SQLITE_RETRY_BASE_MS * 2 ** attempt,
+        ),
+      );
+    }
+  }
+}
+
+export async function runSqliteMigrations(
+  database,
+  {
+    databaseFile = "",
+    migrations = SQLITE_MIGRATIONS,
+  } = {},
+) {
+  const orderedMigrations = normalizeSqliteMigrations(migrations);
+  const currentVersion = sqliteSchemaVersion(database);
+  const targetVersion = orderedMigrations.at(-1).version;
+
+  if (currentVersion > targetVersion) {
+    throw new Error(
+      `SQLite 数据库版本 ${currentVersion} 高于当前程序支持的版本 ${targetVersion}。`,
+    );
+  }
+  if (currentVersion === targetVersion) {
+    return {
+      fromVersion: currentVersion,
+      toVersion: targetVersion,
+      backupPath: null,
+    };
+  }
+
+  const pendingMigrations = orderedMigrations.filter(
+    (migration) => migration.version > currentVersion,
+  );
+  const backupPath =
+    currentVersion > 0
+      ? await createSqliteMigrationBackup(
+          database,
+          databaseFile,
+          currentVersion,
+          targetVersion,
+        )
+      : null;
+
+  for (const migration of pendingMigrations) {
+    await beginSqliteMigrationTransaction(database);
+    try {
+      const versionBeforeMigration = sqliteSchemaVersion(database);
+      if (versionBeforeMigration === migration.version) {
+        database.exec("COMMIT");
+        continue;
+      }
+      if (versionBeforeMigration !== migration.version - 1) {
+        throw new Error(
+          `数据库当前为 v${versionBeforeMigration}，无法执行 v${migration.version}。`,
+        );
+      }
+      const result = migration.up(database);
+      if (result && typeof result.then === "function") {
+        throw new TypeError("SQLite 自动升级回调必须同步完成。");
+      }
+      database.exec(`PRAGMA user_version = ${migration.version}`);
+      database.exec("COMMIT");
+    } catch (error) {
+      try {
+        database.exec("ROLLBACK");
+      } catch {
+        // Keep the original migration error.
+      }
+      throw new Error(
+        `SQLite 数据库自动升级失败（v${
+          migration.version - 1
+        } → v${migration.version}）：${error?.message || "未知错误"}`,
+        { cause: error },
+      );
+    }
+  }
+
+  const upgradedVersion = sqliteSchemaVersion(database);
+  if (upgradedVersion !== targetVersion) {
+    throw new Error(
+      `SQLite 数据库自动升级未完成：当前 v${upgradedVersion}，预期 v${targetVersion}。`,
+    );
+  }
+  return {
+    fromVersion: currentVersion,
+    toVersion: targetVersion,
+    backupPath,
+  };
 }
 
 function parseStoredPayload(payload, label) {
@@ -1169,16 +1346,18 @@ export class SqliteStateStore {
         throw new Error("无法启用 SQLite WAL 模式。");
       }
 
-      const schemaVersion = Number(
-        this.db.prepare("PRAGMA user_version").get()?.user_version || 0,
-      );
-      if (schemaVersion > SQLITE_SCHEMA_VERSION) {
-        throw new Error(
-          `SQLite 数据库版本 ${schemaVersion} 高于当前程序支持的版本。`,
+      const migration = await runSqliteMigrations(this.db, {
+        databaseFile: this.databaseFile,
+      });
+      if (migration.fromVersion !== migration.toVersion) {
+        console.info(
+          `SQLite 数据库已自动升级：v${migration.fromVersion} → v${migration.toVersion}${
+            migration.backupPath
+              ? `，升级前备份：${migration.backupPath}`
+              : ""
+          }`,
         );
       }
-      this.db.exec(SQLITE_SCHEMA);
-      this.db.exec(`PRAGMA user_version = ${SQLITE_SCHEMA_VERSION}`);
 
       const state = await this.initializePersistedState();
       await this.eventLog.init();
