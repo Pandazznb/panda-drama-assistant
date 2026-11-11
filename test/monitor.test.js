@@ -1381,6 +1381,60 @@ test("Cron reminders combine series and never trigger an automatic check", async
   harness.service.stop();
 });
 
+test("continuous reminders sort series by latest discovery time", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({ now: () => now });
+  harness.details.set(
+    OTHER_ID,
+    detail({
+      seriesId: OTHER_ID,
+      title: "另一部短剧",
+      groupId: GROUP_B,
+      episodeCount: 4,
+    }),
+  );
+  await addAndEnableBark(harness);
+  await harness.service.addSubscription(OTHER_ID);
+  await harness.service.updateSettings({
+    discoveryReminderDurationMinutes: 60,
+    discoveryReminderCron: "*/10 * * * *",
+  });
+  const state = await harness.store.read();
+  const rootSubscriptionId = state.subscriptions.find(
+    (subscription) => subscription.seasons[0].seriesId === ROOT_ID,
+  ).id;
+  const otherSubscriptionId = state.subscriptions.find(
+    (subscription) => subscription.seasons[0].seriesId === OTHER_ID,
+  ).id;
+
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscription(rootSubscriptionId);
+
+  now = new Date("2026-10-27T08:05:00.000Z");
+  harness.details.set(
+    OTHER_ID,
+    detail({
+      seriesId: OTHER_ID,
+      title: "另一部短剧",
+      groupId: GROUP_B,
+      episodeCount: 7,
+    }),
+  );
+  await harness.service.checkSubscription(otherSubscriptionId);
+
+  now = new Date("2026-10-27T08:10:00.000Z");
+  assert.equal(
+    (await harness.service.flushDiscoveryReminders()).sent,
+    1,
+  );
+  const reminderLines = harness.notifications
+    .at(-1)
+    .message.body.split("\n")
+    .filter((line) => /^\d+\. /u.test(line));
+  assert.match(reminderLines[0], /《另一部短剧》 · 第 7 集/);
+  assert.match(reminderLines[1], /《测试短剧》 · 第 15 集/);
+});
+
 test("continuous reminder failures retry and expire without sending again", async () => {
   let now = new Date("2026-10-27T08:00:00.000Z");
   let sendCount = 0;

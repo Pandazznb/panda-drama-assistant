@@ -335,6 +335,24 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /id="settings-account-sync-details"/);
   assert.doesNotMatch(page, /id="settings-account-details"/);
   assert.match(page, /同步明细/);
+  const templateVariableLabels = {
+    appName: "助手名称",
+    seriesTitle: "系列名称",
+    checkTime: "检查时间",
+    updateCount: "更新系列数",
+    updates: "更新明细",
+    seasonCount: "季数",
+    reminderTime: "提醒时间",
+  };
+  for (const [variable, label] of Object.entries(templateVariableLabels)) {
+    assert.match(
+      page,
+      new RegExp(
+        `data-template-variable="${variable}"[\\s\\S]{0,280}?` +
+          `<span class="template-variable__label">${label}</span>`,
+      ),
+    );
+  }
   assert.match(page, /data-notification-channel="wecomApp"/);
   assert.match(page, /id="wecom-app-corp-id"/);
   assert.match(page, /id="wecom-app-to-user"/);

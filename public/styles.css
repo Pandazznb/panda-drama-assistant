@@ -3658,19 +3658,40 @@ a.latest-season__title .icon {
 }
 
 .template-variable {
+  display: inline-flex;
   min-height: 32px;
-  padding: 4px 8px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
   color: var(--color-info);
   background: var(--color-info-soft);
   border: 1px solid var(--color-info-border);
   border-radius: 6px;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-family: inherit;
+  font-size: 0.75rem;
   font-weight: 650;
+  line-height: 1.35;
+  text-align: start;
   transition:
     background-color var(--motion-fast) var(--ease-out-fluid),
     border-color var(--motion-fast) var(--ease-out-fluid),
     transform var(--motion-fast) var(--ease-spring);
+}
+
+.template-variable__code {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.template-variable__label {
+  padding-left: 6px;
+  color: var(--color-ink-soft);
+  border-left: 1px solid var(--color-info-border);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .template-variable:hover {

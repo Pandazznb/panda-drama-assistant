@@ -886,7 +886,6 @@ function discoveryReminderCopy(state, reminders, nowMs) {
   }
 
   const groups = [...remindersBySubscription.values()]
-    .sort((left, right) => left.order - right.order)
     .map((group) => {
       const ranks = seasonRankMap(group.subscription);
       const reminder = [...group.reminders].sort((left, right) => {
@@ -940,9 +939,19 @@ function discoveryReminderCopy(state, reminders, nowMs) {
         `提醒有效至：${formatNotificationTime(reminder.expiresAt)}`,
       ].filter(Boolean);
 
-      return `${change} · ${timing.join(" · ")}`;
+      return {
+        line: `${change} · ${timing.join(" · ")}`,
+        lastDiscoveredAt:
+          Date.parse(reminder.lastDiscoveredAt || "") || 0,
+        order: group.order,
+      };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort(
+      (left, right) =>
+        right.lastDiscoveredAt - left.lastDiscoveredAt ||
+        left.order - right.order,
+    );
 
   if (!groups.length) {
     return null;
@@ -951,7 +960,7 @@ function discoveryReminderCopy(state, reminders, nowMs) {
     new Date(nowMs).toISOString(),
   );
   const updates = groups
-    .map((group, index) => `${index + 1}. ${group}`)
+    .map((group, index) => `${index + 1}. ${group.line}`)
     .join("\n");
   return notificationTemplateCopy(state, "reminder", {
     defaultTitle: "红果短剧新内容提醒",
