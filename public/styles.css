@@ -1480,9 +1480,28 @@ code {
   animation: spin 700ms linear infinite;
 }
 
+.check-indicator .spinner {
+  box-sizing: border-box;
+  flex: 0 0 14px;
+  transform-origin: 50% 50%;
+  backface-visibility: hidden;
+  will-change: transform;
+  animation: check-spinner-rotate 700ms linear infinite;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes check-spinner-rotate {
+  from {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+
+  to {
+    transform: translate3d(0, 0, 0) rotate(360deg);
   }
 }
 
@@ -7134,7 +7153,21 @@ a.latest-season__title .icon {
 
 #check-all.is-busy > .icon,
 .text-button[data-action="check"].is-busy > .icon {
-  animation: spin 720ms linear infinite;
+  transform-origin: 50% 50%;
+  backface-visibility: hidden;
+  will-change: transform;
+  transition: none;
+  animation: check-icon-rotate 720ms linear infinite;
+}
+
+@keyframes check-icon-rotate {
+  from {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+
+  to {
+    transform: translate3d(0, 0, 0) rotate(360deg);
+  }
 }
 
 .is-state-changed {

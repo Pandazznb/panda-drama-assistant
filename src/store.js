@@ -765,6 +765,15 @@ function normalizeSubscription(subscription) {
       lastCompletedAt: subscription.discovery?.lastCompletedAt
         ? String(subscription.discovery.lastCompletedAt)
         : null,
+      lastRecommendationRecoveryAt: parseTimestamp(
+        subscription.discovery?.lastRecommendationRecoveryAt,
+      )
+        ? new Date(
+            parseTimestamp(
+              subscription.discovery.lastRecommendationRecoveryAt,
+            ),
+          ).toISOString()
+        : null,
       lastDiscoveryIssue: lastDiscoveryIssue || null,
       confirmedSeriesIds,
       unpublishedSeriesIds,

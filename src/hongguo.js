@@ -23,7 +23,7 @@ const ALBUM_REQUEST_TIMEOUT_MS = 12_000;
 const SEARCH_REQUEST_TIMEOUT_MS = 12_000;
 const MAX_SEARCH_QUERY_LENGTH = 30;
 const OFFICIAL_SEARCH_URL = `${OFFICIAL_WEB_URL}/api/search/result/`;
-const OFFICIAL_ALBUM_FIELDS_URL =
+const OFFICIAL_PACK_FIELDS_URL =
   "https://api5-normal-sinfonlineb.fqnovel.com/reading/distribution/book_pack_fields/inner_feed_detail/v1/";
 const HTTP_URL_PATTERN = /https?:\/\/[^\s<>"']+/i;
 const DEEP_LINK_PATTERN = /dragon8662:\/\/[^\s<>"']+/i;
@@ -460,13 +460,9 @@ export function normalizeSeriesDetail(series) {
     episodeInfo.episode_total_cnt ?? episodeCount,
     episodeCount,
   );
-  const rawStatus = Number(series.series_status ?? episodeInfo.series_status);
-  const status =
-    rawStatus === 0
-      ? SERIES_STATUS.UPDATING
-      : rawStatus === 1
-        ? SERIES_STATUS.COMPLETED
-        : SERIES_STATUS.UNKNOWN;
+  const status = normalizeSeriesStatus(
+    series.series_status ?? episodeInfo.series_status,
+  );
 
   const firstVisibleTimestamp = parseTimestamp(series.first_visible_time);
   return {
@@ -490,6 +486,17 @@ export function normalizeSeriesDetail(series) {
       : null,
     detailUrl: `${OFFICIAL_DETAIL_URL}${encodeURIComponent(series.series_id)}`,
   };
+}
+
+function normalizeSeriesStatus(value) {
+  const rawStatus = Number(value);
+  if (rawStatus === 0) {
+    return SERIES_STATUS.UPDATING;
+  }
+  if (rawStatus === 1) {
+    return SERIES_STATUS.COMPLETED;
+  }
+  return SERIES_STATUS.UNKNOWN;
 }
 
 export async function fetchSeriesDetail(
@@ -522,122 +529,7 @@ export async function fetchSeriesDetail(
   };
 }
 
-export async function fetchAlbumSeriesInfo(
-  seriesId,
-  {
-    fetchImpl = globalThis.fetch,
-    timeoutMs = ALBUM_REQUEST_TIMEOUT_MS,
-    requestScheduler = null,
-  } = {},
-) {
-  const normalizedSeriesId = String(seriesId || "");
-  if (!/^\d{8,25}$/.test(normalizedSeriesId)) {
-    throw new HongguoError("剧集 ID 格式不正确。", "INVALID_SERIES_ID");
-  }
-
-  let result;
-  try {
-    result = await performUpstreamFetch(
-      fetchImpl,
-      OFFICIAL_ALBUM_FIELDS_URL,
-      {
-        method: "POST",
-        redirect: "error",
-        credentials: "omit",
-        cache: "no-store",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          "user-agent":
-            "Mozilla/5.0 (compatible; HongguoReminder/1.0; +https://hongguoduanju.com)",
-        },
-        // The upstream model requires a JSON number, while 19-digit IDs exceed
-        // Number.MAX_SAFE_INTEGER. The ID is validated as digits before splicing.
-        body: `{"book_pack_channel":"inner_feed_detail","req_ids":[${normalizedSeriesId}],"req_fields":["album_id","album_serial_count","series_in_album_order","album_series_item"]}`,
-      },
-      {
-        scheduler: requestScheduler,
-        timeoutMs,
-        label: "红果多季列表",
-        readBody: (response) =>
-          readSuccessfulBody(response, MAX_ALBUM_RESPONSE_BYTES),
-      },
-    );
-  } catch (error) {
-    if (error?.upstreamBodyRead) {
-      throw error;
-    }
-    if (error?.name === "AbortError") {
-      throw new HongguoError(
-        "请求红果多季列表超时。",
-        "ALBUM_REQUEST_TIMEOUT",
-        504,
-      );
-    }
-    throw new HongguoError(
-      `无法连接红果多季列表：${error.message}`,
-      "ALBUM_REQUEST_FAILED",
-      502,
-    );
-  }
-  const response = result.response;
-
-  if (!response.ok) {
-    const rateLimited = response.status === 429;
-    const error = new HongguoError(
-      rateLimited
-        ? "红果多季列表请求过于频繁，请稍后重试。"
-        : `红果多季列表返回 HTTP ${response.status}。`,
-      rateLimited
-        ? "ALBUM_UPSTREAM_RATE_LIMITED"
-        : "ALBUM_UPSTREAM_HTTP_ERROR",
-      rateLimited ? 429 : 502,
-    );
-    const retryAfterMs = retryAfterMilliseconds(response);
-    if (rateLimited && retryAfterMs !== null) {
-      error.retryAfterSeconds = Math.max(
-        1,
-        Math.ceil(retryAfterMs / 1_000),
-      );
-    }
-    throw error;
-  }
-
-  const body = result.body;
-  let payload;
-  try {
-    payload = JSON.parse(body);
-  } catch {
-    throw new HongguoError(
-      "红果多季列表数据无法解析。",
-      "ALBUM_DATA_INVALID",
-      502,
-    );
-  }
-
-  const responseCode = Number(
-    payload?.code ?? payload?.BaseResp?.StatusCode ?? 0,
-  );
-  if (responseCode !== 0) {
-    const message = normalizeWhitespace(
-      payload?.message || payload?.BaseResp?.StatusMessage || "",
-    );
-    throw new HongguoError(
-      `红果多季列表返回错误${message ? `：${message}` : "。"}`,
-      "ALBUM_API_ERROR",
-      502,
-    );
-  }
-
-  const albumInfo = payload?.data?.[normalizedSeriesId]?.album_info;
-  if (!albumInfo || typeof albumInfo !== "object") {
-    throw new HongguoError(
-      "官方多季列表暂时没有返回该系列，稍后会自动重试。",
-      "ALBUM_DATA_UNAVAILABLE",
-      502,
-    );
-  }
-
+function normalizeAlbumSeriesInfo(albumInfo) {
   const seriesItems = Array.isArray(albumInfo.album_series_item)
     ? albumInfo.album_series_item
     : [];
@@ -682,9 +574,272 @@ export async function fetchAlbumSeriesInfo(
   };
 }
 
+async function fetchPackFieldsPayload(
+  seriesIds,
+  reqFields,
+  {
+    fetchImpl = globalThis.fetch,
+    timeoutMs = ALBUM_REQUEST_TIMEOUT_MS,
+    requestScheduler = null,
+    label = "红果数据接口",
+    errorPrefix = "PACK_FIELDS",
+    maxBytes = MAX_ALBUM_RESPONSE_BYTES,
+  } = {},
+) {
+  let result;
+  try {
+    result = await performUpstreamFetch(
+      fetchImpl,
+      OFFICIAL_PACK_FIELDS_URL,
+      {
+        method: "POST",
+        redirect: "error",
+        credentials: "omit",
+        cache: "no-store",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "user-agent":
+            "Mozilla/5.0 (compatible; HongguoReminder/1.0; +https://hongguoduanju.com)",
+        },
+        // The upstream model requires a JSON number, while 19-digit IDs exceed
+        // Number.MAX_SAFE_INTEGER. IDs are validated before numeric splicing.
+        body: `{"book_pack_channel":"inner_feed_detail","req_ids":[${seriesIds.join(",")}],"req_fields":${JSON.stringify(reqFields)}}`,
+      },
+      {
+        scheduler: requestScheduler,
+        timeoutMs,
+        label,
+        readBody: (response) =>
+          readSuccessfulBody(response, maxBytes),
+      },
+    );
+  } catch (error) {
+    if (error?.upstreamBodyRead) {
+      throw error;
+    }
+    if (error?.name === "AbortError") {
+      throw new HongguoError(
+        `请求${label}超时。`,
+        `${errorPrefix}_REQUEST_TIMEOUT`,
+        504,
+      );
+    }
+    throw new HongguoError(
+      `无法连接${label}：${error.message}`,
+      `${errorPrefix}_REQUEST_FAILED`,
+      502,
+    );
+  }
+  const response = result.response;
+
+  if (!response.ok) {
+    const rateLimited = response.status === 429;
+    const error = new HongguoError(
+      rateLimited
+        ? `${label}请求过于频繁，请稍后重试。`
+        : `${label}返回 HTTP ${response.status}。`,
+      rateLimited
+        ? `${errorPrefix}_UPSTREAM_RATE_LIMITED`
+        : `${errorPrefix}_UPSTREAM_HTTP_ERROR`,
+      rateLimited ? 429 : 502,
+    );
+    const retryAfterMs = retryAfterMilliseconds(response);
+    if (rateLimited && retryAfterMs !== null) {
+      error.retryAfterSeconds = Math.max(
+        1,
+        Math.ceil(retryAfterMs / 1_000),
+      );
+    }
+    throw error;
+  }
+
+  const body = result.body;
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    throw new HongguoError(
+      `${label}数据无法解析。`,
+      `${errorPrefix}_DATA_INVALID`,
+      502,
+    );
+  }
+
+  const responseCode = Number(
+    payload?.code ?? payload?.BaseResp?.StatusCode ?? 0,
+  );
+  if (responseCode !== 0) {
+    const message = normalizeWhitespace(
+      payload?.message || payload?.BaseResp?.StatusMessage || "",
+    );
+    throw new HongguoError(
+      `${label}返回错误${message ? `：${message}` : "。"}`,
+      `${errorPrefix}_API_ERROR`,
+      502,
+    );
+  }
+
+  return payload;
+}
+
+async function fetchAlbumSeriesPayload(seriesIds, options = {}) {
+  return fetchPackFieldsPayload(
+    seriesIds,
+    [
+      "album_id",
+      "album_serial_count",
+      "series_in_album_order",
+      "album_series_item",
+    ],
+    {
+      ...options,
+      label: "红果多季列表",
+      errorPrefix: "ALBUM",
+    },
+  );
+}
+
+export async function fetchAlbumSeriesInfoBatch(
+  inputSeriesIds,
+  options = {},
+) {
+  const seriesIds = [
+    ...new Set(
+      (Array.isArray(inputSeriesIds) ? inputSeriesIds : [])
+        .map((seriesId) => String(seriesId || ""))
+        .filter(Boolean),
+    ),
+  ];
+  if (!seriesIds.length) {
+    return new Map();
+  }
+  for (const seriesId of seriesIds) {
+    if (!/^\d{8,25}$/.test(seriesId)) {
+      throw new HongguoError("剧集 ID 格式不正确。", "INVALID_SERIES_ID");
+    }
+  }
+
+  const payload = await fetchAlbumSeriesPayload(seriesIds, options);
+  return new Map(
+    seriesIds.map((seriesId) => {
+      const albumInfo = payload?.data?.[seriesId]?.album_info;
+      if (!albumInfo || typeof albumInfo !== "object") {
+        return [
+          seriesId,
+          {
+            album: null,
+            error: new HongguoError(
+              "官方多季列表暂时没有返回该系列，稍后会自动重试。",
+              "ALBUM_DATA_UNAVAILABLE",
+              502,
+            ),
+          },
+        ];
+      }
+      try {
+        return [
+          seriesId,
+          {
+            album: normalizeAlbumSeriesInfo(albumInfo),
+            error: null,
+          },
+        ];
+      } catch (error) {
+        return [seriesId, { album: null, error }];
+      }
+    }),
+  );
+}
+
+export async function fetchAlbumSeriesInfo(
+  seriesId,
+  options = {},
+) {
+  const normalizedSeriesId = String(seriesId || "");
+  if (!/^\d{8,25}$/.test(normalizedSeriesId)) {
+    throw new HongguoError("剧集 ID 格式不正确。", "INVALID_SERIES_ID");
+  }
+  const result = (
+    await fetchAlbumSeriesInfoBatch([normalizedSeriesId], options)
+  ).get(normalizedSeriesId);
+  if (result?.error) {
+    throw result.error;
+  }
+  if (!result?.album) {
+    throw new HongguoError(
+      "官方多季列表暂时没有返回该系列，稍后会自动重试。",
+      "ALBUM_DATA_UNAVAILABLE",
+      502,
+    );
+  }
+  return result.album;
+}
+
 export async function fetchAlbumSeriesIds(seriesId, options = {}) {
   const album = await fetchAlbumSeriesInfo(seriesId, options);
   return album.publishedSeriesIds;
+}
+
+export async function fetchSeriesProgressBatch(
+  inputSeriesIds,
+  options = {},
+) {
+  const seriesIds = [
+    ...new Set(
+      (Array.isArray(inputSeriesIds) ? inputSeriesIds : [])
+        .map((seriesId) => String(seriesId || ""))
+        .filter(Boolean),
+    ),
+  ];
+  if (!seriesIds.length) {
+    return new Map();
+  }
+  for (const seriesId of seriesIds) {
+    if (!/^\d{8,25}$/.test(seriesId)) {
+      throw new HongguoError("剧集 ID 格式不正确。", "INVALID_SERIES_ID");
+    }
+  }
+
+  const payload = await fetchPackFieldsPayload(
+    seriesIds,
+    ["episode_cnt", "series_status"],
+    {
+      ...options,
+      label: "红果更新状态",
+      errorPrefix: "SERIES_PROGRESS",
+      maxBytes: MAX_SEARCH_RESPONSE_BYTES,
+    },
+  );
+
+  return new Map(
+    seriesIds.map((seriesId) => {
+      const baseInfo = payload?.data?.[seriesId]?.base_info;
+      const episodeCount = toSafeInteger(baseInfo?.episode_cnt, null);
+      if (!baseInfo || typeof baseInfo !== "object" || episodeCount === null) {
+        return [
+          seriesId,
+          {
+            episodeCount: null,
+            status: null,
+            error: new HongguoError(
+              "官方更新状态暂时没有返回该系列，将回退到详情页检查。",
+              "SERIES_PROGRESS_UNAVAILABLE",
+              502,
+            ),
+          },
+        ];
+      }
+      return [
+        seriesId,
+        {
+          episodeCount,
+          status: normalizeSeriesStatus(baseInfo.series_status),
+          error: null,
+        },
+      ];
+    }),
+  );
 }
 
 function normalizeSearchStatus(value) {

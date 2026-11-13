@@ -7,7 +7,9 @@ import {
   extractAnimationSeriesId,
   extractRecommendations,
   extractSeriesId,
+  fetchAlbumSeriesInfoBatch,
   fetchAlbumSeriesIds,
+  fetchSeriesProgressBatch,
   fetchSeriesDetail,
   isAllowedShareHost,
   parseOfficialSearchResults,
@@ -334,6 +336,127 @@ test("fetchAlbumSeriesIds marks missing album_info as retryable", async () => {
       error.code === "ALBUM_DATA_UNAVAILABLE" &&
       error.statusCode === 502 &&
       /稍后会自动重试/.test(error.message),
+  );
+});
+
+test("fetchAlbumSeriesInfoBatch requests all series once and isolates missing albums", async () => {
+  const firstId = "7645616042022014014";
+  const secondId = "7690163276214176792";
+  const firstSeasonId = "7621200213801176126";
+  let requestBody;
+
+  const results = await fetchAlbumSeriesInfoBatch(
+    [firstId, secondId, firstId],
+    {
+      fetchImpl: async (_url, options) => {
+        requestBody = options.body;
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: {
+              [firstId]: {
+                album_info: {
+                  album_serial_count: 1,
+                  album_series_item: [
+                    {
+                      is_subscribe_shell: false,
+                      item_id: firstSeasonId,
+                    },
+                  ],
+                },
+              },
+              [secondId]: {},
+            },
+          }),
+          { status: 200 },
+        );
+      },
+    },
+  );
+
+  assert.match(
+    requestBody,
+    new RegExp(`"req_ids":\\[${firstId},${secondId}\\]`),
+  );
+  assert.deepEqual(
+    results.get(firstId).album.publishedSeriesIds,
+    [firstSeasonId],
+  );
+  assert.equal(results.get(firstId).error, null);
+  assert.equal(results.get(secondId).album, null);
+  assert.equal(
+    results.get(secondId).error.code,
+    "ALBUM_DATA_UNAVAILABLE",
+  );
+});
+
+test("fetchSeriesProgressBatch returns episode and status snapshots in one request", async () => {
+  const firstId = "7645616042022014014";
+  const secondId = "7690163276214176792";
+  let requestBody;
+
+  const results = await fetchSeriesProgressBatch([firstId, secondId], {
+    fetchImpl: async (_url, options) => {
+      requestBody = options.body;
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          data: {
+            [firstId]: {
+              base_info: {
+                episode_cnt: 24,
+                series_status: 0,
+              },
+            },
+            [secondId]: {
+              base_info: {
+                episode_cnt: 80,
+                series_status: 1,
+              },
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    },
+  });
+
+  assert.match(
+    requestBody,
+    new RegExp(`"req_ids":\\[${firstId},${secondId}\\]`),
+  );
+  assert.match(requestBody, /"episode_cnt","series_status"/);
+  assert.deepEqual(results.get(firstId), {
+    episodeCount: 24,
+    status: "updating",
+    error: null,
+  });
+  assert.deepEqual(results.get(secondId), {
+    episodeCount: 80,
+    status: "completed",
+    error: null,
+  });
+});
+
+test("fetchSeriesProgressBatch marks a missing snapshot for detail fallback", async () => {
+  const seriesId = "7645616042022014014";
+  const results = await fetchSeriesProgressBatch([seriesId], {
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          code: 0,
+          data: {
+            [seriesId]: {},
+          },
+        }),
+        { status: 200 },
+      ),
+  });
+
+  assert.equal(results.get(seriesId).episodeCount, null);
+  assert.equal(
+    results.get(seriesId).error.code,
+    "SERIES_PROGRESS_UNAVAILABLE",
   );
 });
 

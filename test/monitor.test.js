@@ -45,6 +45,8 @@ async function createHarness({
   recommendFromRoot = Boolean(nextDetail),
   rootRecommendations = [],
   fetchAlbumSeries = null,
+  fetchAlbumSeriesBatch = null,
+  fetchSeriesProgressBatch = null,
   sendNotifications = null,
   now = () => new Date("2026-10-27T08:00:00.000Z"),
   discoveryIntervalMs = 60_000,
@@ -117,6 +119,8 @@ async function createHarness({
     store,
     fetchDetail,
     fetchAlbumSeries: loadAlbumSeries,
+    ...(fetchAlbumSeriesBatch ? { fetchAlbumSeriesBatch } : {}),
+    ...(fetchSeriesProgressBatch ? { fetchSeriesProgressBatch } : {}),
     resolveShared: async (input) => ({
       seriesId: String(input),
       sharedUrl: "",
@@ -657,7 +661,9 @@ test("new episodes queue a repeat reminder without extending its window", async 
 });
 
 test("new seasons also start a continuous reminder", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
   const harness = await createHarness({
+    now: () => now,
     nextDetail: detail({
       seriesId: NEXT_ID,
       title: "测试短剧 第二季",
@@ -682,6 +688,14 @@ test("new seasons also start a continuous reminder", async () => {
   assert.equal(reminders[0].type, "season");
   assert.equal(reminders[0].seasonId, NEXT_ID);
   assert.equal(reminders[0].episodeCount, 6);
+
+  now = new Date("2026-10-27T08:10:00.000Z");
+  assert.equal((await harness.service.flushDiscoveryReminders()).sent, 1);
+  const reminderBody = harness.notifications.at(-1).message.body;
+  assert.match(reminderBody, /《测试短剧》第二季 · 新季 6 集/);
+  assert.match(reminderBody, /季上线：2026-10-18 00:04/);
+  assert.doesNotMatch(reminderBody, /检测到新季：/);
+  assert.doesNotMatch(reminderBody, /提醒有效至：/);
 });
 
 test("episode and new season discoveries mark the series as unread", async () => {
@@ -1365,7 +1379,9 @@ test("Cron reminders combine series and never trigger an automatic check", async
   assert.equal(reminder.title, "红果短剧新内容提醒");
   assert.match(reminder.body, /《测试短剧》 · 第 15 集（新增 3 集）/);
   assert.match(reminder.body, /《另一部短剧》 · 第 7 集（新增 3 集）/);
-  assert.match(reminder.body, /提醒有效至：2026-10-27 17:00/);
+  assert.match(reminder.body, /季上线：/);
+  assert.doesNotMatch(reminder.body, /检测到更新：/);
+  assert.doesNotMatch(reminder.body, /提醒有效至：/);
   assert.equal(
     reminder.body
       .split("\n")
@@ -2449,6 +2465,438 @@ test("check all skips paused series without requesting their details", async (t)
   assert.equal(
     (await harness.store.read()).subscriptions[0].trackingPaused,
     true,
+  );
+});
+
+test("batch checks refresh only the latest season and still verify the album", async () => {
+  const harness = await createHarness({
+    nextDetail: detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧第二季",
+      episodeCount: 6,
+      firstVisibleTime: "2026-10-17T16:04:00.000Z",
+    }),
+    albumSeriesIds: [ROOT_ID, NEXT_ID],
+    recommendFromRoot: false,
+  });
+  const added = await harness.service.addSubscription(ROOT_ID);
+  await harness.service.addSeason(added.subscriptionId, NEXT_ID);
+  harness.albumCalls.length = 0;
+  const rootLastCheckedAt = (
+    await harness.store.read()
+  ).subscriptions[0].seasons.find(
+    (season) => season.seriesId === ROOT_ID,
+  ).lastCheckedAt;
+
+  const calls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    calls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  const result = await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+  const subscription = (await harness.store.read()).subscriptions[0];
+  const rootSeason = subscription.seasons.find(
+    (season) => season.seriesId === ROOT_ID,
+  );
+
+  assert.equal(result.seasonsChecked, 1);
+  assert.deepEqual(calls, [NEXT_ID]);
+  assert.deepEqual(harness.albumCalls, [ROOT_ID]);
+  assert.equal(rootSeason.lastCheckedAt, rootLastCheckedAt);
+});
+
+test("batch checks run multiple series concurrently", async () => {
+  const harness = await createHarness();
+  harness.details.set(
+    OTHER_ID,
+    detail({
+      seriesId: OTHER_ID,
+      title: "另一部短剧",
+      groupId: GROUP_B,
+      episodeCount: 4,
+    }),
+  );
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.service.addSubscription(OTHER_ID);
+
+  let activeRequests = 0;
+  let maxActiveRequests = 0;
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    activeRequests += 1;
+    maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    try {
+      return await healthyFetchDetail(seriesId);
+    } finally {
+      activeRequests -= 1;
+    }
+  };
+
+  const result = await harness.service.checkAll({
+    notify: false,
+    discover: false,
+  });
+
+  assert.equal(result.seasonsChecked, 2);
+  assert.ok(maxActiveRequests >= 2);
+});
+
+test("batch checks use one progress request and skip unchanged detail pages", async () => {
+  const progressCalls = [];
+  const harness = await createHarness({
+    fetchSeriesProgressBatch: async (seriesIds) => {
+      progressCalls.push(seriesIds);
+      return new Map(
+        seriesIds.map((seriesId) => [
+          seriesId,
+          {
+            episodeCount: seriesId === ROOT_ID ? 12 : 4,
+            status: "updating",
+            error: null,
+          },
+        ]),
+      );
+    },
+  });
+  harness.details.set(
+    OTHER_ID,
+    detail({
+      seriesId: OTHER_ID,
+      title: "另一部短剧",
+      groupId: GROUP_B,
+      episodeCount: 4,
+    }),
+  );
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.service.addSubscription(OTHER_ID);
+
+  const detailCalls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    detailCalls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  const result = await harness.service.checkAll({
+    notify: false,
+    discover: false,
+  });
+
+  assert.equal(result.checkedSubscriptions, 2);
+  assert.equal(result.seasonsChecked, 2);
+  assert.deepEqual(detailCalls, []);
+  assert.equal(progressCalls.length, 1);
+  assert.deepEqual(
+    new Set(progressCalls[0]),
+    new Set([ROOT_ID, OTHER_ID]),
+  );
+});
+
+test("batch checks fetch full details only for series whose progress changed", async () => {
+  const harness = await createHarness({
+    fetchSeriesProgressBatch: async (seriesIds) =>
+      new Map(
+        seriesIds.map((seriesId) => [
+          seriesId,
+          {
+            episodeCount: seriesId === ROOT_ID ? 13 : 4,
+            status: "updating",
+            error: null,
+          },
+        ]),
+      ),
+  });
+  harness.details.set(
+    OTHER_ID,
+    detail({
+      seriesId: OTHER_ID,
+      title: "另一部短剧",
+      groupId: GROUP_B,
+      episodeCount: 4,
+    }),
+  );
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.service.addSubscription(OTHER_ID);
+
+  const detailCalls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    detailCalls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  const result = await harness.service.checkAll({
+    notify: false,
+    discover: false,
+  });
+
+  assert.equal(result.seasonsChecked, 2);
+  assert.deepEqual(detailCalls, [ROOT_ID]);
+});
+
+test("batch checks ignore unrelated recommendation candidates from changed details", async () => {
+  const harness = await createHarness({
+    nextDetail: detail({
+      seriesId: NEXT_ID,
+      title: "完全无关短剧第二季",
+      episodeCount: 6,
+    }),
+    albumSeriesIds: [ROOT_ID],
+    recommendFromRoot: true,
+    fetchSeriesProgressBatch: async () =>
+      new Map([
+        [
+          ROOT_ID,
+          {
+            episodeCount: 13,
+            status: "updating",
+            error: null,
+          },
+        ],
+      ]),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  harness.details.set(ROOT_ID, detail({ episodeCount: 13 }));
+
+  const detailCalls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    detailCalls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  const result = await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+
+  assert.equal(result.updatedSeasons, 1);
+  assert.equal(result.discoveredSeasons, 0);
+  assert.deepEqual(detailCalls, [ROOT_ID]);
+  assert.equal((await harness.store.read()).subscriptions[0].seasons.length, 1);
+});
+
+test("batch checks recover a stale complete album from recommendations", async () => {
+  const now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({
+    nextDetail: detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧第二季",
+      episodeCount: 6,
+    }),
+    recommendFromRoot: true,
+    now: () => now,
+    fetchAlbumSeriesBatch: async (seriesIds) =>
+      new Map(
+        seriesIds.map((seriesId) => [
+          seriesId,
+          {
+            album: {
+              publishedSeriesIds: [ROOT_ID],
+              unpublishedSeriesIds: [],
+              unpublishedSeasonCount: 0,
+              declaredSeasonCount: 1,
+              itemCount: 1,
+            },
+            error: null,
+          },
+        ]),
+      ),
+    fetchSeriesProgressBatch: async () =>
+      new Map([
+        [
+          ROOT_ID,
+          {
+            episodeCount: 12,
+            status: "updating",
+            error: null,
+          },
+        ],
+      ]),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+
+  const detailCalls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    detailCalls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  const result = await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    trigger: "cron",
+  });
+  const subscription = (await harness.store.read()).subscriptions[0];
+
+  assert.equal(result.updatedSeasons, 0);
+  assert.equal(result.discoveredSeasons, 1);
+  assert.deepEqual(detailCalls, [ROOT_ID, NEXT_ID]);
+  assert.equal(subscription.seasons.length, 2);
+  assert.equal(
+    subscription.discovery.lastRecommendationRecoveryAt,
+    now.toISOString(),
+  );
+});
+
+test("recommendation recovery scans details again only after its interval", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({
+    albumSeriesIds: [ROOT_ID],
+    now: () => now,
+    candidateRecheckMs: 24 * 60 * 60 * 1000,
+    fetchSeriesProgressBatch: async () =>
+      new Map([
+        [
+          ROOT_ID,
+          {
+            episodeCount: 12,
+            status: "updating",
+            error: null,
+          },
+        ],
+      ]),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+
+  const detailCalls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    detailCalls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    trigger: "cron",
+  });
+  assert.deepEqual(detailCalls, [ROOT_ID]);
+
+  now = new Date("2026-10-28T07:59:59.000Z");
+  await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    trigger: "cron",
+  });
+  assert.deepEqual(detailCalls, [ROOT_ID]);
+
+  now = new Date("2026-10-28T08:00:01.000Z");
+  await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    trigger: "cron",
+  });
+  assert.deepEqual(detailCalls, [ROOT_ID, ROOT_ID]);
+});
+
+test("batch checks recover a new season from recommendations when the album is incomplete", async () => {
+  const harness = await createHarness({
+    nextDetail: detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧第二季",
+      episodeCount: 6,
+    }),
+    recommendFromRoot: true,
+    fetchAlbumSeriesBatch: async (seriesIds) =>
+      new Map(
+        seriesIds.map((seriesId) => [
+          seriesId,
+          {
+            album: {
+              publishedSeriesIds: [ROOT_ID],
+              unpublishedSeriesIds: [],
+              unpublishedSeasonCount: 0,
+              declaredSeasonCount: 2,
+              itemCount: 1,
+            },
+            error: null,
+          },
+        ]),
+      ),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+
+  const detailCalls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    detailCalls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  const result = await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    trigger: "cron",
+  });
+  const subscription = (await harness.store.read()).subscriptions[0];
+
+  assert.equal(result.discoveredSeasons, 1);
+  assert.deepEqual(detailCalls, [ROOT_ID, NEXT_ID]);
+  assert.equal(subscription.seasons.length, 2);
+  assert.ok(
+    subscription.seasons.some((season) => season.seriesId === NEXT_ID),
+  );
+  assert.match(
+    subscription.discovery.lastDiscoveryIssue,
+    /官方多季列表返回不完整/,
+  );
+  assert.equal(result.discoveryFailures, 1);
+});
+
+test("batch checks request all official album lists in one call", async () => {
+  const albumBatchCalls = [];
+  const harness = await createHarness({
+    fetchAlbumSeriesBatch: async (seriesIds) => {
+      albumBatchCalls.push(seriesIds);
+      return new Map(
+        seriesIds.map((seriesId) => [
+          seriesId,
+          {
+            album: {
+              publishedSeriesIds: [seriesId],
+              unpublishedSeriesIds: [],
+              unpublishedSeasonCount: 0,
+              declaredSeasonCount: 1,
+              itemCount: 1,
+            },
+            error: null,
+          },
+        ]),
+      );
+    },
+  });
+  harness.details.set(
+    OTHER_ID,
+    detail({
+      seriesId: OTHER_ID,
+      title: "另一部短剧",
+      groupId: GROUP_B,
+      episodeCount: 4,
+    }),
+  );
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.service.addSubscription(OTHER_ID);
+
+  await harness.service.checkAll({
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+
+  assert.equal(albumBatchCalls.length, 1);
+  assert.deepEqual(
+    new Set(albumBatchCalls[0]),
+    new Set([ROOT_ID, OTHER_ID]),
   );
 });
 

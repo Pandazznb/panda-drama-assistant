@@ -316,6 +316,13 @@ const appState = {
   screenshotSequence: 0,
   screenshotRunId: 0,
   screenshotReturnFocus: null,
+  batchCheck: {
+    pollTimer: null,
+    polling: false,
+    failures: 0,
+    announceResult: false,
+    jobId: "",
+  },
   account: {
     controller: null,
     pollTimer: null,
@@ -372,7 +379,11 @@ const SETTINGS_REQUEST_TIMEOUT_MS = 15_000;
 const SCREENSHOT_ANALYZE_TIMEOUT_MS = 70_000;
 const SCREENSHOT_IMPORT_TIMEOUT_MS = 180_000;
 const LONG_ACTION_TIMEOUT_MS = 120_000;
-const CHECK_ALL_TIMEOUT_MS = 300_000;
+const CHECK_ALL_TIMEOUT_MS = 20_000;
+const CHECK_STATUS_TIMEOUT_MS = 12_000;
+const CHECK_STATUS_POLL_INTERVAL_MS = 1_500;
+const CHECK_STATUS_MAX_BACKOFF_MS = 10_000;
+const CHECK_SPIN_DURATION_MS = 720;
 const ACCOUNT_POLL_INTERVAL_MS = 2_000;
 const ACCOUNT_LOGIN_RETRY_DELAY_MS = 700;
 const ACCOUNT_QR_IMAGE_RETRY_DELAY_MS = 500;
@@ -444,13 +455,13 @@ const notificationTemplateExamples = Object.freeze({
   reminder: {
     defaultTitle: "短剧助手新内容提醒",
     defaultBody:
-      "提醒时间：2026-11-01 12:00\n\n1. 《万妖图录传》第七季 · 新季 80 集 · 提醒有效至：2026-11-03 00:04",
+      "提醒时间：2026-11-01 12:00\n\n1. 《万妖图录传》第七季 · 新季 80 集 · 季上线：2026-11-01 00:04",
     variables: {
       appName: "短剧助手",
       reminderTime: "2026-11-01 12:00",
       updateCount: 1,
       updates:
-        "1. 《万妖图录传》第七季 · 新季 80 集 · 提醒有效至：2026-11-03 00:04",
+        "1. 《万妖图录传》第七季 · 新季 80 集 · 季上线：2026-11-01 00:04",
     },
   },
 });
@@ -1141,7 +1152,9 @@ function setPageBusy(isBusy) {
   appState.loading = isBusy;
   elements.pageProgress.hidden = !isBusy;
   elements.checkAll.disabled =
-    isBusy || !appState.dashboard?.subscriptions?.length;
+    isBusy ||
+    elements.checkAll.classList.contains("is-busy") ||
+    !appState.dashboard?.subscriptions?.length;
 }
 
 function setFormFeedback(element, message = "", type = "error") {
@@ -1225,9 +1238,9 @@ function setButtonBusy(button, busy, busyLabel = "处理中…") {
     button.disabled = true;
     button.classList.add("is-busy");
     button.setAttribute("aria-busy", "true");
-    if (label) {
+    if (label && label.textContent !== busyLabel) {
       label.textContent = busyLabel;
-    } else {
+    } else if (!label && button.textContent.trim() !== busyLabel) {
       button.textContent = busyLabel;
     }
     return;
@@ -1239,6 +1252,45 @@ function setButtonBusy(button, busy, busyLabel = "处理中…") {
     label.textContent = button.dataset.idleLabel;
   }
   delete button.dataset.idleLabel;
+}
+
+function setCheckButtonBusy(button, busy, busyLabel = "检查中…") {
+  if (!button) {
+    return Promise.resolve();
+  }
+  clearTimeout(button.checkBusyTimer);
+  button.checkBusyTimer = null;
+  if (busy) {
+    if (!button.dataset.checkBusyStartedAt) {
+      button.dataset.checkBusyStartedAt = String(performance.now());
+    }
+    setButtonBusy(button, true, busyLabel);
+    return Promise.resolve();
+  }
+
+  const startedAt = Number(button.dataset.checkBusyStartedAt);
+  const elapsed = Number.isFinite(startedAt)
+    ? performance.now() - startedAt
+    : CHECK_SPIN_DURATION_MS;
+  const remaining = Math.max(0, CHECK_SPIN_DURATION_MS - elapsed);
+  return new Promise((resolve) => {
+    const finish = () => {
+      button.checkBusyTimer = null;
+      delete button.dataset.checkBusyStartedAt;
+      setButtonBusy(button, false);
+      if (button === elements.checkAll) {
+        button.disabled =
+          appState.loading || !appState.dashboard?.subscriptions?.length;
+      }
+      resolve();
+    };
+
+    if (remaining > 0) {
+      button.checkBusyTimer = window.setTimeout(finish, remaining);
+    } else {
+      finish();
+    }
+  });
 }
 
 function normalizeSeriesSearchQuery(value) {
@@ -2338,6 +2390,7 @@ function renderDashboard({ listMotion = "" } = {}) {
   elements.checkAll.disabled =
     appState.loading ||
     dashboard.app.checking ||
+    elements.checkAll.classList.contains("is-busy") ||
     allSubscriptions.length === 0;
 
   if (!allSubscriptions.length) {
@@ -5985,7 +6038,7 @@ elements.subscriptionList.addEventListener("click", async (event) => {
   }
 
   if (button.dataset.action === "check") {
-    setButtonBusy(button, true, "检查中…");
+    setCheckButtonBusy(button, true);
     setPageBusy(true);
     try {
       const payload = await requestJson(
@@ -5997,12 +6050,13 @@ elements.subscriptionList.addEventListener("click", async (event) => {
         },
       );
       showToast(payload.message);
+      await setCheckButtonBusy(button, false);
       await loadDashboard({ silent: true });
       focusSubscriptionAction(subscriptionId, "check");
     } catch (error) {
       showToast(error.message, "error");
     } finally {
-      setButtonBusy(button, false);
+      await setCheckButtonBusy(button, false);
       setPageBusy(false);
     }
     return;
@@ -6127,24 +6181,107 @@ elements.subscriptionList.addEventListener("click", async (event) => {
   }
 });
 
+function clearBatchCheckPoll() {
+  clearTimeout(appState.batchCheck.pollTimer);
+  appState.batchCheck.pollTimer = null;
+}
+
+function setBatchCheckRunningUi() {
+  setCheckButtonBusy(elements.checkAll, true);
+  if (elements.checkIndicator.hidden) {
+    elements.checkIndicator.hidden = false;
+  }
+  if (!appState.loading) {
+    setPageBusy(true);
+  }
+}
+
+function finishBatchCheck(job, { announceResult = false } = {}) {
+  clearBatchCheckPoll();
+  appState.batchCheck.polling = false;
+  appState.batchCheck.failures = 0;
+  appState.batchCheck.announceResult = false;
+  appState.batchCheck.jobId = "";
+  setCheckButtonBusy(elements.checkAll, false);
+  elements.checkIndicator.hidden = true;
+  setPageBusy(false);
+  if (announceResult && job?.message) {
+    showToast(job.message, job.status === "error" ? "error" : "success");
+  }
+  if (job) {
+    void loadDashboard({ silent: true });
+  }
+}
+
+function scheduleBatchCheckPoll(delay = CHECK_STATUS_POLL_INTERVAL_MS) {
+  clearBatchCheckPoll();
+  appState.batchCheck.pollTimer = setTimeout(() => {
+    appState.batchCheck.pollTimer = null;
+    void pollBatchCheckStatus();
+  }, Math.max(0, delay));
+}
+
+async function pollBatchCheckStatus() {
+  if (appState.batchCheck.polling) {
+    return;
+  }
+  appState.batchCheck.polling = true;
+  try {
+    const payload = await requestJson("/api/check/status", {
+      method: "GET",
+      timeoutMs: CHECK_STATUS_TIMEOUT_MS,
+    });
+    const job = payload.job;
+    if (!job) {
+      finishBatchCheck(null);
+      return;
+    }
+    if (job.status === "running") {
+      appState.batchCheck.failures = 0;
+      appState.batchCheck.jobId = job.id || appState.batchCheck.jobId;
+      setBatchCheckRunningUi();
+      scheduleBatchCheckPoll();
+      return;
+    }
+    finishBatchCheck(job, {
+      announceResult: appState.batchCheck.announceResult,
+    });
+  } catch (error) {
+    appState.batchCheck.failures += 1;
+    const backoff = Math.min(
+      CHECK_STATUS_MAX_BACKOFF_MS,
+      CHECK_STATUS_POLL_INTERVAL_MS *
+        2 ** Math.min(appState.batchCheck.failures, 3),
+    );
+    scheduleBatchCheckPoll(backoff);
+  } finally {
+    appState.batchCheck.polling = false;
+  }
+}
+
+function watchBatchCheck({ announceResult = false } = {}) {
+  appState.batchCheck.failures = 0;
+  appState.batchCheck.announceResult = announceResult;
+  scheduleBatchCheckPoll(0);
+}
+
 elements.checkAll.addEventListener("click", async () => {
-  setButtonBusy(elements.checkAll, true, "检查中…");
-  elements.checkIndicator.hidden = false;
-  setPageBusy(true);
+  setBatchCheckRunningUi();
   try {
     const payload = await requestJson("/api/check", {
       method: "POST",
       body: "{}",
       timeoutMs: CHECK_ALL_TIMEOUT_MS,
     });
+    appState.batchCheck.jobId = payload.job?.id || "";
     showToast(payload.message);
-    await loadDashboard({ silent: true });
+    watchBatchCheck({ announceResult: true });
   } catch (error) {
-    showToast(error.message, "error");
-  } finally {
-    setButtonBusy(elements.checkAll, false);
+    clearBatchCheckPoll();
+    setCheckButtonBusy(elements.checkAll, false);
     elements.checkIndicator.hidden = true;
     setPageBusy(false);
+    showToast(error.message, "error");
   }
 });
 
@@ -7597,4 +7734,6 @@ for (const input of elements.settingsForm.querySelectorAll(
 
 resetSeriesSearch();
 scheduleScrollControlsUpdate();
-void loadDashboard();
+void loadDashboard().then(() => {
+  watchBatchCheck();
+});

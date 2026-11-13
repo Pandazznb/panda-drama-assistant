@@ -273,6 +273,21 @@ async function startHarness(t, options = {}) {
   };
 }
 
+async function waitForBatchCheckJob(harness) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const response = await fetch(
+      `${harness.origin}/api/check/status`,
+    );
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    if (payload.job && payload.job.status !== "running") {
+      return payload.job;
+    }
+  }
+  assert.fail("批量检查任务未在预期时间内结束。");
+}
+
 test("HTTP app serves the dashboard and starts with an empty state", async (t) => {
   const harness = await startHarness(t);
 
@@ -1190,21 +1205,19 @@ test("single-series check API forces completed-series verification", async (t) =
 
 test("batch check API reports completed series as skipped", async (t) => {
   const harness = await startHarness(t);
+  let finishCheck;
+  const pendingCheck = new Promise((resolve) => {
+    finishCheck = resolve;
+  });
+  let calls = 0;
   harness.service.checkAll = async (options) => {
+    calls += 1;
     assert.deepEqual(options, {
       notify: true,
       discover: true,
       forceDiscovery: true,
     });
-    return {
-      subscriptions: 2,
-      checkedSubscriptions: 0,
-      skippedCompleted: 2,
-      seasonsChecked: 0,
-      updatedSeasons: 0,
-      discoveredSeasons: 0,
-      errors: 0,
-    };
+    return pendingCheck;
   };
 
   const response = await fetch(`${harness.origin}/api/check`, {
@@ -1212,10 +1225,36 @@ test("batch check API reports completed series as skipped", async (t) => {
     headers: { "content-type": "application/json" },
     body: "{}",
   });
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 202);
   const payload = await response.json();
-  assert.equal(payload.result.skippedCompleted, 2);
-  assert.match(payload.message, /2 个已完结已跳过/);
+  assert.equal(payload.accepted, true);
+  assert.equal(payload.job.status, "running");
+
+  const duplicateResponse = await fetch(
+    `${harness.origin}/api/check`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  assert.equal(duplicateResponse.status, 202);
+  assert.equal((await duplicateResponse.json()).accepted, false);
+  assert.equal(calls, 1);
+
+  finishCheck({
+    subscriptions: 2,
+    checkedSubscriptions: 0,
+    skippedCompleted: 2,
+    seasonsChecked: 0,
+    updatedSeasons: 0,
+    discoveredSeasons: 0,
+    errors: 0,
+  });
+  const job = await waitForBatchCheckJob(harness);
+  assert.equal(job.status, "success");
+  assert.equal(job.result.skippedCompleted, 2);
+  assert.match(job.message, /2 个已完结已跳过/);
 });
 
 test("tracking API stops and restores automatic checks", async (t) => {
@@ -1301,10 +1340,11 @@ test("batch check API reports paused series as skipped", async (t) => {
     headers: { "content-type": "application/json" },
     body: "{}",
   });
-  assert.equal(response.status, 200);
-  const payload = await response.json();
-  assert.equal(payload.result.skippedPaused, 1);
-  assert.match(payload.message, /1 个已完结、1 个已暂停/);
+  assert.equal(response.status, 202);
+  const job = await waitForBatchCheckJob(harness);
+  assert.equal(job.status, "success");
+  assert.equal(job.result.skippedPaused, 1);
+  assert.match(job.message, /1 个已完结、1 个已暂停/);
 });
 
 test("watched API marks a subscription as viewed", async (t) => {

@@ -503,6 +503,107 @@ export function createRequestHandler(
   accountService,
   accountSyncService,
 ) {
+  let batchCheckJob = null;
+  let batchCheckSequence = 0;
+
+  function batchCheckMessage(result) {
+    const skippedCompleted = result.skippedCompleted || 0;
+    const skippedInactive = result.skippedInactive || 0;
+    const skippedPaused = result.skippedPaused || 0;
+    const checkedSubscriptions =
+      result.checkedSubscriptions ??
+      Math.max(
+        0,
+        result.subscriptions -
+          skippedCompleted -
+          skippedInactive -
+          skippedPaused,
+      );
+    if (result.subscriptions === 0) {
+      return "当前还没有追更条目。";
+    }
+    if (
+      checkedSubscriptions === 0 &&
+      (skippedCompleted > 0 || skippedInactive > 0 || skippedPaused > 0)
+    ) {
+      return `没有需要检查的系列：${[
+        skippedCompleted ? `${skippedCompleted} 个已完结` : "",
+        skippedInactive ? `${skippedInactive} 个今天已核验停更` : "",
+        skippedPaused ? `${skippedPaused} 个已暂停` : "",
+      ]
+        .filter(Boolean)
+        .join("、")}已跳过。`;
+    }
+    return `检查完成：${result.seasonsChecked} 个季，${result.updatedSeasons} 个有新更新。${
+      skippedCompleted > 0
+        ? ` 已跳过 ${skippedCompleted} 个已完结系列。`
+        : ""
+    }${
+      skippedInactive > 0
+        ? ` 已跳过 ${skippedInactive} 个今天已完成停更核验的系列。`
+        : ""
+    }${
+      skippedPaused > 0
+        ? ` 已跳过 ${skippedPaused} 个暂停追更系列。`
+        : ""
+    }`;
+  }
+
+  function batchCheckSnapshot(job) {
+    if (!job) {
+      return null;
+    }
+    return {
+      id: job.id,
+      status: job.status,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      result: job.result,
+      message: job.message,
+    };
+  }
+
+  function startBatchCheckJob() {
+    const job = {
+      id: `check_${Date.now()}_${++batchCheckSequence}`,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      result: null,
+      message: "检查正在后台进行。",
+    };
+    batchCheckJob = job;
+    void service
+      .checkAll({
+        notify: true,
+        discover: true,
+        forceDiscovery: true,
+      })
+      .then((result) => {
+        job.status = "success";
+        job.completedAt = new Date().toISOString();
+        job.result = result;
+        job.message = batchCheckMessage(result);
+      })
+      .catch(async (error) => {
+        job.status = "error";
+        job.completedAt = new Date().toISOString();
+        job.message =
+          error?.statusCode && error.statusCode < 500
+            ? error.message
+            : "检查失败，请稍后重试。";
+        await recordSystemLog(systemLog, {
+          category: "check",
+          action: "check.failed",
+          level: "error",
+          message: `手动检查全部追更失败：${
+            error?.message || "未知错误"
+          }`,
+        });
+      });
+    return job;
+  }
+
   return async (request, response) => {
     try {
       const url = new URL(request.url || "/", "http://localhost");
@@ -604,6 +705,17 @@ export function createRequestHandler(
 
       if (request.method === "GET" && pathname === "/api/state") {
         sendJson(response, 200, await service.getDashboard());
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
+        pathname === "/api/check/status"
+      ) {
+        sendJson(response, 200, {
+          ok: true,
+          job: batchCheckSnapshot(batchCheckJob),
+        });
         return;
       }
 
@@ -1081,56 +1193,15 @@ export function createRequestHandler(
 
       if (request.method === "POST" && pathname === "/api/check") {
         await readJsonBody(request);
-        const result = await service.checkAll({
-          notify: true,
-          discover: true,
-          forceDiscovery: true,
-        });
-        const skippedCompleted = result.skippedCompleted || 0;
-        const skippedInactive = result.skippedInactive || 0;
-        const skippedPaused = result.skippedPaused || 0;
-        const checkedSubscriptions =
-          result.checkedSubscriptions ??
-          Math.max(
-            0,
-            result.subscriptions -
-              skippedCompleted -
-              skippedInactive -
-              skippedPaused,
-          );
-        const checkMessage =
-          result.subscriptions === 0
-            ? "当前还没有追更条目。"
-            : checkedSubscriptions === 0 &&
-                (skippedCompleted > 0 ||
-                  skippedInactive > 0 ||
-                  skippedPaused > 0)
-              ? `没有需要检查的系列：${[
-                  skippedCompleted ? `${skippedCompleted} 个已完结` : "",
-                  skippedInactive
-                    ? `${skippedInactive} 个今天已核验停更`
-                    : "",
-                  skippedPaused ? `${skippedPaused} 个已暂停` : "",
-                ]
-                  .filter(Boolean)
-                  .join("、")}已跳过。`
-              : `检查完成：${result.seasonsChecked} 个季，${result.updatedSeasons} 个有新更新。${
-                  skippedCompleted > 0
-                    ? ` 已跳过 ${skippedCompleted} 个已完结系列。`
-                    : ""
-                }${
-                  skippedInactive > 0
-                    ? ` 已跳过 ${skippedInactive} 个今天已完成停更核验的系列。`
-                    : ""
-                }${
-                  skippedPaused > 0
-                    ? ` 已跳过 ${skippedPaused} 个暂停追更系列。`
-                    : ""
-                }`;
-        sendJson(response, 200, {
+        const running = batchCheckJob?.status === "running";
+        const job = running ? batchCheckJob : startBatchCheckJob();
+        sendJson(response, 202, {
           ok: true,
-          result,
-          message: checkMessage,
+          accepted: !running,
+          job: batchCheckSnapshot(job),
+          message: running
+            ? "检查已在后台进行。"
+            : "已开始后台检查，可以离开页面。",
         });
         return;
       }

@@ -21,7 +21,9 @@ import {
   normalizeCronExpression,
 } from "./cron.js";
 import {
+  fetchAlbumSeriesInfoBatch,
   fetchAlbumSeriesInfo,
+  fetchSeriesProgressBatch,
   fetchSeriesDetail,
   resolveSharedSeries,
 } from "./hongguo.js";
@@ -42,6 +44,7 @@ import {
   deriveSeriesStatus,
   deriveSubscriptionIdentity,
   hasNewerSeason,
+  highestSeason,
   normalizeAlbumMetadata,
   seasonNumber,
   seriesVerificationComplete,
@@ -94,6 +97,38 @@ function isDiscoveryDue(
       discoveryIntervalMs,
       nowMs,
     )
+  );
+}
+
+function isRecommendationRecoveryDue(
+  subscription,
+  recoveryIntervalMs,
+  nowMs,
+  forceRecovery = false,
+) {
+  return (
+    forceRecovery ||
+    !isRecent(
+      subscription?.discovery?.lastRecommendationRecoveryAt,
+      recoveryIntervalMs,
+      nowMs,
+    )
+  );
+}
+
+function discoveryTitleKey(value) {
+  return titleWithoutSeason(value)
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, "");
+}
+
+function recommendationMatchesKnownSeries(recommendation, seasons) {
+  const candidateKey = discoveryTitleKey(recommendation?.title);
+  if (!candidateKey) {
+    return false;
+  }
+  return seasons.some(
+    (season) => discoveryTitleKey(season?.title) === candidateKey,
   );
 }
 
@@ -194,6 +229,62 @@ function batchNeedsDiscoveryAlignment(
       nowMs,
       forceDiscovery,
     ),
+  );
+}
+
+function subscriptionsEligibleForNetworkCheck(
+  subscriptions,
+  {
+    skipCompleted = true,
+    forceCompletedCheck = false,
+    trigger = "manual",
+  } = {},
+  now,
+) {
+  return (Array.isArray(subscriptions) ? subscriptions : []).filter(
+    (subscription) => {
+      if (subscription?.trackingPaused === true) {
+        return false;
+      }
+      if (
+        skipCompleted &&
+        !forceCompletedCheck &&
+        isKnownCompletedSeries(subscription)
+      ) {
+        return false;
+      }
+      if (
+        isKnownInactiveSeries(subscription) &&
+        trigger === "cron" &&
+        inactiveCheckedToday(subscription, now)
+      ) {
+        return false;
+      }
+      return true;
+    },
+  );
+}
+
+function shouldDiscoverSubscription(
+  subscription,
+  {
+    discover = true,
+    forceDiscovery = false,
+    forceAlbumDiscovery = false,
+  },
+  discoveryIntervalMs,
+  nowMs,
+) {
+  return (
+    discover &&
+    (forceDiscovery ||
+      forceAlbumDiscovery ||
+      isKnownInactiveSeries(subscription) ||
+      isDiscoveryDue(
+        subscription,
+        discoveryIntervalMs,
+        nowMs,
+      ))
   );
 }
 
@@ -927,20 +1018,12 @@ function discoveryReminderCopy(state, reminders, nowMs) {
                   } 集）`
                 : ""
             }`;
-      const timing = [
-        season
-          ? `季上线：${formatNotificationTime(season.firstVisibleTime)}`
-          : "",
-        `${
-          reminder.type === EVENT_TYPE.SEASON
-            ? "检测到新季"
-            : "检测到更新"
-        }：${formatNotificationTime(reminder.lastDiscoveredAt)}`,
-        `提醒有效至：${formatNotificationTime(reminder.expiresAt)}`,
-      ].filter(Boolean);
+      const seasonLine = season
+        ? `季上线：${formatNotificationTime(season.firstVisibleTime)}`
+        : "";
 
       return {
-        line: `${change} · ${timing.join(" · ")}`,
+        line: seasonLine ? `${change} · ${seasonLine}` : change,
         lastDiscoveredAt:
           Date.parse(reminder.lastDiscoveredAt || "") || 0,
         order: group.order,
@@ -1239,6 +1322,8 @@ export class ReminderService {
     store,
     fetchDetail = fetchSeriesDetail,
     fetchAlbumSeries = fetchAlbumSeriesInfo,
+    fetchAlbumSeriesBatch = null,
+    fetchSeriesProgressBatch: progressBatchFetcher = null,
     resolveShared = resolveSharedSeries,
     sendNotifications = sendNotificationChannels,
     systemLog = null,
@@ -1249,12 +1334,49 @@ export class ReminderService {
     requestScheduler = null,
   }) {
     this.store = store;
+    const resolvedAlbumSeriesBatch =
+      fetchAlbumSeriesBatch ||
+      (fetchAlbumSeries === fetchAlbumSeriesInfo
+        ? fetchAlbumSeriesInfoBatch
+        : async (seriesIds) =>
+            new Map(
+              await Promise.all(
+                seriesIds.map(async (seriesId) => {
+                  try {
+                    return [
+                      seriesId,
+                      {
+                        album: await fetchAlbumSeries(seriesId),
+                        error: null,
+                      },
+                    ];
+                  } catch (error) {
+                    return [seriesId, { album: null, error }];
+                  }
+                }),
+              ),
+            ));
+    const resolvedProgressBatch =
+      progressBatchFetcher ||
+      (fetchDetail === fetchSeriesDetail
+        ? fetchSeriesProgressBatch
+        : null);
     this.fetchDetail = requestScheduler
       ? (seriesId) => fetchDetail(seriesId, { requestScheduler })
       : fetchDetail;
     this.fetchAlbumSeries = requestScheduler
       ? (seriesId) => fetchAlbumSeries(seriesId, { requestScheduler })
       : fetchAlbumSeries;
+    this.fetchAlbumSeriesBatch = requestScheduler
+      ? (seriesIds) =>
+          resolvedAlbumSeriesBatch(seriesIds, { requestScheduler })
+      : resolvedAlbumSeriesBatch;
+    this.fetchSeriesProgressBatch = resolvedProgressBatch
+      ? requestScheduler
+        ? (seriesIds) =>
+            resolvedProgressBatch(seriesIds, { requestScheduler })
+        : resolvedProgressBatch
+      : null;
     this.resolveShared = requestScheduler
       ? (input) => resolveShared(input, { requestScheduler })
       : resolveShared;
@@ -1456,6 +1578,7 @@ export class ReminderService {
         subscription.updatedAt = timestamp;
         subscription.discovery.lastRunAt = null;
         subscription.discovery.lastCompletedAt = null;
+        subscription.discovery.lastRecommendationRecoveryAt = null;
         subscription.discovery.lastDiscoveryIssue = null;
         subscription.discovery.confirmedSeriesIds = [];
         subscription.discovery.unpublishedSeriesIds = [];
@@ -1511,6 +1634,7 @@ export class ReminderService {
           discovery: {
             lastRunAt: null,
             lastCompletedAt: null,
+            lastRecommendationRecoveryAt: null,
             lastDiscoveryIssue: null,
             confirmedSeriesIds: [],
             unpublishedSeriesIds: [],
@@ -1631,6 +1755,7 @@ export class ReminderService {
       current.updatedAt = timestamp;
       current.discovery.lastRunAt = null;
       current.discovery.lastCompletedAt = null;
+      current.discovery.lastRecommendationRecoveryAt = null;
       current.discovery.lastDiscoveryIssue = null;
       current.discovery.confirmedSeriesIds = [];
       current.discovery.unpublishedSeriesIds = [];
@@ -2367,6 +2492,88 @@ export class ReminderService {
     };
   }
 
+  async prefetchAlbumDiscoveries(subscriptions, options, now) {
+    const candidates = subscriptionsEligibleForNetworkCheck(
+      subscriptions,
+      options,
+      now,
+    ).filter((subscription) =>
+      shouldDiscoverSubscription(
+        subscription,
+        options,
+        this.discoveryIntervalMs,
+        now.getTime(),
+      ),
+    );
+    const seriesIds = [
+      ...new Set(
+        candidates
+          .map((subscription) => String(subscription.primarySeriesId || ""))
+          .filter((seriesId) => /^\d{8,25}$/.test(seriesId)),
+      ),
+    ];
+    if (!seriesIds.length) {
+      return new Map();
+    }
+
+    try {
+      return await this.fetchAlbumSeriesBatch(seriesIds);
+    } catch (error) {
+      return new Map(
+        seriesIds.map((seriesId) => [
+          seriesId,
+          { album: null, error },
+        ]),
+      );
+    }
+  }
+
+  async prefetchSeriesProgress(subscriptions, options, now) {
+    if (!options.latestSeasonOnly || !this.fetchSeriesProgressBatch) {
+      return new Map();
+    }
+    const latestSeasons = subscriptionsEligibleForNetworkCheck(
+      subscriptions,
+      options,
+      now,
+    )
+      .map((subscription) => highestSeason(subscription.seasons))
+      .filter(Boolean);
+    const seriesIds = [
+      ...new Set(
+        latestSeasons
+          .map((season) => String(season.seriesId || ""))
+          .filter((seriesId) => /^\d{8,25}$/.test(seriesId)),
+      ),
+    ];
+    if (!seriesIds.length) {
+      return new Map();
+    }
+
+    try {
+      return await this.fetchSeriesProgressBatch(seriesIds);
+    } catch (error) {
+      return new Map(
+        seriesIds.map((seriesId) => [
+          seriesId,
+          {
+            episodeCount: null,
+            status: null,
+            error,
+          },
+        ]),
+      );
+    }
+  }
+
+  async prefetchBatchCheckData(subscriptions, options, now) {
+    const [albumDiscoveries, seriesProgress] = await Promise.all([
+      this.prefetchAlbumDiscoveries(subscriptions, options, now),
+      this.prefetchSeriesProgress(subscriptions, options, now),
+    ]);
+    return { albumDiscoveries, seriesProgress };
+  }
+
   async checkSubscription(subscriptionId, options = {}) {
     return this.enqueue(async () => {
       this.checking = true;
@@ -2429,6 +2636,21 @@ export class ReminderService {
           this.now().getTime(),
           options,
         );
+        const checkOptions = {
+          ...options,
+          forceAlbumDiscovery: alignDiscovery,
+          latestSeasonOnly: options.latestSeasonOnly ?? true,
+          includeRecommendationCandidates:
+            options.includeRecommendationCandidates ?? false,
+          skipCompleted: options.skipCompleted ?? true,
+          trigger: options.trigger || "manual",
+        };
+        const { albumDiscoveries, seriesProgress } =
+          await this.prefetchBatchCheckData(
+            selectedSubscriptions,
+            checkOptions,
+            this.now(),
+          );
         const entries = await mapWithConcurrency(
           uniqueIds,
           NETWORK_CONCURRENCY,
@@ -2455,12 +2677,11 @@ export class ReminderService {
               }
               const notificationEvents = [];
               const result = await this.checkOne(subscriptionId, {
-                ...options,
-                forceAlbumDiscovery: alignDiscovery,
+                ...checkOptions,
                 notificationMode: "aggregated",
-                skipCompleted: options.skipCompleted ?? true,
                 eventSink: notificationEvents,
-                trigger: options.trigger || "manual",
+                albumDiscoveryResults: albumDiscoveries,
+                seriesProgressResults: seriesProgress,
               });
               return {
                 subscriptionId,
@@ -2555,35 +2776,75 @@ export class ReminderService {
           this.now().getTime(),
           options,
         );
-        const results = [];
-        const notificationEvents = [];
-        for (const subscription of snapshot.subscriptions) {
-          if (subscription.trackingPaused === true) {
-            results.push({
-              subscriptionId: subscription.id,
-              skipped: "paused",
-              seasonsChecked: 0,
-              updatedSeasons: 0,
-              discoveredSeasons: 0,
-              errors: 0,
-              discoveryError: null,
-            });
-            continue;
-          }
-          results.push(
-            await this.checkOne(subscription.id, {
-              notify: options.notify ?? true,
-              discover: options.discover ?? true,
-              forceDiscovery: options.forceDiscovery ?? false,
-              forceAlbumDiscovery: alignDiscovery,
-              skipCompleted: options.skipCompleted ?? true,
-              notificationMode: "aggregated",
-              eventSink: notificationEvents,
-              markUnread: options.markUnread ?? true,
-              trigger: options.trigger || "manual",
-            }),
+        const checkOptions = {
+          notify: options.notify ?? true,
+          discover: options.discover ?? true,
+          forceDiscovery: options.forceDiscovery ?? false,
+          forceAlbumDiscovery: alignDiscovery,
+          skipCompleted: options.skipCompleted ?? true,
+          latestSeasonOnly: options.latestSeasonOnly ?? true,
+          includeRecommendationCandidates:
+            options.includeRecommendationCandidates ?? false,
+          markUnread: options.markUnread ?? true,
+          trigger: options.trigger || "manual",
+        };
+        const { albumDiscoveries, seriesProgress } =
+          await this.prefetchBatchCheckData(
+            snapshot.subscriptions,
+            checkOptions,
+            this.now(),
           );
-        }
+        const entries = await mapWithConcurrency(
+          snapshot.subscriptions,
+          NETWORK_CONCURRENCY,
+          async (subscription) => {
+            if (subscription.trackingPaused === true) {
+              return {
+                result: {
+                  subscriptionId: subscription.id,
+                  skipped: "paused",
+                  seasonsChecked: 0,
+                  updatedSeasons: 0,
+                  discoveredSeasons: 0,
+                  errors: 0,
+                  discoveryError: null,
+                },
+                notificationEvents: [],
+              };
+            }
+            const notificationEvents = [];
+            try {
+              const result = await this.checkOne(subscription.id, {
+                ...checkOptions,
+                notificationMode: "aggregated",
+                eventSink: notificationEvents,
+                albumDiscoveryResults: albumDiscoveries,
+                seriesProgressResults: seriesProgress,
+              });
+              return { result, notificationEvents };
+            } catch (error) {
+              return {
+                result: {
+                  subscriptionId: subscription.id,
+                  skipped: null,
+                  seasonsChecked: 0,
+                  updatedSeasons: 0,
+                  discoveredSeasons: 0,
+                  errors: 1,
+                  discoveryError: null,
+                  errorMessage:
+                    normalizeWhitespace(error?.message) ||
+                    "检查系列失败。",
+                },
+                notificationEvents: [],
+              };
+            }
+          },
+        );
+        const results = entries.map((entry) => entry.result);
+        const notificationEvents = entries.flatMap(
+          (entry) => entry.notificationEvents,
+        );
         if (options.notify ?? true) {
           await this.deliverCheckSummary(notificationEvents, {
             mode: "summary",
@@ -2593,7 +2854,7 @@ export class ReminderService {
         const aggregate = {
           subscriptions: results.length,
           checkedSubscriptions: results.filter(
-            (result) => !result.skipped,
+            (result) => !result.skipped && result.errors === 0,
           ).length,
           skippedCompleted: results.filter(
             (result) => result.skipped === "completed",
@@ -2674,10 +2935,14 @@ export class ReminderService {
       forceAlbumDiscovery = false,
       forceCompletedCheck = false,
       skipCompleted = true,
+      latestSeasonOnly = false,
+      includeRecommendationCandidates = true,
       notificationMode = "aggregated",
       eventSink = null,
       markUnread = true,
       trigger = "manual",
+      albumDiscoveryResults = null,
+      seriesProgressResults = null,
     } = {},
   ) {
     const snapshot = await this.store.read();
@@ -2735,42 +3000,74 @@ export class ReminderService {
     const timestamp = checkedAt.toISOString();
     const nowMs = checkedAt.getTime();
     const seasons = [...subscription.seasons];
-    const shouldDiscover =
-      discover &&
-      (forceDiscovery ||
-        forceAlbumDiscovery ||
-        wasInactive ||
-        isDiscoveryDue(
-          subscription,
-          this.discoveryIntervalMs,
-          nowMs,
-        ));
+    const latestSeason = highestSeason(seasons);
+    const seasonsToCheck =
+      latestSeasonOnly && latestSeason ? [latestSeason] : seasons;
+    const shouldDiscover = shouldDiscoverSubscription(
+      subscription,
+      { discover, forceDiscovery, forceAlbumDiscovery },
+      this.discoveryIntervalMs,
+      nowMs,
+    );
+    const recommendationRecoveryDue =
+      shouldDiscover &&
+      isRecommendationRecoveryDue(
+        subscription,
+        this.candidateRecheckMs,
+        nowMs,
+        forceDiscovery,
+      );
+    const prefetchedAlbumDiscovery =
+      albumDiscoveryResults?.get?.(subscription.primarySeriesId);
     const albumDiscoveryPromise = shouldDiscover
-      ? this.fetchAlbumSeries(subscription.primarySeriesId).then(
-          (album) => ({ album, error: null }),
-          (error) => ({ album: null, error }),
-        )
+      ? prefetchedAlbumDiscovery !== undefined
+        ? Promise.resolve(prefetchedAlbumDiscovery)
+        : this.fetchAlbumSeries(subscription.primarySeriesId).then(
+            (album) => ({ album, error: null }),
+            (error) => ({ album: null, error }),
+          )
       : Promise.resolve({ album: null, error: null });
-    const [seasonResults, albumDiscovery] = await Promise.all([
-      mapWithConcurrency(
-        seasons,
-        NETWORK_CONCURRENCY,
-        async (season) => {
-          try {
-            const result = await this.fetchDetail(season.seriesId);
-            return { season, ...result, ok: true };
-          } catch (error) {
-            return { season, ok: false, error };
-          }
-        },
-      ),
-      albumDiscoveryPromise,
-    ]);
+    const albumDiscovery = await albumDiscoveryPromise;
     const albumDiscoveryError = albumDiscovery.error || null;
     const albumMetadata = normalizeAlbumMetadata(
       albumDiscoveryError ? null : albumDiscovery.album,
     );
     const albumSeriesIds = albumMetadata.publishedSeriesIds;
+    const albumVerificationIncomplete =
+      shouldDiscover && Boolean(albumMetadataIssue(albumMetadata));
+    const discoveryFallbackRequired = albumVerificationIncomplete;
+    const recoveryDetailRequired =
+      recommendationRecoveryDue || discoveryFallbackRequired;
+    const seasonResults = await mapWithConcurrency(
+      seasonsToCheck,
+      NETWORK_CONCURRENCY,
+      async (season) => {
+        const progress =
+          seriesProgressResults?.get?.(season.seriesId);
+        const canUseProgress =
+          latestSeasonOnly &&
+          progress &&
+          !progress.error &&
+          Number(progress.episodeCount) ===
+            Number(season.highWaterEpisodeCount) &&
+          progress.status === season.status &&
+          !recoveryDetailRequired;
+        if (canUseProgress) {
+          return {
+            season,
+            ok: true,
+            unchanged: true,
+            progress,
+          };
+        }
+        try {
+          const result = await this.fetchDetail(season.seriesId);
+          return { season, ...result, ok: true };
+        } catch (error) {
+          return { season, ok: false, error };
+        }
+      },
+    );
 
     const candidateMap = new Map();
     // Official album entries are authoritative and must not be crowded out by
@@ -2790,21 +3087,30 @@ export class ReminderService {
         });
       }
     }
-    for (const result of seasonResults) {
-      if (!result.ok) {
-        continue;
-      }
-      for (const recommendation of result.recommendations || []) {
-        if (
-          !seasons.some(
-            (season) => season.seriesId === recommendation.seriesId,
-          ) &&
-          !candidateMap.has(recommendation.seriesId)
-        ) {
-          candidateMap.set(recommendation.seriesId, {
-            ...recommendation,
-            source: "recommendation",
-          });
+    const recommendationScanCompleted = seasonResults.some(
+      (result) => result.ok && !result.unchanged,
+    );
+    const recoverRecommendationCandidates =
+      includeRecommendationCandidates || recommendationScanCompleted;
+    if (recoverRecommendationCandidates) {
+      for (const result of seasonResults) {
+        if (!result.ok) {
+          continue;
+        }
+        for (const recommendation of result.recommendations || []) {
+          if (
+            !seasons.some(
+              (season) => season.seriesId === recommendation.seriesId,
+            ) &&
+            !candidateMap.has(recommendation.seriesId) &&
+            (includeRecommendationCandidates ||
+              recommendationMatchesKnownSeries(recommendation, seasons))
+          ) {
+            candidateMap.set(recommendation.seriesId, {
+              ...recommendation,
+              source: "recommendation",
+            });
+          }
         }
       }
     }
@@ -2866,6 +3172,9 @@ export class ReminderService {
         resultSubscriptionId = null;
         return;
       }
+      if (recommendationScanCompleted) {
+        current.discovery.lastRecommendationRecoveryAt = timestamp;
+      }
 
       for (const result of seasonResults) {
         const season = current.seasons.find(
@@ -2876,6 +3185,14 @@ export class ReminderService {
         }
         season.lastCheckedAt = timestamp;
         season.updatedAt = timestamp;
+
+        if (result.unchanged) {
+          season.lastError = null;
+          season.episodeCount = result.progress.episodeCount;
+          season.lastObservedEpisodeCount =
+            result.progress.episodeCount;
+          continue;
+        }
 
         if (!result.ok) {
           errors += 1;
@@ -3199,7 +3516,7 @@ export class ReminderService {
 
     return {
       subscriptionId: resultSubscriptionId,
-      seasonsChecked: seasons.length,
+      seasonsChecked: seasonsToCheck.length,
       updatedSeasons,
       discoveredSeasons,
       errors,
