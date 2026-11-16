@@ -16,6 +16,7 @@
     <title>短剧助手</title>
     <script src="/theme.js"></script>
     <script src="/pwa.js" defer></script>
+    <script src="/scroll-controls.js" defer></script>
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
     <link
@@ -42,46 +43,31 @@
           </span>
           <span class="brand__text">短剧助手</span>
         </a>
-        <div class="app-header__actions">
-          <div
-            class="scroll-controls"
-            id="scroll-controls"
-            role="group"
-            aria-label="页面滚动导航"
-            hidden
+        <nav class="app-nav" aria-label="主导航">
+          <a
+            class="app-nav__link is-active"
+            href="/"
+            aria-current="page"
           >
-            <button
-              class="scroll-controls__button"
-              id="scroll-to-top"
-              type="button"
-              aria-label="回到最上"
-              title="回到最上"
-              disabled
-            >
-              <svg
-                class="icon scroll-controls__icon scroll-controls__icon--up"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <use href="#icon-chevron-down"></use>
-              </svg>
-            </button>
-            <button
-              class="scroll-controls__button"
-              id="scroll-to-bottom"
-              type="button"
-              aria-label="回到最下"
-              title="回到最下"
-            >
-              <svg
-                class="icon scroll-controls__icon"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <use href="#icon-chevron-down"></use>
-              </svg>
-            </button>
-          </div>
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-play-list"></use>
+            </svg>
+            <span>我的追更</span>
+          </a>
+          <a class="app-nav__link" href="/rankings">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-trophy"></use>
+            </svg>
+            <span>榜单</span>
+          </a>
+          <a class="app-nav__link" href="/filters">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-filter"></use>
+            </svg>
+            <span>筛选</span>
+          </a>
+        </nav>
+        <div class="app-header__actions">
           <button
             class="button button--quiet pwa-install-button"
             type="button"
@@ -111,7 +97,7 @@
             </span>
           </button>
           <button
-            class="button button--quiet"
+            class="button button--quiet header-settings-button"
             type="button"
             id="open-settings"
             aria-label="打开设置"
@@ -128,8 +114,8 @@
       </div>
     </header>
 
-    <main id="main-content" class="page">
-      <section class="overview" aria-labelledby="page-title">
+    <main id="main-content" class="page page--has-scroll-controls">
+      <section class="overview page-overview" aria-labelledby="page-title">
         <div class="overview__copy">
           <h1 id="page-title">我的追更</h1>
           <p class="overview__tagline">长短都精彩，好剧看不停。</p>
@@ -2760,6 +2746,14 @@
       <symbol id="icon-update-list" viewBox="0 0 24 24">
         <path d="M4 6h8.5M4 12h6.5M4 18h4.5"></path>
         <path d="m14.5 9 5 3-5 3Z"></path>
+      </symbol>
+      <symbol id="icon-play-list" viewBox="0 0 24 24">
+        <path d="M4 6h9M4 12h7M4 18h5"></path>
+        <path d="m15 8 6 4-6 4Z"></path>
+      </symbol>
+      <symbol id="icon-trophy" viewBox="0 0 24 24">
+        <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0Z"></path>
+        <path d="M7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"></path>
       </symbol>
       <symbol id="icon-settings" viewBox="0 0 24 24">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>

@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="按红果官方内容类型、题材、主题、设定、受众、时间和状态联动筛选短剧，并直接加入追更。"
+    >
+    <meta name="theme-color" content="#f3f5f7">
+    <meta name="application-name" content="短剧助手">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="短剧助手">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <title>筛选短剧 · 短剧助手</title>
+    <script src="/theme.js"></script>
+    <script src="/pwa.js" defer></script>
+    <script src="/scroll-controls.js" defer></script>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <link
+      rel="icon"
+      href="/assets/panda-drama-assistant-icon.svg"
+      type="image/svg+xml"
+    >
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="rankings-page filters-page">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="app-header">
+      <div class="app-header__inner">
+        <a class="brand" href="/" aria-label="返回短剧助手首页">
+          <span class="brand__mark" aria-hidden="true">
+            <img
+              class="brand__logo"
+              src="/assets/panda-drama-assistant-icon.svg"
+              alt=""
+              width="38"
+              height="38"
+            >
+          </span>
+          <span class="brand__text">短剧助手</span>
+        </a>
+        <nav class="app-nav" aria-label="主导航">
+          <a class="app-nav__link" href="/">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-play-list"></use>
+            </svg>
+            <span>我的追更</span>
+          </a>
+          <a class="app-nav__link" href="/rankings">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-trophy"></use>
+            </svg>
+            <span>榜单</span>
+          </a>
+          <a
+            class="app-nav__link is-active"
+            href="/filters"
+            aria-current="page"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-filter"></use>
+            </svg>
+            <span>筛选</span>
+          </a>
+        </nav>
+        <div class="app-header__actions">
+          <button
+            class="button button--quiet pwa-install-button"
+            type="button"
+            data-pwa-install
+            aria-label="安装短剧助手应用"
+            title="安装应用"
+            hidden
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-download"></use>
+            </svg>
+            <span class="header-action__label">安装应用</span>
+          </button>
+          <button
+            class="theme-switcher"
+            type="button"
+            data-theme-toggle
+            data-theme-preference="auto"
+            aria-label="当前主题：自动，跟随系统。点击切换为白天主题"
+            title="当前：自动（跟随系统），点击切换为白天"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use data-theme-icon href="#icon-auto"></use>
+            </svg>
+            <span
+              class="theme-switcher__label"
+              data-theme-label
+              aria-live="polite"
+            >
+              自动
+            </span>
+          </button>
+          <a
+            class="button button--quiet header-settings-button"
+            href="/?settings=1"
+            aria-label="打开设置"
+            title="设置"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-settings"></use>
+            </svg>
+            <span class="header-action__label">设置</span>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main-content" class="page rankings-page__main">
+      <section
+        class="rankings-overview filters-overview page-overview"
+        aria-labelledby="filters-title"
+      >
+        <div class="rankings-overview__copy">
+          <p class="eyebrow">红果官方联动筛选</p>
+          <h1 id="filters-title">发现好剧</h1>
+          <p class="rankings-overview__description">
+            遇到想看的短剧，可以直接加入追更。
+          </p>
+        </div>
+        <div class="rankings-overview__side">
+          <dl class="rankings-meta" aria-label="筛选状态">
+            <div>
+              <dt>筛选来源</dt>
+              <dd>红果官方</dd>
+            </div>
+            <div>
+              <dt>当前结果</dt>
+              <dd id="filters-result-meta">读取中</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section
+        class="rankings-surface filters-surface"
+        aria-labelledby="filters-panel-title"
+      >
+        <section
+          class="discovery-filter-panel"
+          id="discovery-filter-panel"
+          aria-labelledby="filters-panel-title"
+        >
+          <div class="discovery-filter-header">
+            <div class="discovery-filter-header__copy">
+              <div class="discovery-filter-heading">
+                <h2 id="filters-panel-title">筛选条件</h2>
+                <span
+                  class="discovery-filter-count"
+                  id="filters-active-count"
+                  aria-live="polite"
+                >
+                  未选择
+                </span>
+              </div>
+              <p id="filters-selection-summary">
+                全部类型 · 全部条件
+              </p>
+            </div>
+            <div class="discovery-filter-actions">
+              <button
+                class="button button--quiet discovery-filter-action"
+                type="button"
+                id="filters-toggle-advanced"
+                aria-expanded="true"
+                aria-controls="filters-advanced"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-chevron-up"></use>
+                </svg>
+                <span>收起筛选</span>
+              </button>
+              <button
+                class="button button--quiet discovery-filter-action"
+                type="button"
+                id="filters-reset"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-rotate-ccw"></use>
+                </svg>
+                <span>重置</span>
+              </button>
+              <button
+                class="button button--secondary discovery-filter-action discovery-filter-refresh"
+                type="button"
+                id="filters-refresh"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-refresh"></use>
+                </svg>
+                <span>刷新</span>
+              </button>
+            </div>
+          </div>
+
+          <div
+            class="discovery-filter-primary"
+            id="filters-primary"
+            aria-live="polite"
+          >
+            <span class="discovery-filter-row__label">内容类型</span>
+            <div
+              class="discovery-option-strip"
+              id="filters-genre-options"
+              role="group"
+              aria-label="内容类型"
+            ></div>
+          </div>
+
+          <div
+            class="discovery-filter-advanced"
+            id="filters-advanced"
+            aria-live="polite"
+          ></div>
+        </section>
+
+        <div class="rankings-toolbar filters-results-toolbar">
+          <div class="rankings-toolbar__copy">
+            <div class="rankings-toolbar__heading">
+              <h2 id="filters-results-title">筛选结果</h2>
+              <span class="rankings-result-count" id="filters-result-count">
+                -
+              </span>
+            </div>
+            <p id="filters-results-description">
+              正在读取红果官方筛选条件…
+            </p>
+            <p class="rankings-official-updated" id="filters-active-summary">
+              当前条件：全部类型 · 全部条件
+            </p>
+          </div>
+          <a
+            class="button button--quiet rankings-source-link"
+            id="filters-source-link"
+            href="https://hongguoduanju.com/category/real-drama"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-external"></use>
+            </svg>
+            <span>红果官网</span>
+          </a>
+        </div>
+
+        <p
+          class="rankings-notice"
+          id="filters-notice"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></p>
+        <p
+          class="rankings-status"
+          id="filters-status"
+          role="status"
+          aria-live="polite"
+        >
+          正在读取筛选结果…
+        </p>
+
+        <div
+          class="discovery-grid"
+          id="filters-list"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <div class="discovery-card-skeleton" aria-label="正在加载短剧">
+            <span class="skeleton discovery-card-skeleton__cover"></span>
+            <span class="discovery-card-skeleton__body">
+              <span class="skeleton discovery-card-skeleton__title"></span>
+              <span class="skeleton discovery-card-skeleton__line"></span>
+              <span class="skeleton discovery-card-skeleton__button"></span>
+            </span>
+          </div>
+          <div class="discovery-card-skeleton" aria-hidden="true">
+            <span class="skeleton discovery-card-skeleton__cover"></span>
+            <span class="discovery-card-skeleton__body">
+              <span class="skeleton discovery-card-skeleton__title"></span>
+              <span class="skeleton discovery-card-skeleton__line"></span>
+              <span class="skeleton discovery-card-skeleton__button"></span>
+            </span>
+          </div>
+          <div class="discovery-card-skeleton" aria-hidden="true">
+            <span class="skeleton discovery-card-skeleton__cover"></span>
+            <span class="discovery-card-skeleton__body">
+              <span class="skeleton discovery-card-skeleton__title"></span>
+              <span class="skeleton discovery-card-skeleton__line"></span>
+              <span class="skeleton discovery-card-skeleton__button"></span>
+            </span>
+          </div>
+          <div class="discovery-card-skeleton" aria-hidden="true">
+            <span class="skeleton discovery-card-skeleton__cover"></span>
+            <span class="discovery-card-skeleton__body">
+              <span class="skeleton discovery-card-skeleton__title"></span>
+              <span class="skeleton discovery-card-skeleton__line"></span>
+              <span class="skeleton discovery-card-skeleton__button"></span>
+            </span>
+          </div>
+        </div>
+
+        <div class="discovery-more" id="filters-more" hidden>
+          <p id="filters-more-copy"></p>
+          <button
+            class="button button--secondary discovery-load-more"
+            type="button"
+            id="filters-load-more"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-chevron-down"></use>
+            </svg>
+            <span>加载更多</span>
+          </button>
+        </div>
+      </section>
+
+      <footer class="page-footer rankings-footer">
+        <p>
+          筛选条件与短剧内容来自红果官方分类服务。加入追更后会自动核验同一官方分组下的新季与新集。
+        </p>
+      </footer>
+    </main>
+
+    <dialog
+      class="dialog discovery-options-dialog"
+      id="filters-options-dialog"
+      aria-labelledby="filters-options-title"
+    >
+      <div class="dialog__panel">
+        <div class="dialog__header">
+          <div>
+            <h2 id="filters-options-title">全部选项</h2>
+            <p class="dialog__heading-description">选择一个条件后立即刷新结果</p>
+          </div>
+          <div class="dialog__header-actions">
+            <button
+              class="button button--quiet dialog__close"
+              type="button"
+              id="filters-options-close"
+              aria-label="关闭全部选项"
+              title="关闭"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-close"></use>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="dialog__body">
+          <div
+            class="discovery-options-grid"
+            id="filters-options-grid"
+            role="group"
+          ></div>
+        </div>
+      </div>
+    </dialog>
+
+    <div
+      class="toast rankings-toast"
+      id="filters-toast"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="icon-play-list" viewBox="0 0 24 24">
+        <path d="M4 6h9M4 12h7M4 18h5"></path>
+        <path d="m15 8 6 4-6 4Z"></path>
+      </symbol>
+      <symbol id="icon-trophy" viewBox="0 0 24 24">
+        <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0Z"></path>
+        <path d="M7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"></path>
+      </symbol>
+      <symbol id="icon-filter" viewBox="0 0 24 24">
+        <path d="M4 5h16l-6 7v6l-4-2v-4L4 5Z"></path>
+      </symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24">
+        <path d="M12 3v12"></path>
+        <path d="m7 10 5 5 5-5"></path>
+        <path d="M5 21h14"></path>
+      </symbol>
+      <symbol id="icon-auto" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 3a9 9 0 0 1 0 18Z"></path>
+      </symbol>
+      <symbol id="icon-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path>
+      </symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24">
+        <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z"></path>
+      </symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24">
+        <path d="M20 11a8 8 0 1 0-2.34 5.66"></path>
+        <path d="M20 4v7h-7"></path>
+      </symbol>
+      <symbol id="icon-rotate-ccw" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
+        <path d="M3 3v5h5"></path>
+      </symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24">
+        <path d="m18 6-12 12M6 6l12 12"></path>
+      </symbol>
+      <symbol id="icon-chevron-down" viewBox="0 0 24 24">
+        <path d="m6 9 6 6 6-6"></path>
+      </symbol>
+      <symbol id="icon-chevron-up" viewBox="0 0 24 24">
+        <path d="m18 15-6-6-6 6"></path>
+      </symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14"></path>
+      </symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24">
+        <path d="m20 6-11 11-5-5"></path>
+      </symbol>
+      <symbol id="icon-external" viewBox="0 0 24 24">
+        <path d="M15 3h6v6M10 14 21 3"></path>
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+      </symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 7v5l3 2"></path>
+      </symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v5M12 16h.01"></path>
+      </symbol>
+      <symbol id="icon-inbox" viewBox="0 0 24 24">
+        <path d="M4 4h16v16H4z"></path>
+        <path d="M4 13h4l2 3h4l2-3h4"></path>
+      </symbol>
+      <symbol id="icon-tv" viewBox="0 0 24 24">
+        <rect x="3" y="7" width="18" height="13" rx="2"></rect>
+        <path d="m8 2 4 5 4-5"></path>
+      </symbol>
+    </svg>
+
+    <noscript>
+      <p class="rankings-noscript">需要启用 JavaScript 才能筛选红果短剧。</p>
+    </noscript>
+    <script src="/filters.js" defer></script>
+  </body>
+</html>

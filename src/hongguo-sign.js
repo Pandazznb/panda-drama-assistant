@@ -49,6 +49,19 @@ const ACCOUNT_DEVICE = Object.freeze({
   dpi: "520",
 });
 
+const DISCOVERY_IID = "1905892595382586";
+const DISCOVERY_DEVICE_ID = "1905892595378490";
+const DISCOVERY_VERSION_NAME = "7.3.5.32";
+const DISCOVERY_VERSION_CODE = "73532";
+const DISCOVERY_DEVICE = Object.freeze({
+  ...ACCOUNT_DEVICE,
+  version_code: DISCOVERY_VERSION_CODE,
+  version_name: DISCOVERY_VERSION_NAME,
+  manifest_version_code: DISCOVERY_VERSION_CODE,
+  update_version_code: DISCOVERY_VERSION_CODE,
+  pv_player: DISCOVERY_VERSION_CODE,
+});
+
 const BRANCH2_SV = [
   0xa7aefe20, 0x7149f1d6, 0x47e4ca07, 0xe9b58f67,
   0x93b924de, 0xc614d0f5, 0x38afe0ef, 0xb2bbad73,
@@ -1237,6 +1250,21 @@ export function accountDevicePairs(deviceId, installId, cdid) {
     ["device_id", String(deviceId)],
     ["cdid", String(cdid)],
   ];
+}
+
+export function discoveryDevicePairs() {
+  return [
+    ["iid", DISCOVERY_IID],
+    ["device_id", DISCOVERY_DEVICE_ID],
+    ...Object.entries(DISCOVERY_DEVICE),
+  ];
+}
+
+export function discoveryDeviceIdentity() {
+  return {
+    deviceId: DISCOVERY_DEVICE_ID,
+    versionName: DISCOVERY_VERSION_NAME,
+  };
 }
 
 export function appRequestUrl(path, query) {

@@ -22,6 +22,86 @@ const REQUEST_TIMEOUT_MS = 18_000;
 const ALBUM_REQUEST_TIMEOUT_MS = 12_000;
 const SEARCH_REQUEST_TIMEOUT_MS = 12_000;
 const MAX_SEARCH_QUERY_LENGTH = 30;
+const RANKING_GROUP_TYPES = ["human", "comic", "ai"];
+export const RANKING_CATEGORY_TYPES = Object.freeze([
+  "all",
+  "comic",
+  "human",
+  "ai",
+]);
+export const RANKING_KIND_TYPES = Object.freeze([
+  "hot",
+  "prestige",
+  "subscribe",
+  "new",
+  "hot-search",
+  "must-watch",
+  "followed",
+]);
+export const RANKING_AVAILABILITY = Object.freeze({
+  hot: Object.freeze(["all", "comic", "human", "ai"]),
+  prestige: Object.freeze(["all"]),
+  subscribe: Object.freeze(["all"]),
+  new: Object.freeze(["all", "comic", "human", "ai"]),
+  "hot-search": Object.freeze(["all", "comic", "human", "ai"]),
+  "must-watch": Object.freeze(["all", "human", "ai"]),
+  followed: Object.freeze(["all", "human", "ai"]),
+});
+export const RANKING_ITEM_LIMIT = 50;
+export const CATALOG_CONTENT_TYPES = Object.freeze(["human", "comic", "ai"]);
+export const CATALOG_TOPICS = Object.freeze({
+  human: Object.freeze([
+    { id: "romance", name: "爱情" },
+    { id: "period", name: "年代" },
+    { id: "comeback", name: "逆袭" },
+    { id: "legend", name: "传奇" },
+    { id: "growth", name: "成长" },
+    { id: "family", name: "家庭" },
+    { id: "clan", name: "家族" },
+    { id: "cute-kids", name: "萌宝" },
+    { id: "suspense", name: "悬疑" },
+    { id: "thriller", name: "惊悚" },
+    { id: "horror", name: "恐怖" },
+    { id: "supernatural", name: "志怪" },
+    { id: "costume", name: "古装" },
+    { id: "fantasy", name: "玄幻" },
+    { id: "wonder", name: "奇幻" },
+    { id: "urban", name: "都市" },
+    { id: "youth", name: "青春" },
+    { id: "comedy", name: "喜剧" },
+    { id: "sci-fi", name: "科幻" },
+    { id: "disaster", name: "灾难" },
+    { id: "action-adventure", name: "动作冒险" },
+    { id: "war", name: "战争" },
+    { id: "variety", name: "综艺" },
+    { id: "drama", name: "剧情" },
+  ]),
+  comic: Object.freeze([
+    { id: "creative", name: "脑洞" },
+    { id: "fantasy", name: "玄幻" },
+    { id: "drama", name: "剧情" },
+    { id: "apocalypse", name: "末世" },
+    { id: "wealthy-family", name: "豪门" },
+    { id: "wonder", name: "奇幻" },
+    { id: "sci-fi", name: "科幻" },
+    { id: "adventure", name: "冒险" },
+  ]),
+  ai: Object.freeze([
+    { id: "creative", name: "脑洞" },
+    { id: "fantasy", name: "玄幻" },
+    { id: "drama", name: "剧情" },
+    { id: "apocalypse", name: "末世" },
+    { id: "wealthy-family", name: "豪门" },
+    { id: "wonder", name: "奇幻" },
+    { id: "sci-fi", name: "科幻" },
+    { id: "adventure", name: "冒险" },
+  ]),
+});
+const CATALOG_CONTENT_ROUTES = Object.freeze({
+  human: { route: "real-drama", label: "真人剧" },
+  comic: { route: "comic-drama", label: "漫剧" },
+  ai: { route: "ai-drama", label: "AI剧" },
+});
 const OFFICIAL_SEARCH_URL = `${OFFICIAL_WEB_URL}/api/search/result/`;
 const OFFICIAL_PACK_FIELDS_URL =
   "https://api5-normal-sinfonlineb.fqnovel.com/reading/distribution/book_pack_fields/inner_feed_detail/v1/";
@@ -499,6 +579,535 @@ function normalizeSeriesStatus(value) {
   return SERIES_STATUS.UNKNOWN;
 }
 
+function normalizeRankingCoverUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+export function parseOfficialRankings(routerData) {
+  let data = routerData;
+  if (typeof data === "string") {
+    try {
+      data = JSON.parse(data);
+    } catch {
+      data = null;
+    }
+  }
+
+  const sections = data?.loaderData?.page?.homeSections;
+  if (!Array.isArray(sections)) {
+    throw dataError(
+      "官网榜单数据暂时无法解析，请稍后重试。",
+      "RANKINGS_DATA_INVALID",
+    );
+  }
+
+  const groups = Object.fromEntries(
+    RANKING_GROUP_TYPES.map((type) => [type, []]),
+  );
+  for (const section of sections) {
+    const type = normalizeWhitespace(section?.tab_type).toLowerCase();
+    if (!RANKING_GROUP_TYPES.includes(type)) {
+      continue;
+    }
+
+    const seenSeriesIds = new Set();
+    const items = Array.isArray(section?.video_list)
+      ? section.video_list
+      : [];
+    for (const [index, item] of items.entries()) {
+      const seriesId = String(item?.series_id || "");
+      if (
+        !/^\d{8,25}$/.test(seriesId) ||
+        seenSeriesIds.has(seriesId)
+      ) {
+        continue;
+      }
+      seenSeriesIds.add(seriesId);
+
+      const rank = toSafeInteger(item.rank, index + 1);
+      groups[type].push({
+        seriesId,
+        title: normalizeWhitespace(item.series_title || "未命名短剧"),
+        coverUrl: normalizeRankingCoverUrl(item.series_cover),
+        episodeCount: toSafeInteger(item.episode_cnt, 0),
+        rightText: normalizeWhitespace(item.episode_right_text || ""),
+        status: normalizeSeriesStatus(item.series_status),
+        categories: (Array.isArray(item.category_list)
+          ? item.category_list
+          : []
+        )
+          .map((category) => normalizeWhitespace(category?.name || ""))
+          .filter(Boolean)
+          .slice(0, 3),
+        rank: rank > 0 ? rank : index + 1,
+        detailUrl: `${OFFICIAL_DETAIL_URL}${encodeURIComponent(seriesId)}`,
+      });
+    }
+  }
+
+  if (!RANKING_GROUP_TYPES.some((type) => groups[type].length)) {
+    throw dataError(
+      "官网暂未返回可展示的榜单内容。",
+      "RANKINGS_EMPTY",
+    );
+  }
+  return groups;
+}
+
+export function resolveOfficialRankingPath(category = "all", type = "hot") {
+  const normalizedCategory = String(category || "").trim().toLowerCase();
+  const normalizedType = String(type || "").trim().toLowerCase();
+  if (!RANKING_CATEGORY_TYPES.includes(normalizedCategory)) {
+    throw new HongguoError(
+      "红果榜单分类不正确。",
+      "INVALID_RANKING_CATEGORY",
+      400,
+    );
+  }
+  if (!RANKING_KIND_TYPES.includes(normalizedType)) {
+    throw new HongguoError(
+      "红果榜单类型不正确。",
+      "INVALID_RANKING_TYPE",
+      400,
+    );
+  }
+  if (!RANKING_AVAILABILITY[normalizedType].includes(normalizedCategory)) {
+    throw new HongguoError(
+      "红果官方暂未提供这个榜单分类。",
+      "RANKING_COMBINATION_UNAVAILABLE",
+      404,
+    );
+  }
+
+  const categorySegment =
+    normalizedCategory === "all"
+      ? ""
+      : normalizedCategory === "human"
+        ? "real-"
+        : `${normalizedCategory}-`;
+  return `/rank/${normalizedType}-${categorySegment}drama`;
+}
+
+function normalizeRankingDetailUrl(value, seriesId) {
+  try {
+    const url = new URL(String(value || ""), OFFICIAL_WEB_URL);
+    if (url.origin === new URL(OFFICIAL_WEB_URL).origin) {
+      return url.href;
+    }
+  } catch {
+    // Fall back to the canonical detail URL below.
+  }
+  return `${OFFICIAL_DETAIL_URL}${encodeURIComponent(seriesId)}`;
+}
+
+function normalizeCatalogTopics(selectorList) {
+  if (!Array.isArray(selectorList)) {
+    return [];
+  }
+
+  const topics = new Map();
+  for (const selector of selectorList) {
+    const items = Array.isArray(selector?.items) ? selector.items : [];
+    for (const item of items) {
+      const id = normalizeWhitespace(item?.selector_item_id || "");
+      const name = normalizeWhitespace(item?.show_name || "");
+      if (!id || !name) {
+        continue;
+      }
+      topics.set(id, {
+        id,
+        name,
+        categoryIds: (Array.isArray(item?.category_json_ids)
+          ? item.category_json_ids
+          : []
+        )
+          .map((categoryId) => String(categoryId || "").trim())
+          .filter(Boolean),
+      });
+    }
+  }
+  return [...topics.values()];
+}
+
+function findCatalogPageData(routerData) {
+  const loaderData = routerData?.loaderData;
+  if (!loaderData || typeof loaderData !== "object") {
+    return null;
+  }
+
+  if (loaderData["category_$"]) {
+    return loaderData["category_$"];
+  }
+  for (const [key, value] of Object.entries(loaderData)) {
+    if (
+      key.startsWith("category") &&
+      value &&
+      typeof value === "object" &&
+      Array.isArray(value.recommendList)
+    ) {
+      return value;
+    }
+  }
+  return null;
+}
+
+export function parseOfficialCatalogPage(routerData) {
+  let data = routerData;
+  if (typeof data === "string") {
+    try {
+      data = JSON.parse(data);
+    } catch {
+      data = null;
+    }
+  }
+
+  const page = findCatalogPageData(data);
+  if (!page || page.isSuccess === false || !Array.isArray(page.recommendList)) {
+    throw dataError(
+      "官网分类数据暂时无法解析，请稍后重试。",
+      "CATALOG_DATA_INVALID",
+    );
+  }
+
+  const pageSize = Math.max(
+    1,
+    toSafeInteger(page.pagination?.pageSize, 24),
+  );
+  const pageNum = Math.max(1, toSafeInteger(page.pagination?.pageNum, 1));
+  const seenSeriesIds = new Set();
+  const items = [];
+  for (const [index, series] of page.recommendList.entries()) {
+    const seriesId = String(series?.series_id || "");
+    if (!/^\d{8,25}$/.test(seriesId) || seenSeriesIds.has(seriesId)) {
+      continue;
+    }
+    seenSeriesIds.add(seriesId);
+
+    const episodeInfo = series?.series_episode_info || {};
+    const episodeCount = toSafeInteger(
+      series?.episode_cnt ?? episodeInfo.episode_cnt,
+      0,
+    );
+    const totalEpisodeCount = Math.max(
+      episodeCount,
+      toSafeInteger(episodeInfo.episode_total_cnt, episodeCount),
+    );
+    items.push({
+      seriesId,
+      title: normalizeWhitespace(series?.series_name || "未命名短剧"),
+      coverUrl: normalizeRankingCoverUrl(series?.series_cover),
+      intro: normalizeWhitespace(series?.series_intro || ""),
+      tags: [
+        ...new Set(
+          (Array.isArray(series?.tags) ? series.tags : [])
+            .map((tag) => normalizeWhitespace(tag))
+            .filter(Boolean),
+        ),
+      ].slice(0, 12),
+      episodeCount,
+      totalEpisodeCount,
+      accessibleEpisodeCount: toSafeInteger(
+        series?.accessible_episode_cnt,
+        0,
+      ),
+      status: normalizeSeriesStatus(
+        episodeInfo.series_status ?? series?.series_status,
+      ),
+      rightText: normalizeWhitespace(series?.episode_right_text || ""),
+      officialRank: (pageNum - 1) * pageSize + index + 1,
+      detailUrl: `${OFFICIAL_DETAIL_URL}${encodeURIComponent(seriesId)}`,
+    });
+  }
+
+  if (!items.length) {
+    throw dataError(
+      "官网暂未返回这个分类下可展示的短剧。",
+      "CATALOG_EMPTY",
+    );
+  }
+
+  const total = Math.max(
+    items.length,
+    toSafeInteger(page.pagination?.total, items.length),
+  );
+  return {
+    contentType: normalizeWhitespace(page.categoryRoute?.displayName || ""),
+    contentTypeKey: normalizeWhitespace(
+      page.categoryRoute?.contentType || "",
+    ),
+    canonicalUrl: normalizeRankingDetailUrl(
+      page.canonicalUrl,
+      items[0].seriesId,
+    ),
+    topics: normalizeCatalogTopics(page.selectorList),
+    items,
+    pageNum,
+    pageSize,
+    total,
+    totalPages: Math.max(
+      pageNum,
+      toSafeInteger(page.pagination?.totalPages, pageNum),
+    ),
+  };
+}
+
+export function resolveOfficialCatalogPath(contentType = "human") {
+  const normalizedContentType = String(contentType || "")
+    .trim()
+    .toLowerCase();
+  if (!CATALOG_CONTENT_TYPES.includes(normalizedContentType)) {
+    throw new HongguoError(
+      "红果内容类型不正确。",
+      "INVALID_CATALOG_CONTENT_TYPE",
+      400,
+    );
+  }
+  return `/category/${CATALOG_CONTENT_ROUTES[normalizedContentType].route}`;
+}
+
+export function parseOfficialRankingPage(routerData) {
+  let data = routerData;
+  if (typeof data === "string") {
+    try {
+      data = JSON.parse(data);
+    } catch {
+      data = null;
+    }
+  }
+
+  const loaderData = data?.loaderData;
+  if (!loaderData || typeof loaderData !== "object") {
+    throw dataError(
+      "官网榜单数据暂时无法解析，请稍后重试。",
+      "RANKINGS_DATA_INVALID",
+    );
+  }
+
+  let page = null;
+  for (const [key, value] of Object.entries(loaderData)) {
+    if (key === "rank_layout" || !value || typeof value !== "object") {
+      continue;
+    }
+    const candidate =
+      value.page && typeof value.page === "object" ? value.page : value;
+    if (Array.isArray(candidate?.content?.rankList)) {
+      page = candidate;
+      break;
+    }
+  }
+  if (!page) {
+    throw dataError(
+      "官网榜单数据暂时无法解析，请稍后重试。",
+      "RANKINGS_DATA_INVALID",
+    );
+  }
+
+  const rankList = page.content.rankList;
+  const seenSeriesIds = new Set();
+  const items = [];
+  for (const [index, item] of rankList.entries()) {
+    const seriesId = String(item?.seriesId || item?.id || "");
+    if (!/^\d{8,25}$/.test(seriesId) || seenSeriesIds.has(seriesId)) {
+      continue;
+    }
+    seenSeriesIds.add(seriesId);
+
+    const episodeCount = toSafeInteger(item?.episodeCount, 0);
+    const openEpisodeCount = toSafeInteger(item?.openEpisodeCount, 0);
+    const reservationOnly = item?.reservationOnly === true;
+    const tags = [
+      ...(Array.isArray(item?.tags) ? item.tags : []),
+      ...(Array.isArray(item?.statusTags) ? item.statusTags : []),
+    ]
+      .map((tag) => normalizeWhitespace(tag))
+      .filter(Boolean);
+    const categories = tags.filter(
+      (tag) => !["真人剧", "漫剧", "AI剧"].includes(tag),
+    );
+    const rank = toSafeInteger(item?.rank, index + 1);
+
+    items.push({
+      seriesId,
+      title: normalizeWhitespace(item?.title || "未命名短剧"),
+      coverUrl: normalizeRankingCoverUrl(item?.cover),
+      episodeCount,
+      openEpisodeCount,
+      rightText:
+        episodeCount > 0
+          ? `共 ${episodeCount} 集`
+          : reservationOnly
+            ? "待上线"
+            : "",
+      metricText: normalizeWhitespace(item?.primaryMetricText || ""),
+      categories: [...new Set(categories)].slice(0, 3),
+      statusTags: [
+        ...new Set(
+          (Array.isArray(item?.statusTags) ? item.statusTags : [])
+            .map((tag) => normalizeWhitespace(tag))
+            .filter(Boolean),
+        ),
+      ].slice(0, 3),
+      reservationOnly,
+      rank: rank > 0 ? rank : index + 1,
+      detailUrl: normalizeRankingDetailUrl(item?.href, seriesId),
+    });
+  }
+
+  if (!items.length) {
+    throw dataError(
+      "官网暂未返回可展示的榜单内容。",
+      "RANKINGS_EMPTY",
+    );
+  }
+
+  return {
+    items,
+    updatedText: normalizeWhitespace(page.updatedText || ""),
+    pageNum: toSafeInteger(page.pageNum, 1),
+    totalPages: toSafeInteger(page.content?.pagination?.totalPages, 1),
+    canonicalUrl: normalizeRankingDetailUrl(
+      page.canonicalUrl,
+      items[0].seriesId,
+    ),
+  };
+}
+
+export async function fetchOfficialRanking(
+  {
+    category = "all",
+    type = "hot",
+    limit = RANKING_ITEM_LIMIT,
+    fetchImpl = globalThis.fetch,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    requestScheduler = null,
+  } = {},
+) {
+  const path = resolveOfficialRankingPath(category, type);
+  const itemLimit = Math.max(
+    1,
+    Math.min(RANKING_ITEM_LIMIT, toSafeInteger(limit, RANKING_ITEM_LIMIT)),
+  );
+  const items = [];
+  const seenSeriesIds = new Set();
+  let updatedText = "";
+  let totalPages = 1;
+  let maxPages = 1;
+
+  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    const pageUrl =
+      pageNumber === 1
+        ? `${OFFICIAL_WEB_URL}${path}`
+        : `${OFFICIAL_WEB_URL}${path}?page=${pageNumber}`;
+    const { html } = await fetchWithSafeRedirects(pageUrl, {
+      fetchImpl,
+      timeoutMs,
+      requestScheduler,
+    });
+
+    let routerData;
+    try {
+      routerData = extractBalancedJson(html, "_ROUTER_DATA");
+    } catch (error) {
+      throw dataError(
+        `官网榜单数据无法解析：${error.message}`,
+        "RANKINGS_DATA_INVALID",
+      );
+    }
+    if (!routerData) {
+      throw dataError(
+        "官网榜单数据暂时无法解析，请稍后重试。",
+        "RANKINGS_DATA_INVALID",
+      );
+    }
+
+    const page = parseOfficialRankingPage(routerData);
+    if (pageNumber === 1) {
+      totalPages = Math.max(1, page.totalPages);
+      maxPages = Math.max(
+        1,
+        Math.min(totalPages, Math.ceil(itemLimit / page.items.length)),
+      );
+      updatedText = page.updatedText;
+    }
+
+    for (const item of page.items) {
+      if (seenSeriesIds.has(item.seriesId)) {
+        continue;
+      }
+      seenSeriesIds.add(item.seriesId);
+      items.push(item);
+      if (items.length >= itemLimit) {
+        break;
+      }
+    }
+    if (items.length >= itemLimit) {
+      break;
+    }
+  }
+
+  return {
+    category: String(category),
+    type: String(type),
+    updatedText,
+    items: items.slice(0, itemLimit),
+  };
+}
+
+export async function fetchOfficialCatalogPage(
+  {
+    contentType = "human",
+    page = 1,
+    fetchImpl = globalThis.fetch,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    requestScheduler = null,
+  } = {},
+) {
+  const path = resolveOfficialCatalogPath(contentType);
+  const pageNumber = Math.max(1, toSafeInteger(page, 1));
+  const pageUrl =
+    pageNumber === 1
+      ? `${OFFICIAL_WEB_URL}${path}`
+      : `${OFFICIAL_WEB_URL}${path}?page=${pageNumber}`;
+  const { html } = await fetchWithSafeRedirects(pageUrl, {
+    fetchImpl,
+    timeoutMs,
+    requestScheduler,
+  });
+
+  let routerData;
+  try {
+    routerData = extractBalancedJson(html, "_ROUTER_DATA");
+  } catch (error) {
+    throw dataError(
+      `官网分类数据无法解析：${error.message}`,
+      "CATALOG_DATA_INVALID",
+    );
+  }
+  if (!routerData) {
+    throw dataError(
+      "官网分类数据暂时无法解析，请稍后重试。",
+      "CATALOG_DATA_INVALID",
+    );
+  }
+
+  const parsed = parseOfficialCatalogPage(routerData);
+  if (parsed.pageNum !== pageNumber) {
+    throw dataError(
+      "红果返回了其他分页的分类数据。",
+      "CATALOG_PAGE_MISMATCH",
+    );
+  }
+  return {
+    ...parsed,
+    contentType: String(contentType),
+  };
+}
+
 export async function fetchSeriesDetail(
   seriesId,
   {
@@ -527,6 +1136,37 @@ export async function fetchSeriesDetail(
     detail,
     recommendations: extractRecommendations(html),
   };
+}
+
+export async function fetchOfficialRankings(
+  {
+    fetchImpl = globalThis.fetch,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    requestScheduler = null,
+  } = {},
+) {
+  const { html } = await fetchWithSafeRedirects(OFFICIAL_WEB_URL, {
+    fetchImpl,
+    timeoutMs,
+    requestScheduler,
+  });
+
+  let routerData;
+  try {
+    routerData = extractBalancedJson(html, "_ROUTER_DATA");
+  } catch (error) {
+    throw dataError(
+      `官网榜单数据无法解析：${error.message}`,
+      "RANKINGS_DATA_INVALID",
+    );
+  }
+  if (!routerData) {
+    throw dataError(
+      "官网榜单数据暂时无法解析，请稍后重试。",
+      "RANKINGS_DATA_INVALID",
+    );
+  }
+  return parseOfficialRankings(routerData);
 }
 
 function normalizeAlbumSeriesInfo(albumInfo) {

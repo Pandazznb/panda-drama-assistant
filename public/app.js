@@ -284,9 +284,6 @@ const elements = {
   deleteContext: document.querySelector("#delete-context"),
   deleteFeedback: document.querySelector("#delete-feedback"),
   deleteSubmit: document.querySelector("#delete-submit"),
-  scrollControls: document.querySelector("#scroll-controls"),
-  scrollToTop: document.querySelector("#scroll-to-top"),
-  scrollToBottom: document.querySelector("#scroll-to-bottom"),
   toast: document.querySelector("#toast"),
   pageProgress: document.querySelector("#page-progress"),
 };
@@ -300,8 +297,6 @@ const appState = {
   subscriptionRenderLimit: 20,
   subscriptionRenderContext: "",
   subscriptionVisibleCount: 0,
-  scrollControlsFrame: null,
-  scrollControlsResizeObserver: null,
   loading: false,
   toastTimer: null,
   toastHideTimer: null,
@@ -1184,44 +1179,6 @@ function showToast(message, type = "success") {
       elements.toast.classList.remove("is-hiding", "is-refreshing");
     }, 160);
   }, 4200);
-}
-
-function updateScrollControls() {
-  appState.scrollControlsFrame = null;
-  const scroller = document.scrollingElement || document.documentElement;
-  const maxScrollTop = Math.max(
-    0,
-    scroller.scrollHeight - window.innerHeight,
-  );
-  const scrollTop = Math.max(0, scroller.scrollTop);
-  const isScrollable = maxScrollTop > 8;
-
-  elements.scrollControls.hidden = !isScrollable;
-  if (!isScrollable) {
-    return;
-  }
-
-  elements.scrollToTop.disabled = scrollTop <= 2;
-  elements.scrollToBottom.disabled = scrollTop >= maxScrollTop - 2;
-}
-
-function scheduleScrollControlsUpdate() {
-  if (appState.scrollControlsFrame !== null) {
-    return;
-  }
-  appState.scrollControlsFrame = window.requestAnimationFrame(
-    updateScrollControls,
-  );
-}
-
-function scrollPageTo(position) {
-  const reduceMotion = window.matchMedia(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
-  window.scrollTo({
-    top: position,
-    behavior: reduceMotion ? "auto" : "smooth",
-  });
 }
 
 function setButtonBusy(button, busy, busyLabel = "处理中…") {
@@ -2427,7 +2384,7 @@ function renderDashboard({ listMotion = "" } = {}) {
   observeStatusGlowButtons();
   observeSubscriptionLoadMore();
   renderEvents(dashboard.events || []);
-  scheduleScrollControlsUpdate();
+  document.dispatchEvent(new Event("scroll-controls:update"));
 }
 
 async function loadDashboard({ silent = false } = {}) {
@@ -7688,28 +7645,6 @@ elements.deleteForm.addEventListener("submit", async (event) => {
   }
 });
 
-elements.scrollToTop.addEventListener("click", () => {
-  scrollPageTo(0);
-});
-
-elements.scrollToBottom.addEventListener("click", () => {
-  const scroller = document.scrollingElement || document.documentElement;
-  scrollPageTo(scroller.scrollHeight);
-});
-
-window.addEventListener("scroll", scheduleScrollControlsUpdate, {
-  passive: true,
-});
-window.addEventListener("resize", scheduleScrollControlsUpdate);
-
-if (typeof ResizeObserver === "function") {
-  appState.scrollControlsResizeObserver = new ResizeObserver(
-    scheduleScrollControlsUpdate,
-  );
-  appState.scrollControlsResizeObserver.observe(document.body);
-  appState.scrollControlsResizeObserver.observe(elements.mainContent);
-}
-
 document.addEventListener("click", (event) => {
   const closeButton = event.target.closest("[data-close-dialog]");
   if (closeButton) {
@@ -7733,7 +7668,12 @@ for (const input of elements.settingsForm.querySelectorAll(
 }
 
 resetSeriesSearch();
-scheduleScrollControlsUpdate();
 void loadDashboard().then(() => {
   watchBatchCheck();
+  const pageUrl = new URL(window.location.href);
+  if (pageUrl.searchParams.get("settings") === "1") {
+    elements.openSettings.click();
+    pageUrl.searchParams.delete("settings");
+    history.replaceState(null, "", `${pageUrl.pathname}${pageUrl.search}${pageUrl.hash}`);
+  }
 });

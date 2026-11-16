@@ -9,7 +9,10 @@ import {
 } from "./src/constants.js";
 import { AccountService } from "./src/account.js";
 import { AccountSyncService } from "./src/account-sync.js";
+import { AppDiscoveryService } from "./src/app-discovery.js";
+import { CatalogService } from "./src/catalog.js";
 import { ReminderService } from "./src/monitor.js";
+import { RankingsService } from "./src/rankings.js";
 import { UpstreamRequestScheduler } from "./src/request-scheduler.js";
 import { ScreenshotImportService } from "./src/screenshot-import.js";
 import { SystemLogStore } from "./src/system-log.js";
@@ -28,6 +31,16 @@ const STATIC_FILES = new Map([
   ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/logs", { file: "logs.html", type: "text/html; charset=utf-8" }],
   ["/logs.html", { file: "logs.html", type: "text/html; charset=utf-8" }],
+  ["/rankings", { file: "rankings.html", type: "text/html; charset=utf-8" }],
+  [
+    "/rankings.html",
+    { file: "rankings.html", type: "text/html; charset=utf-8" },
+  ],
+  ["/filters", { file: "filters.html", type: "text/html; charset=utf-8" }],
+  [
+    "/filters.html",
+    { file: "filters.html", type: "text/html; charset=utf-8" },
+  ],
   ["/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
   [
     "/theme.js",
@@ -40,6 +53,18 @@ const STATIC_FILES = new Map([
   [
     "/logs.js",
     { file: "logs.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/rankings.js",
+    { file: "rankings.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/filters.js",
+    { file: "filters.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/scroll-controls.js",
+    { file: "scroll-controls.js", type: "text/javascript; charset=utf-8" },
   ],
   [
     "/pwa.js",
@@ -495,6 +520,17 @@ function loggedSettingsFields(body) {
     .filter(Boolean);
 }
 
+function trackedSeriesIdsFromDashboard(dashboard) {
+  return new Set(
+    (Array.isArray(dashboard?.subscriptions) ? dashboard.subscriptions : [])
+      .flatMap((subscription) =>
+        (Array.isArray(subscription?.seasons) ? subscription.seasons : [])
+          .map((season) => String(season?.seriesId || ""))
+          .filter(Boolean),
+      ),
+  );
+}
+
 export function createRequestHandler(
   service,
   screenshotImport,
@@ -502,6 +538,9 @@ export function createRequestHandler(
   systemLog,
   accountService,
   accountSyncService,
+  rankingService,
+  catalogService,
+  appDiscoveryService,
 ) {
   let batchCheckJob = null;
   let batchCheckSequence = 0;
@@ -705,6 +744,72 @@ export function createRequestHandler(
 
       if (request.method === "GET" && pathname === "/api/state") {
         sendJson(response, 200, await service.getDashboard());
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/catalog") {
+        const dashboard = await service.getDashboard();
+        const catalog = await catalogService.getCatalog({
+          contentType: url.searchParams.get("contentType") || "human",
+          cursor: url.searchParams.get("cursor"),
+          scanPages: url.searchParams.get("scanPages"),
+          query: url.searchParams.get("q") || "",
+          topic: url.searchParams.get("topic") || "",
+          status: url.searchParams.get("status") || "all",
+          tracked: url.searchParams.get("tracked") || "all",
+          episodes: url.searchParams.get("episodes") || "all",
+          tags: url.searchParams.get("tags") || "",
+          sort: url.searchParams.get("sort") || "official",
+          force: url.searchParams.get("refresh") === "1",
+          trackedSeriesIds: trackedSeriesIdsFromDashboard(dashboard),
+        });
+        sendJson(response, 200, catalog);
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        pathname === "/api/catalog/discovery"
+      ) {
+        const body = (await readJsonBody(request)) || {};
+        const [dashboard, discovery] = await Promise.all([
+          service.getDashboard(),
+          appDiscoveryService.getDiscovery({
+            selection: body.selection || {},
+            cursor: body.cursor ?? null,
+          }),
+        ]);
+        const trackedSeriesIds = trackedSeriesIdsFromDashboard(dashboard);
+        sendJson(response, 200, {
+          ...discovery,
+          items: (Array.isArray(discovery.items) ? discovery.items : []).map(
+            (item) => ({
+              ...item,
+              tracked: trackedSeriesIds.has(String(item.seriesId || "")),
+            }),
+          ),
+        });
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/rankings") {
+        const rankings = await rankingService.getRankings({
+          category: url.searchParams.get("category") || "all",
+          type: url.searchParams.get("type") || "hot",
+          force: url.searchParams.get("refresh") === "1",
+        });
+        const dashboard = await service.getDashboard();
+        const trackedSeriesIds = trackedSeriesIdsFromDashboard(dashboard);
+        const items = (Array.isArray(rankings.items) ? rankings.items : []).map(
+          (item) => ({
+            ...item,
+            tracked: trackedSeriesIds.has(String(item.seriesId || "")),
+          }),
+        );
+        sendJson(response, 200, {
+          ...rankings,
+          items,
+        });
         return;
       }
 
@@ -1502,6 +1607,9 @@ export async function createApplication({
   accountService = null,
   accountSyncService = null,
   requestScheduler = null,
+  rankingService = null,
+  catalogService = null,
+  appDiscoveryService = null,
 } = {}) {
   const legacyStateFile = path.resolve(
     stateFile ||
@@ -1550,6 +1658,21 @@ export async function createApplication({
     systemLog,
     requestScheduler: resolvedRequestScheduler,
   });
+  const resolvedRankingService =
+    rankingService ||
+    new RankingsService({
+      requestScheduler: resolvedRequestScheduler,
+    });
+  const resolvedCatalogService =
+    catalogService ||
+    new CatalogService({
+      requestScheduler: resolvedRequestScheduler,
+    });
+  const resolvedAppDiscoveryService =
+    appDiscoveryService ||
+    new AppDiscoveryService({
+      requestScheduler: resolvedRequestScheduler,
+    });
   const resolvedAccountSyncService =
     accountSyncService ||
     new AccountSyncService({
@@ -1567,6 +1690,9 @@ export async function createApplication({
       systemLog,
       resolvedAccountService,
       resolvedAccountSyncService,
+      resolvedRankingService,
+      resolvedCatalogService,
+      resolvedAppDiscoveryService,
     ),
   );
   return {
@@ -1575,6 +1701,9 @@ export async function createApplication({
     screenshotImport: resolvedScreenshotImport,
     accountService: resolvedAccountService,
     accountSyncService: resolvedAccountSyncService,
+    rankingService: resolvedRankingService,
+    catalogService: resolvedCatalogService,
+    appDiscoveryService: resolvedAppDiscoveryService,
     eventLog: store.eventLog,
     systemLog,
     requestScheduler: resolvedRequestScheduler,

@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="查看红果官方热播、臻果、预约、新剧、热搜、必看和收藏榜单，并将短剧直接加入追更。"
+    >
+    <meta name="theme-color" content="#f3f5f7">
+    <meta name="application-name" content="短剧助手">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="短剧助手">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <title>红果榜单 · 短剧助手</title>
+    <script src="/theme.js"></script>
+    <script src="/pwa.js" defer></script>
+    <script src="/scroll-controls.js" defer></script>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <link
+      rel="icon"
+      href="/assets/panda-drama-assistant-icon.svg"
+      type="image/svg+xml"
+    >
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="rankings-page">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="app-header">
+      <div class="app-header__inner">
+        <a class="brand" href="/" aria-label="返回短剧助手首页">
+          <span class="brand__mark" aria-hidden="true">
+            <img
+              class="brand__logo"
+              src="/assets/panda-drama-assistant-icon.svg"
+              alt=""
+              width="38"
+              height="38"
+            >
+          </span>
+          <span class="brand__text">短剧助手</span>
+        </a>
+        <nav class="app-nav" aria-label="主导航">
+          <a class="app-nav__link" href="/">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-play-list"></use>
+            </svg>
+            <span>我的追更</span>
+          </a>
+          <a
+            class="app-nav__link is-active"
+            href="/rankings"
+            aria-current="page"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-trophy"></use>
+            </svg>
+            <span>榜单</span>
+          </a>
+          <a class="app-nav__link" href="/filters">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-filter"></use>
+            </svg>
+            <span>筛选</span>
+          </a>
+        </nav>
+        <div class="app-header__actions">
+          <button
+            class="button button--quiet pwa-install-button"
+            type="button"
+            data-pwa-install
+            aria-label="安装短剧助手应用"
+            title="安装应用"
+            hidden
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-download"></use>
+            </svg>
+            <span class="header-action__label">安装应用</span>
+          </button>
+          <button
+            class="theme-switcher"
+            type="button"
+            data-theme-toggle
+            data-theme-preference="auto"
+            aria-label="当前主题：自动，跟随系统。点击切换为白天主题"
+            title="当前：自动（跟随系统），点击切换为白天"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use data-theme-icon href="#icon-auto"></use>
+            </svg>
+            <span class="theme-switcher__label" data-theme-label aria-live="polite">
+              自动
+            </span>
+          </button>
+          <a
+            class="button button--quiet header-settings-button"
+            href="/?settings=1"
+            aria-label="打开设置"
+            title="设置"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-settings"></use>
+            </svg>
+            <span class="header-action__label">设置</span>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main-content" class="page rankings-page__main">
+      <section
+        class="rankings-overview page-overview"
+        aria-labelledby="rankings-title"
+      >
+        <div class="rankings-overview__copy">
+          <p class="eyebrow">红果官方榜单</p>
+          <h1 id="rankings-title">红果榜单</h1>
+          <p class="rankings-overview__description">
+            遇到想看的可以直接加入追更。
+          </p>
+        </div>
+        <div class="rankings-overview__side">
+          <dl class="rankings-meta" aria-label="榜单信息">
+            <div>
+              <dt>榜单时间</dt>
+              <dd id="rankings-updated">读取中</dd>
+            </div>
+            <div>
+              <dt>更新策略</dt>
+              <dd>每日</dd>
+            </div>
+          </dl>
+          <button
+            class="button button--secondary rankings-refresh"
+            type="button"
+            id="rankings-refresh"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-refresh"></use>
+            </svg>
+            <span>刷新榜单</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="rankings-surface" aria-labelledby="rankings-list-title">
+        <div class="rankings-filter">
+          <div class="rankings-filter__row">
+            <span class="rankings-filter__label" id="rankings-category-label">
+              内容分类
+            </span>
+            <div
+              class="rankings-categories"
+              role="group"
+              aria-labelledby="rankings-category-label"
+            >
+              <button
+                class="rankings-category"
+                type="button"
+                aria-pressed="true"
+                data-ranking-category="all"
+              >
+                全部
+              </button>
+              <button
+                class="rankings-category"
+                type="button"
+                aria-pressed="false"
+                data-ranking-category="comic"
+              >
+                漫剧
+              </button>
+              <button
+                class="rankings-category"
+                type="button"
+                aria-pressed="false"
+                data-ranking-category="human"
+              >
+                真人剧
+              </button>
+              <button
+                class="rankings-category"
+                type="button"
+                aria-pressed="false"
+                data-ranking-category="ai"
+              >
+                AI剧
+              </button>
+            </div>
+          </div>
+          <div class="rankings-filter__row rankings-filter__row--types">
+            <span class="rankings-filter__label" id="rankings-type-label">
+              榜单类型
+            </span>
+            <div
+              class="rankings-tabs"
+              id="rankings-tabs"
+              role="tablist"
+              aria-labelledby="rankings-type-label"
+            >
+              <button
+                class="rankings-tab"
+                id="rankings-tab-hot"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="rankings-list"
+                tabindex="0"
+                data-ranking-type="hot"
+              >
+                热播榜
+              </button>
+              <button
+                class="rankings-tab"
+                id="rankings-tab-prestige"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="rankings-list"
+                tabindex="-1"
+                data-ranking-type="prestige"
+              >
+                臻果榜
+              </button>
+              <button
+                class="rankings-tab"
+                id="rankings-tab-subscribe"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="rankings-list"
+                tabindex="-1"
+                data-ranking-type="subscribe"
+              >
+                预约榜
+              </button>
+              <button
+                class="rankings-tab"
+                id="rankings-tab-new"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="rankings-list"
+                tabindex="-1"
+                data-ranking-type="new"
+              >
+                新剧榜
+              </button>
+              <button
+                class="rankings-tab"
+                id="rankings-tab-hot-search"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="rankings-list"
+                tabindex="-1"
+                data-ranking-type="hot-search"
+              >
+                热搜榜
+              </button>
+              <button
+                class="rankings-tab"
+                id="rankings-tab-must-watch"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="rankings-list"
+                tabindex="-1"
+                data-ranking-type="must-watch"
+              >
+                必看榜
+              </button>
+              <button
+                class="rankings-tab"
+                id="rankings-tab-followed"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="rankings-list"
+                tabindex="-1"
+                data-ranking-type="followed"
+              >
+                收藏榜
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="rankings-toolbar">
+          <div class="rankings-toolbar__copy">
+            <div class="rankings-toolbar__heading">
+              <h2 id="rankings-list-title">全部 · 热播榜</h2>
+              <span class="rankings-result-count" id="rankings-result-count">
+                50 部
+              </span>
+            </div>
+            <p id="rankings-description">
+              按红果官方综合热度排序，加入追更后会自动核验同系列最新季。
+            </p>
+            <p class="rankings-official-updated" id="rankings-official-updated">
+              正在读取官方更新时间…
+            </p>
+          </div>
+          <a
+            class="button button--quiet rankings-source-link"
+            id="rankings-source-link"
+            href="https://hongguoduanju.com/rank/hot-drama"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-external"></use>
+            </svg>
+            <span>红果官网</span>
+          </a>
+        </div>
+
+        <p
+          class="rankings-notice"
+          id="rankings-notice"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></p>
+        <p
+          class="rankings-status"
+          id="rankings-status"
+          role="status"
+          aria-live="polite"
+        >
+          正在读取榜单…
+        </p>
+
+        <div
+          class="rankings-list"
+          id="rankings-list"
+          role="tabpanel"
+          aria-labelledby="rankings-tab-hot"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <div class="ranking-skeleton" aria-label="正在加载榜单">
+            <span class="skeleton ranking-skeleton__rank"></span>
+            <span class="skeleton ranking-skeleton__cover"></span>
+            <span class="ranking-skeleton__body">
+              <span class="skeleton ranking-skeleton__title"></span>
+              <span class="skeleton ranking-skeleton__line"></span>
+            </span>
+            <span class="skeleton ranking-skeleton__button"></span>
+          </div>
+          <div class="ranking-skeleton" aria-hidden="true">
+            <span class="skeleton ranking-skeleton__rank"></span>
+            <span class="skeleton ranking-skeleton__cover"></span>
+            <span class="ranking-skeleton__body">
+              <span class="skeleton ranking-skeleton__title"></span>
+              <span class="skeleton ranking-skeleton__line"></span>
+            </span>
+            <span class="skeleton ranking-skeleton__button"></span>
+          </div>
+          <div class="ranking-skeleton" aria-hidden="true">
+            <span class="skeleton ranking-skeleton__rank"></span>
+            <span class="skeleton ranking-skeleton__cover"></span>
+            <span class="ranking-skeleton__body">
+              <span class="skeleton ranking-skeleton__title"></span>
+              <span class="skeleton ranking-skeleton__line"></span>
+            </span>
+            <span class="skeleton ranking-skeleton__button"></span>
+          </div>
+          <div class="ranking-skeleton" aria-hidden="true">
+            <span class="skeleton ranking-skeleton__rank"></span>
+            <span class="skeleton ranking-skeleton__cover"></span>
+            <span class="ranking-skeleton__body">
+              <span class="skeleton ranking-skeleton__title"></span>
+              <span class="skeleton ranking-skeleton__line"></span>
+            </span>
+            <span class="skeleton ranking-skeleton__button"></span>
+          </div>
+        </div>
+      </section>
+
+      <footer class="page-footer rankings-footer">
+        <p>榜单内容来自红果官网公开榜单，按上海时区每天缓存一次。点击“加入追更”后会通过官方详情校验同系列信息。</p>
+      </footer>
+    </main>
+
+    <div
+      class="toast rankings-toast"
+      id="rankings-toast"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="icon-play-list" viewBox="0 0 24 24">
+        <path d="M4 6h9M4 12h7M4 18h5"></path>
+        <path d="m15 8 6 4-6 4Z"></path>
+      </symbol>
+      <symbol id="icon-trophy" viewBox="0 0 24 24">
+        <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0Z"></path>
+        <path d="M7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"></path>
+      </symbol>
+      <symbol id="icon-filter" viewBox="0 0 24 24">
+        <path d="M4 5h16l-6 7v6l-4-2v-4L4 5Z"></path>
+      </symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24">
+        <path d="M12 3v12"></path>
+        <path d="m7 10 5 5 5-5"></path>
+        <path d="M5 21h14"></path>
+      </symbol>
+      <symbol id="icon-auto" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 3a9 9 0 0 1 0 18Z"></path>
+      </symbol>
+      <symbol id="icon-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path>
+      </symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24">
+        <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z"></path>
+      </symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24">
+        <path d="M20 11a8 8 0 1 0-2.34 5.66"></path>
+        <path d="M20 4v7h-7"></path>
+      </symbol>
+      <symbol id="icon-users" viewBox="0 0 24 24">
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+        <circle cx="9" cy="7" r="4"></circle>
+        <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path>
+      </symbol>
+      <symbol id="icon-film" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+        <path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"></path>
+      </symbol>
+      <symbol id="icon-sparkles" viewBox="0 0 24 24">
+        <path d="m12 3-1.3 3.7L7 8l3.7 1.3L12 13l1.3-3.7L17 8l-3.7-1.3Z"></path>
+        <path d="m5 14-.8 2.2L2 17l2.2.8L5 20l.8-2.2L8 17l-2.2-.8Z"></path>
+        <path d="m19 13-.8 2.2L16 16l2.2.8L19 19l.8-2.2L22 16l-2.2-.8Z"></path>
+      </symbol>
+      <symbol id="icon-external" viewBox="0 0 24 24">
+        <path d="M15 3h6v6M10 14 21 3"></path>
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+      </symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14"></path>
+      </symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24">
+        <path d="m20 6-11 11-5-5"></path>
+      </symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 7v5l3 2"></path>
+      </symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v5M12 16h.01"></path>
+      </symbol>
+      <symbol id="icon-inbox" viewBox="0 0 24 24">
+        <path d="M4 4h16v16H4z"></path>
+        <path d="M4 13h4l2 3h4l2-3h4"></path>
+      </symbol>
+      <symbol id="icon-tv" viewBox="0 0 24 24">
+        <rect x="3" y="7" width="18" height="13" rx="2"></rect>
+        <path d="m8 2 4 5 4-5"></path>
+      </symbol>
+    </svg>
+
+    <noscript>
+      <p class="rankings-noscript">需要启用 JavaScript 才能读取红果榜单。</p>
+    </noscript>
+    <script src="/rankings.js" defer></script>
+  </body>
+</html>

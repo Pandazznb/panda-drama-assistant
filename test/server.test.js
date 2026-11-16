@@ -458,6 +458,20 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(pwaScript, /navigator\.serviceWorker/);
   assert.match(pwaScript, /beforeinstallprompt/);
 
+  const scrollControlsResponse = await fetch(
+    `${harness.origin}/scroll-controls.js`,
+  );
+  assert.equal(scrollControlsResponse.status, 200);
+  assert.match(
+    scrollControlsResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+  const scrollControlsScript = await scrollControlsResponse.text();
+  assert.match(scrollControlsScript, /\(min-width: 901px\)/);
+  assert.match(scrollControlsScript, /scroll-controls:update/);
+  assert.match(scrollControlsScript, /<path d="m6 9 6 6 6-6"><\/path>/);
+  assert.doesNotMatch(scrollControlsScript, /<use href="#icon-/);
+
   for (const [iconPath, expectedSize] of [
     ["/assets/pwa-icon-192.png", "192"],
     ["/assets/pwa-icon-512.png", "512"],
@@ -1530,6 +1544,272 @@ test("reminder API rejects an invalid reminder mode", async (t) => {
   const payload = await response.json();
   assert.equal(payload.error.code, "INVALID_REMINDER_STATE");
   assert.equal(called, false);
+});
+
+test("rankings API marks series already present in any tracked season", async (t) => {
+  const rankingCalls = [];
+  const rankingService = {
+    async getRankings(options) {
+      rankingCalls.push(options);
+      return {
+        ok: true,
+        fetchedAt: "2026-11-15T08:00:00.000Z",
+        cached: false,
+        stale: false,
+        warning: "",
+        category: "human",
+        type: "hot",
+        updatedText: "11月15日已更新·按热度排序",
+        items: [
+          {
+            seriesId: "7694653385668037657",
+            title: "已追更短剧",
+          },
+          {
+            seriesId: "7694653385668037658",
+            title: "可加入短剧",
+          },
+        ],
+      };
+    },
+  };
+  const harness = await startHarness(t, { rankingService });
+  harness.service.getDashboard = async () => ({
+    subscriptions: [
+      {
+        seasons: [
+          { seriesId: "7694653385668037999" },
+          { seriesId: "7694653385668037657" },
+        ],
+      },
+    ],
+  });
+
+  const response = await fetch(
+    `${harness.origin}/api/rankings?category=human&type=hot&refresh=1`,
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.deepEqual(rankingCalls, [
+    { category: "human", type: "hot", force: true },
+  ]);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.items[0].tracked, true);
+  assert.equal(payload.items[1].tracked, false);
+});
+
+test("rankings pages are served from the application shell", async (t) => {
+  const harness = await startHarness(t);
+
+  for (const pathname of ["/rankings", "/rankings.html"]) {
+    const response = await fetch(`${harness.origin}${pathname}`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^text\/html/);
+    assert.match(await response.text(), /红果榜单/);
+  }
+
+  const scriptResponse = await fetch(`${harness.origin}/rankings.js`);
+  assert.equal(scriptResponse.status, 200);
+  assert.match(
+    scriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+});
+
+test("catalog API passes detailed filters and tracked series IDs", async (t) => {
+  const catalogCalls = [];
+  const catalogService = {
+    async getCatalog(options) {
+      catalogCalls.push(options);
+      return {
+        ok: true,
+        cached: false,
+        items: [],
+        topics: [],
+        availableTags: [],
+        scannedCount: 0,
+        matchedCount: 0,
+        total: 0,
+        totalPages: 0,
+        scannedPages: [],
+        nextOfficialPage: null,
+        hasMore: false,
+      };
+    },
+  };
+  const harness = await startHarness(t, { catalogService });
+  harness.service.getDashboard = async () => ({
+    subscriptions: [
+      {
+        seasons: [
+          { seriesId: "7694653385668037301" },
+          { seriesId: "7694653385668037302" },
+        ],
+      },
+      {
+        seasons: [{ seriesId: "7694653385668037303" }],
+      },
+    ],
+  });
+
+  const response = await fetch(
+    `${harness.origin}/api/catalog?contentType=comic&cursor=3&scanPages=2&q=${encodeURIComponent("重生")}&topic=creative&status=completed&tracked=untracked&episodes=31-60&tags=${encodeURIComponent("复仇,逆袭")}&sort=episodes-desc&refresh=1`,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(catalogCalls.length, 1);
+  const options = catalogCalls[0];
+  assert.equal(options.contentType, "comic");
+  assert.equal(options.cursor, "3");
+  assert.equal(options.scanPages, "2");
+  assert.equal(options.query, "重生");
+  assert.equal(options.topic, "creative");
+  assert.equal(options.status, "completed");
+  assert.equal(options.tracked, "untracked");
+  assert.equal(options.episodes, "31-60");
+  assert.equal(options.tags, "复仇,逆袭");
+  assert.equal(options.sort, "episodes-desc");
+  assert.equal(options.force, true);
+  assert.deepEqual(
+    [...options.trackedSeriesIds].sort(),
+    [
+      "7694653385668037301",
+      "7694653385668037302",
+      "7694653385668037303",
+    ],
+  );
+});
+
+test("discovery API passes official filters and marks any tracked season", async (t) => {
+  const discoveryCalls = [];
+  const appDiscoveryService = {
+    async getDiscovery(options) {
+      discoveryCalls.push(options);
+      return {
+        ok: true,
+        fetchedAt: "2026-11-15T08:00:00.000Z",
+        items: [
+          {
+            seriesId: "7694653385668037302",
+            title: "已追更短剧",
+          },
+          {
+            seriesId: "7694653385668037304",
+            title: "未追更短剧",
+          },
+        ],
+        groups: [
+          {
+            type: "genre",
+            label: "类型",
+            options: [{ id: "comic_series", label: "漫剧" }],
+          },
+        ],
+        nextCursor: "next-page",
+        hasMore: true,
+      };
+    },
+  };
+  const harness = await startHarness(t, { appDiscoveryService });
+  harness.service.getDashboard = async () => ({
+    subscriptions: [
+      {
+        seasons: [
+          { seriesId: "7694653385668037301" },
+          { seriesId: "7694653385668037302" },
+        ],
+      },
+    ],
+  });
+
+  const response = await fetch(
+    `${harness.origin}/api/catalog/discovery`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        selection: {
+          genre: "comic_series",
+          category_dim_role: "cate_36",
+        },
+        cursor: "cursor-test",
+      }),
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(discoveryCalls, [
+    {
+      selection: {
+        genre: "comic_series",
+        category_dim_role: "cate_36",
+      },
+      cursor: "cursor-test",
+    },
+  ]);
+  const payload = await response.json();
+  assert.equal(payload.ok, true);
+  assert.equal(payload.items[0].tracked, true);
+  assert.equal(payload.items[1].tracked, false);
+  assert.equal(payload.nextCursor, "next-page");
+});
+
+test("discovery API rejects malformed JSON and forwards validated service errors", async (t) => {
+  const appDiscoveryService = {
+    async getDiscovery() {
+      const error = new Error("筛选条件包含未知分组。");
+      error.code = "INVALID_DISCOVERY_SELECTION";
+      error.statusCode = 400;
+      throw error;
+    },
+  };
+  const harness = await startHarness(t, { appDiscoveryService });
+
+  const malformed = await fetch(
+    `${harness.origin}/api/catalog/discovery`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{",
+    },
+  );
+  assert.equal(malformed.status, 400);
+  assert.equal(
+    (await malformed.json()).error.code,
+    "INVALID_JSON",
+  );
+
+  const invalidSelection = await fetch(
+    `${harness.origin}/api/catalog/discovery`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ selection: { unknown: "value" } }),
+    },
+  );
+  assert.equal(invalidSelection.status, 400);
+  assert.equal(
+    (await invalidSelection.json()).error.code,
+    "INVALID_DISCOVERY_SELECTION",
+  );
+});
+
+test("filters pages and script are served from the application shell", async (t) => {
+  const harness = await startHarness(t);
+
+  for (const pathname of ["/filters", "/filters.html"]) {
+    const response = await fetch(`${harness.origin}${pathname}`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^text\/html/);
+    assert.match(await response.text(), /筛选短剧/);
+  }
+
+  const scriptResponse = await fetch(`${harness.origin}/filters.js`);
+  assert.equal(scriptResponse.status, 200);
+  assert.match(
+    scriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
 });
 
 test("watched API returns 404 for an unknown subscription", async (t) => {

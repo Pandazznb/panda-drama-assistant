@@ -9,11 +9,16 @@ import {
   extractSeriesId,
   fetchAlbumSeriesInfoBatch,
   fetchAlbumSeriesIds,
+  fetchOfficialRanking,
+  fetchOfficialRankings,
   fetchSeriesProgressBatch,
   fetchSeriesDetail,
   isAllowedShareHost,
   parseOfficialSearchResults,
+  parseOfficialRankingPage,
+  parseOfficialRankings,
   parseSeriesDetailHtml,
+  resolveOfficialRankingPath,
   resolveSharedSeries,
   searchOfficialSeries,
   __test,
@@ -584,4 +589,253 @@ test("searchOfficialSeries returns a 504 when the request times out", async () =
       error.code === "SEARCH_REQUEST_TIMEOUT" &&
       error.statusCode === 504,
   );
+});
+
+test("parseOfficialRankings keeps supported groups, deduplicates and normalizes fields", () => {
+  const groups = parseOfficialRankings({
+    loaderData: {
+      page: {
+        homeSections: [
+          {
+            tab_type: "all",
+            video_list: [
+              {
+                series_id: "7694653385668037657",
+                series_title: "不应展示",
+              },
+            ],
+          },
+          {
+            tab_type: "human",
+            video_list: [
+              {
+                series_id: "7694653385668037657",
+                series_title: "  真人  短剧 ",
+                series_cover: "https://example.com/cover.jpg",
+                episode_cnt: "63",
+                episode_right_text: "全 63 集",
+                series_status: 1,
+                rank: "1",
+                category_list: [
+                  { name: "家庭" },
+                  { name: " 婚姻经营 " },
+                ],
+              },
+              {
+                series_id: "7694653385668037657",
+                series_title: "重复记录",
+              },
+              {
+                series_id: "invalid",
+                series_title: "无效记录",
+              },
+            ],
+          },
+          {
+            tab_type: "comic",
+            video_list: [
+              {
+                series_id: "7694653385668037658",
+                series_title: "漫剧",
+                series_status: 0,
+                rank: 2,
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  assert.deepEqual(Object.keys(groups), ["human", "comic", "ai"]);
+  assert.equal(groups.human.length, 1);
+  assert.equal(groups.human[0].title, "真人 短剧");
+  assert.equal(groups.human[0].episodeCount, 63);
+  assert.equal(groups.human[0].status, "completed");
+  assert.deepEqual(groups.human[0].categories, ["家庭", "婚姻经营"]);
+  assert.equal(
+    groups.human[0].detailUrl,
+    "https://hongguoduanju.com/detail?series_id=7694653385668037657",
+  );
+  assert.equal(groups.comic[0].status, "updating");
+  assert.equal(groups.ai.length, 0);
+});
+
+test("parseOfficialRankings rejects an unexpected homepage payload", () => {
+  assert.throws(
+    () => parseOfficialRankings({ loaderData: {} }),
+    (error) =>
+      error instanceof HongguoError &&
+      error.code === "RANKINGS_DATA_INVALID",
+  );
+});
+
+test("fetchOfficialRankings reads the official homepage router data", async () => {
+  const routerData = {
+    loaderData: {
+      page: {
+        homeSections: [
+          {
+            tab_type: "ai",
+            video_list: [
+              {
+                series_id: "7699513062054710296",
+                series_title: "nova：新星",
+                episode_cnt: 60,
+                series_status: 0,
+                rank: 1,
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  let requestedUrl;
+  const groups = await fetchOfficialRankings({
+    fetchImpl: async (url) => {
+      requestedUrl = String(url);
+      return new Response(
+        `<script>window._ROUTER_DATA = ${JSON.stringify(routerData)};</script>`,
+        {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        },
+      );
+    },
+  });
+
+  assert.equal(requestedUrl, "https://hongguoduanju.com/");
+  assert.equal(groups.ai[0].title, "nova：新星");
+});
+
+test("official ranking paths preserve availability and official category names", () => {
+  assert.equal(resolveOfficialRankingPath("human", "hot"), "/rank/hot-real-drama");
+  assert.equal(
+    resolveOfficialRankingPath("comic", "new"),
+    "/rank/new-comic-drama",
+  );
+  assert.equal(
+    resolveOfficialRankingPath("all", "prestige"),
+    "/rank/prestige-drama",
+  );
+  assert.throws(
+    () => resolveOfficialRankingPath("comic", "prestige"),
+    (error) =>
+      error instanceof HongguoError &&
+      error.code === "RANKING_COMBINATION_UNAVAILABLE" &&
+      error.statusCode === 404,
+  );
+});
+
+test("parseOfficialRankingPage normalizes official ranking cards", () => {
+  const page = parseOfficialRankingPage({
+    loaderData: {
+      rank_layout: null,
+      "rank_hot-real-drama/page": {
+        pageNum: 1,
+        canonicalUrl: "https://hongguoduanju.com/rank/hot-real-drama",
+        updatedText: "11月15日已更新·按热度排序",
+        content: {
+          rankList: [
+            {
+              seriesId: "7694653385668037657",
+              rank: 1,
+              title: "  测试  真人剧 ",
+              cover: "https://example.com/cover.jpg",
+              href: "/detail?series_id=7694653385668037657",
+              episodeCount: 63,
+              openEpisodeCount: 3,
+              primaryMetricText: "8752万热度",
+              tags: ["真人剧", "家庭", "演员甲"],
+              statusTags: ["新剧"],
+            },
+            {
+              seriesId: "7694653385668037657",
+              rank: 2,
+              title: "重复记录",
+            },
+            {
+              seriesId: "invalid",
+              rank: 3,
+              title: "无效记录",
+            },
+          ],
+          pagination: {
+            totalPages: 5,
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(page.items.length, 1);
+  assert.equal(page.updatedText, "11月15日已更新·按热度排序");
+  assert.equal(page.totalPages, 5);
+  assert.equal(page.items[0].title, "测试 真人剧");
+  assert.equal(page.items[0].rightText, "共 63 集");
+  assert.equal(page.items[0].metricText, "8752万热度");
+  assert.deepEqual(page.items[0].categories, ["家庭", "演员甲", "新剧"]);
+  assert.deepEqual(page.items[0].statusTags, ["新剧"]);
+  assert.equal(
+    page.items[0].detailUrl,
+    "https://hongguoduanju.com/detail?series_id=7694653385668037657",
+  );
+});
+
+test("fetchOfficialRanking reads three official pages and caps the result at 50", async () => {
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(String(url));
+    requestedUrls.push(parsed.href);
+    const pageNum = Number(parsed.searchParams.get("page") || 1);
+    const rankList = Array.from({ length: 20 }, (_, index) => {
+      const rank = (pageNum - 1) * 20 + index + 1;
+      return {
+        seriesId: `7694653385668${String(rank).padStart(5, "0")}`,
+        rank,
+        title: `第 ${rank} 部短剧`,
+        episodeCount: 50 + rank,
+        tags: ["漫剧", "剧情"],
+      };
+    });
+    const routerData = {
+      loaderData: {
+        "rank_hot-comic-drama/page": {
+          pageNum,
+          canonicalUrl: `https://hongguoduanju.com/rank/hot-comic-drama?page=${pageNum}`,
+          updatedText: "11月15日已更新·按热度排序",
+          content: {
+            rankList,
+            pagination: { totalPages: 5 },
+          },
+        },
+      },
+    };
+    return new Response(
+      `<script>window._ROUTER_DATA = ${JSON.stringify(routerData)};</script>`,
+      {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      },
+    );
+  };
+
+  const result = await fetchOfficialRanking({
+    category: "comic",
+    type: "hot",
+    limit: 50,
+    fetchImpl,
+  });
+
+  assert.deepEqual(requestedUrls, [
+    "https://hongguoduanju.com/rank/hot-comic-drama",
+    "https://hongguoduanju.com/rank/hot-comic-drama?page=2",
+    "https://hongguoduanju.com/rank/hot-comic-drama?page=3",
+  ]);
+  assert.equal(result.items.length, 50);
+  assert.equal(result.items[0].rank, 1);
+  assert.equal(result.items[49].rank, 50);
+  assert.equal(result.category, "comic");
+  assert.equal(result.type, "hot");
 });
