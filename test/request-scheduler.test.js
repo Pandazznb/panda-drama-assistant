@@ -264,6 +264,64 @@ test("configured maximum concurrency is never exceeded", async () => {
   assert.equal(maxActive, 2);
 });
 
+test("higher-priority requests start before queued background work", async () => {
+  const scheduler = new UpstreamRequestScheduler(
+    schedulerOptions({ maxConcurrency: 1 }),
+  );
+  const order = [];
+  let releaseFirstBody;
+  let markFirstBodyStarted;
+  const firstBodyGate = new Promise((resolve) => {
+    releaseFirstBody = resolve;
+  });
+  const firstBodyStarted = new Promise((resolve) => {
+    markFirstBodyStarted = resolve;
+  });
+  const fetchImpl = async (url) => {
+    const name = new URL(url).pathname.slice(1);
+    if (name !== "holding") {
+      order.push(name);
+    }
+    return new Response(name, { status: 200 });
+  };
+
+  const holding = scheduler.fetch(
+    "https://api.example.com/holding",
+    {},
+    {
+      fetchImpl,
+      readBody: async (response) => {
+        markFirstBodyStarted();
+        await firstBodyGate;
+        return response.text();
+      },
+    },
+  );
+  await firstBodyStarted;
+  const background = scheduler.fetch(
+    "https://api.example.com/background",
+    {},
+    {
+      fetchImpl,
+      priority: 0,
+      readBody: (response) => response.text(),
+    },
+  );
+  const interactive = scheduler.fetch(
+    "https://api.example.com/interactive",
+    {},
+    {
+      fetchImpl,
+      priority: 1,
+      readBody: (response) => response.text(),
+    },
+  );
+
+  releaseFirstBody();
+  await Promise.all([holding, background, interactive]);
+  assert.deepEqual(order, ["interactive", "background"]);
+});
+
 test("request starts are spaced by the global minimum interval", async () => {
   const starts = [];
   const scheduler = new UpstreamRequestScheduler(

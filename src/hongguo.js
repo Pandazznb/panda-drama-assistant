@@ -264,6 +264,7 @@ async function fetchWithSafeRedirects(
     timeoutMs = REQUEST_TIMEOUT_MS,
     maxRedirects = MAX_REDIRECTS,
     requestScheduler = null,
+    requestPriority = 0,
   } = {},
 ) {
   let currentUrl = initialUrl;
@@ -293,6 +294,7 @@ async function fetchWithSafeRedirects(
           scheduler: requestScheduler,
           timeoutMs,
           label: "红果分享链接",
+          priority: requestPriority,
           readBody: (response) => readSuccessfulBody(response),
         },
       );
@@ -1114,6 +1116,7 @@ export async function fetchSeriesDetail(
     fetchImpl = globalThis.fetch,
     timeoutMs = REQUEST_TIMEOUT_MS,
     requestScheduler = null,
+    requestPriority = 0,
   } = {},
 ) {
   if (!/^\d{8,25}$/.test(String(seriesId))) {
@@ -1125,6 +1128,7 @@ export async function fetchSeriesDetail(
     fetchImpl,
     timeoutMs,
     requestScheduler,
+    requestPriority,
   });
   const detail = parseSeriesDetailHtml(html);
 

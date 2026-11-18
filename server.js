@@ -184,6 +184,12 @@ function sendError(response, error) {
         ...(error?.retryAfterSeconds
           ? { retryAfterSeconds: error.retryAfterSeconds }
           : {}),
+        ...(error?.subscriptionId
+          ? { subscriptionId: String(error.subscriptionId) }
+          : {}),
+        ...(error?.seriesTitle
+          ? { seriesTitle: String(error.seriesTitle) }
+          : {}),
       },
     }),
   );
@@ -520,15 +526,39 @@ function loggedSettingsFields(body) {
     .filter(Boolean);
 }
 
+function trackedSubscriptionsFromDashboard(dashboard) {
+  const tracked = new Map();
+  for (const subscription of Array.isArray(dashboard?.subscriptions)
+    ? dashboard.subscriptions
+    : []) {
+    for (const season of Array.isArray(subscription?.seasons)
+      ? subscription.seasons
+      : []) {
+      const seriesId = String(season?.seriesId || "");
+      if (seriesId && !tracked.has(seriesId)) {
+        tracked.set(seriesId, String(subscription?.id || ""));
+      }
+    }
+  }
+  return tracked;
+}
+
 function trackedSeriesIdsFromDashboard(dashboard) {
-  return new Set(
-    (Array.isArray(dashboard?.subscriptions) ? dashboard.subscriptions : [])
-      .flatMap((subscription) =>
-        (Array.isArray(subscription?.seasons) ? subscription.seasons : [])
-          .map((season) => String(season?.seriesId || ""))
-          .filter(Boolean),
-      ),
-  );
+  return new Set(trackedSubscriptionsFromDashboard(dashboard).keys());
+}
+
+function applyTrackedSubscriptions(items, trackedSubscriptions) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const seriesId = String(item?.seriesId || "");
+    const tracked = trackedSubscriptions.has(seriesId);
+    return {
+      ...item,
+      tracked,
+      subscriptionId: tracked
+        ? trackedSubscriptions.get(seriesId) || null
+        : null,
+    };
+  });
 }
 
 export function createRequestHandler(
@@ -643,6 +673,31 @@ export function createRequestHandler(
     return job;
   }
 
+  function startSubscriptionDiscovery(result) {
+    void service
+      .checkSubscription(result.subscriptionId, {
+        notify: false,
+        discover: true,
+        forceDiscovery: true,
+        markUnread: false,
+        trigger: "add",
+      })
+      .catch(async (error) => {
+        await recordSystemLog(systemLog, {
+          category: "subscription",
+          action: "subscription.discovery.failed",
+          level: "warning",
+          message: `《${result.title || "未命名短剧"}》后台补全系列季列表失败：${
+            error?.message || "未知错误"
+          }。稍后自动检查会继续重试。`,
+          metadata: {
+            subscriptionId: result.subscriptionId,
+            seriesId: result.seasonId,
+          },
+        });
+      });
+  }
+
   return async (request, response) => {
     try {
       const url = new URL(request.url || "/", "http://localhost");
@@ -749,6 +804,8 @@ export function createRequestHandler(
 
       if (request.method === "GET" && pathname === "/api/catalog") {
         const dashboard = await service.getDashboard();
+        const trackedSubscriptions =
+          trackedSubscriptionsFromDashboard(dashboard);
         const catalog = await catalogService.getCatalog({
           contentType: url.searchParams.get("contentType") || "human",
           cursor: url.searchParams.get("cursor"),
@@ -761,9 +818,15 @@ export function createRequestHandler(
           tags: url.searchParams.get("tags") || "",
           sort: url.searchParams.get("sort") || "official",
           force: url.searchParams.get("refresh") === "1",
-          trackedSeriesIds: trackedSeriesIdsFromDashboard(dashboard),
+          trackedSeriesIds: new Set(trackedSubscriptions.keys()),
         });
-        sendJson(response, 200, catalog);
+        sendJson(response, 200, {
+          ...catalog,
+          items: applyTrackedSubscriptions(
+            catalog.items,
+            trackedSubscriptions,
+          ),
+        });
         return;
       }
 
@@ -779,14 +842,13 @@ export function createRequestHandler(
             cursor: body.cursor ?? null,
           }),
         ]);
-        const trackedSeriesIds = trackedSeriesIdsFromDashboard(dashboard);
+        const trackedSubscriptions =
+          trackedSubscriptionsFromDashboard(dashboard);
         sendJson(response, 200, {
           ...discovery,
-          items: (Array.isArray(discovery.items) ? discovery.items : []).map(
-            (item) => ({
-              ...item,
-              tracked: trackedSeriesIds.has(String(item.seriesId || "")),
-            }),
+          items: applyTrackedSubscriptions(
+            discovery.items,
+            trackedSubscriptions,
           ),
         });
         return;
@@ -799,16 +861,12 @@ export function createRequestHandler(
           force: url.searchParams.get("refresh") === "1",
         });
         const dashboard = await service.getDashboard();
-        const trackedSeriesIds = trackedSeriesIdsFromDashboard(dashboard);
-        const items = (Array.isArray(rankings.items) ? rankings.items : []).map(
-          (item) => ({
-            ...item,
-            tracked: trackedSeriesIds.has(String(item.seriesId || "")),
-          }),
-        );
         sendJson(response, 200, {
           ...rankings,
-          items,
+          items: applyTrackedSubscriptions(
+            rankings.items,
+            trackedSubscriptionsFromDashboard(dashboard),
+          ),
         });
         return;
       }
@@ -1183,7 +1241,10 @@ export function createRequestHandler(
       if (request.method === "POST" && pathname === "/api/subscriptions") {
         const body = await readJsonBody(request);
         const input = body.input ?? body.shareText ?? "";
-        const result = await service.addSubscription(input);
+        const result = await service.addSubscription(input, {
+          deferFirstSeasonResolution: true,
+          requestPriority: 1,
+        });
         await recordSystemLog(systemLog, {
           category: "subscription",
           action:
@@ -1200,29 +1261,6 @@ export function createRequestHandler(
             seriesId: result.seasonId,
           },
         });
-        let discoveryResult = null;
-        let discoveryError = null;
-        try {
-          discoveryResult = await service.checkSubscription(
-            result.subscriptionId,
-            {
-              notify: false,
-              discover: true,
-              forceDiscovery: true,
-              markUnread: false,
-            },
-          );
-        } catch (error) {
-          discoveryError =
-            error?.message || "官方多季列表核验失败，稍后会自动重试。";
-        }
-        if (!discoveryError) {
-          discoveryError =
-            discoveryResult?.discoveryError ||
-            (discoveryResult?.errors > 0
-              ? `${discoveryResult.errors} 个季度暂未检查成功，稍后会自动重试。`
-              : null);
-        }
         const actualSeasonCopy =
           result.seasonTitle && result.seasonTitle !== result.title
             ? `，本次加入《${result.seasonTitle}》`
@@ -1235,13 +1273,13 @@ export function createRequestHandler(
           ok: true,
           result: {
             ...result,
-            discoveryCompleted: !discoveryError,
-            discoveryError,
+            discoveryPending: true,
+            discoveryCompleted: false,
+            discoveryError: null,
           },
-          message: discoveryError
-            ? `${baseMessage} 官方多季列表暂未补全，稍后会自动重试。`
-            : baseMessage,
+          message: `${baseMessage} 正在后台补全同系列季列表。`,
         });
+        startSubscriptionDiscovery(result);
         return;
       }
 

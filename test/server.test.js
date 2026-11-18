@@ -1577,6 +1577,7 @@ test("rankings API marks series already present in any tracked season", async (t
   harness.service.getDashboard = async () => ({
     subscriptions: [
       {
+        id: "sub_ranking",
         seasons: [
           { seriesId: "7694653385668037999" },
           { seriesId: "7694653385668037657" },
@@ -1595,7 +1596,9 @@ test("rankings API marks series already present in any tracked season", async (t
   ]);
   assert.equal(payload.ok, true);
   assert.equal(payload.items[0].tracked, true);
+  assert.equal(payload.items[0].subscriptionId, "sub_ranking");
   assert.equal(payload.items[1].tracked, false);
+  assert.equal(payload.items[1].subscriptionId, null);
 });
 
 test("rankings pages are served from the application shell", async (t) => {
@@ -1614,6 +1617,11 @@ test("rankings pages are served from the application shell", async (t) => {
     scriptResponse.headers.get("content-type"),
     /^text\/javascript/,
   );
+  const script = await scriptResponse.text();
+  assert.match(script, /data-action="toggle"/);
+  assert.match(script, /正在追更/);
+  assert.match(script, /取消中…/);
+  assert.match(script, /markTracked\(seriesId, error\.subscriptionId\)/);
 });
 
 test("catalog API passes detailed filters and tracked series IDs", async (t) => {
@@ -1641,6 +1649,7 @@ test("catalog API passes detailed filters and tracked series IDs", async (t) => 
   harness.service.getDashboard = async () => ({
     subscriptions: [
       {
+        id: "sub_discovery",
         seasons: [
           { seriesId: "7694653385668037301" },
           { seriesId: "7694653385668037302" },
@@ -1714,6 +1723,7 @@ test("discovery API passes official filters and marks any tracked season", async
   harness.service.getDashboard = async () => ({
     subscriptions: [
       {
+        id: "sub_discovery",
         seasons: [
           { seriesId: "7694653385668037301" },
           { seriesId: "7694653385668037302" },
@@ -1750,7 +1760,9 @@ test("discovery API passes official filters and marks any tracked season", async
   const payload = await response.json();
   assert.equal(payload.ok, true);
   assert.equal(payload.items[0].tracked, true);
+  assert.equal(payload.items[0].subscriptionId, "sub_discovery");
   assert.equal(payload.items[1].tracked, false);
+  assert.equal(payload.items[1].subscriptionId, null);
   assert.equal(payload.nextCursor, "next-page");
 });
 
@@ -1801,7 +1813,7 @@ test("filters pages and script are served from the application shell", async (t)
     const response = await fetch(`${harness.origin}${pathname}`);
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type"), /^text\/html/);
-    assert.match(await response.text(), /筛选短剧/);
+    assert.match(await response.text(), /找剧/);
   }
 
   const scriptResponse = await fetch(`${harness.origin}/filters.js`);
@@ -1810,6 +1822,11 @@ test("filters pages and script are served from the application shell", async (t)
     scriptResponse.headers.get("content-type"),
     /^text\/javascript/,
   );
+  const script = await scriptResponse.text();
+  assert.match(script, /data-action="toggle"/);
+  assert.match(script, /正在追更/);
+  assert.match(script, /取消中…/);
+  assert.match(script, /markTracked\(seriesId, error\.subscriptionId\)/);
 });
 
 test("watched API returns 404 for an unknown subscription", async (t) => {
@@ -1844,31 +1861,55 @@ test("HTTP API rejects disallowed share hosts before upstream access", async (t)
   assert.equal(payload.error.code, "HOST_NOT_ALLOWED");
 });
 
-test("adding a subscription immediately discovers the official season list", async (t) => {
+test("duplicate subscription errors expose the existing tracking record", async (t) => {
+  const harness = await startHarness(t);
+  harness.service.addSubscription = async () => {
+    const error = new Error("这部剧已经在我的追更中。");
+    error.code = "SUBSCRIPTION_EXISTS";
+    error.statusCode = 409;
+    error.subscriptionId = "sub_existing";
+    error.seriesTitle = "测试短剧";
+    throw error;
+  };
+
+  const response = await fetch(`${harness.origin}/api/subscriptions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ input: "7694653385668037657" }),
+  });
+  assert.equal(response.status, 409);
+  const payload = await response.json();
+  assert.equal(payload.error.code, "SUBSCRIPTION_EXISTS");
+  assert.equal(payload.error.subscriptionId, "sub_existing");
+  assert.equal(payload.error.seriesTitle, "测试短剧");
+});
+
+test("adding a subscription returns before background season discovery finishes", async (t) => {
   const harness = await startHarness(t);
   const calls = [];
-  const results = [
-    {
+  let releaseDiscovery;
+  let markDiscoveryStarted;
+  const discoveryGate = new Promise((resolve) => {
+    releaseDiscovery = resolve;
+  });
+  const discoveryStarted = new Promise((resolve) => {
+    markDiscoveryStarted = resolve;
+  });
+  harness.service.addSubscription = async (input, options) => {
+    calls.push({ type: "add", input, options });
+    return {
       action: "created",
       subscriptionId: "sub_created",
+      seasonId: "7694653385668037657",
       title: "测试短剧",
       seasonTitle: "测试短剧第一季",
       episodeCount: 12,
-    },
-    {
-      action: "season_added",
-      subscriptionId: "sub_existing",
-      title: "测试短剧",
-      seasonTitle: "测试短剧第二季",
-      episodeCount: 20,
-    },
-  ];
-  harness.service.addSubscription = async (input) => {
-    calls.push({ type: "add", input });
-    return results.shift();
+    };
   };
   harness.service.checkSubscription = async (subscriptionId, options) => {
     calls.push({ type: "check", subscriptionId, options });
+    markDiscoveryStarted();
+    await discoveryGate;
     return {
       seasonsChecked: 1,
       discoveredSeasons: 13,
@@ -1877,20 +1918,31 @@ test("adding a subscription immediately discovers the official season list", asy
     };
   };
 
-  for (const input of ["first-series", "second-season"]) {
-    const response = await fetch(`${harness.origin}/api/subscriptions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ input }),
-    });
-    assert.equal(response.status, 201);
-    const payload = await response.json();
-    assert.equal(payload.result.discoveryCompleted, true);
-    assert.equal(payload.result.discoveryError, null);
-  }
+  const response = await fetch(`${harness.origin}/api/subscriptions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ input: "first-series" }),
+    signal: AbortSignal.timeout(2_000),
+  });
+  assert.equal(response.status, 201);
+  const payload = await response.json();
+  assert.equal(payload.result.discoveryPending, true);
+  assert.equal(payload.result.discoveryCompleted, false);
+  assert.equal(payload.result.discoveryError, null);
+  assert.match(payload.message, /正在后台补全同系列季列表/);
 
+  await discoveryStarted;
+  releaseDiscovery();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(calls, [
-    { type: "add", input: "first-series" },
+    {
+      type: "add",
+      input: "first-series",
+      options: {
+        deferFirstSeasonResolution: true,
+        requestPriority: 1,
+      },
+    },
     {
       type: "check",
       subscriptionId: "sub_created",
@@ -1899,32 +1951,33 @@ test("adding a subscription immediately discovers the official season list", asy
         discover: true,
         forceDiscovery: true,
         markUnread: false,
-      },
-    },
-    { type: "add", input: "second-season" },
-    {
-      type: "check",
-      subscriptionId: "sub_existing",
-      options: {
-        notify: false,
-        discover: true,
-        forceDiscovery: true,
-        markUnread: false,
+        trigger: "add",
       },
     },
   ]);
 });
 
-test("subscription creation succeeds when immediate season discovery fails", async (t) => {
+test("background season discovery failure does not fail subscription creation", async (t) => {
   const harness = await startHarness(t);
+  let releaseDiscovery;
+  let markDiscoveryStarted;
+  const discoveryGate = new Promise((resolve) => {
+    releaseDiscovery = resolve;
+  });
+  const discoveryStarted = new Promise((resolve) => {
+    markDiscoveryStarted = resolve;
+  });
   harness.service.addSubscription = async () => ({
     action: "created",
     subscriptionId: "sub_created",
+    seasonId: "7694653385668037657",
     title: "测试短剧",
     seasonTitle: "测试短剧",
     episodeCount: 12,
   });
   harness.service.checkSubscription = async () => {
+    markDiscoveryStarted();
+    await discoveryGate;
     throw new Error("官方多季接口暂时不可用");
   };
 
@@ -1932,14 +1985,30 @@ test("subscription creation succeeds when immediate season discovery fails", asy
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ input: "test-series" }),
+    signal: AbortSignal.timeout(2_000),
   });
   assert.equal(response.status, 201);
   const payload = await response.json();
   assert.equal(payload.ok, true);
   assert.equal(payload.result.subscriptionId, "sub_created");
+  assert.equal(payload.result.discoveryPending, true);
   assert.equal(payload.result.discoveryCompleted, false);
-  assert.equal(payload.result.discoveryError, "官方多季接口暂时不可用");
-  assert.match(payload.message, /稍后会自动重试/);
+  assert.equal(payload.result.discoveryError, null);
+  assert.match(payload.message, /正在后台补全同系列季列表/);
+
+  await discoveryStarted;
+  releaseDiscovery();
+  let failureEntry = null;
+  for (let attempt = 0; attempt < 50 && !failureEntry; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const page = await harness.systemLog.readPage({ limit: 20 });
+    failureEntry = page.entries.find(
+      (entry) => entry.action === "subscription.discovery.failed",
+    );
+  }
+  assert.ok(failureEntry);
+  assert.match(failureEntry.message, /官方多季接口暂时不可用/);
+  assert.match(failureEntry.message, /稍后自动检查会继续重试/);
 });
 
 test("HTTP API requires JSON for mutation requests", async (t) => {

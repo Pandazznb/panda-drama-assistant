@@ -89,7 +89,9 @@
     loadController: null,
     requestToken: 0,
     pendingAdds: new Set(),
+    pendingRemovals: new Set(),
     addControllers: new Map(),
+    removeControllers: new Map(),
     toastTimer: null,
     toastHideTimer: null,
   };
@@ -284,24 +286,34 @@
 
   function addButtonMarkup(item, title) {
     const tracked = Boolean(item?.tracked);
-    const pending = state.pendingAdds.has(String(item?.seriesId || ""));
-    const iconName = tracked ? "check" : "plus";
-    const label = tracked ? "已追更" : pending ? "加入中…" : "加入追更";
+    const seriesId = String(item?.seriesId || "");
+    const pendingAdd = state.pendingAdds.has(seriesId);
+    const pendingRemoval = state.pendingRemovals.has(seriesId);
+    const busy = pendingAdd || pendingRemoval;
+    const iconName = busy ? "refresh" : tracked ? "check" : "plus";
+    const label = pendingRemoval
+      ? "取消中…"
+      : pendingAdd
+        ? "加入中…"
+        : tracked
+          ? "正在追更"
+          : "加入追更";
     return `
       <button
         class="button ranking-add${tracked ? " is-tracked" : ""}${
-          pending ? " is-busy" : ""
+          busy ? " is-busy" : ""
         }"
         type="button"
-        data-action="add"
-        data-series-id="${escapeHtml(item?.seriesId || "")}"
+        data-action="toggle"
+        data-series-id="${escapeHtml(seriesId)}"
+        aria-pressed="${String(tracked)}"
         aria-label="${escapeHtml(
           tracked
-            ? `《${title}》已加入我的追更`
+            ? `《${title}》正在追更，点击停止追更`
             : `将《${title}》加入我的追更`,
         )}"
-        ${tracked || pending ? 'aria-disabled="true"' : ""}
-        ${pending ? 'aria-busy="true"' : ""}
+        title="${escapeHtml(tracked ? "点击停止追更" : "加入追更")}"
+        ${busy ? 'aria-disabled="true" aria-busy="true"' : ""}
       >
         ${icon(iconName)}
         <span>${label}</span>
@@ -501,7 +513,9 @@
       return;
     }
     const button = elements.list.querySelector(
-      `[data-action="add"][data-series-id="${escapeSelectorValue(seriesId)}"]`,
+      `[data-action="toggle"][data-series-id="${escapeSelectorValue(
+        seriesId,
+      )}"]`,
     );
     if (!button) {
       return;
@@ -512,40 +526,64 @@
   function updateAddButton(button, item) {
     const seriesId = String(item?.seriesId || "");
     const tracked = Boolean(item?.tracked);
-    const pending = state.pendingAdds.has(seriesId);
+    const pendingAdd = state.pendingAdds.has(seriesId);
+    const pendingRemoval = state.pendingRemovals.has(seriesId);
+    const busy = pendingAdd || pendingRemoval;
     const title = String(item?.title || "未命名短剧").trim() || "未命名短剧";
 
     button.classList.toggle("is-tracked", tracked);
-    button.classList.toggle("is-busy", pending);
-    if (tracked || pending) {
+    button.classList.toggle("is-busy", busy);
+    if (busy) {
       button.setAttribute("aria-disabled", "true");
     } else {
       button.removeAttribute("aria-disabled");
     }
+    button.setAttribute("aria-pressed", String(tracked));
     button.setAttribute(
       "aria-label",
       tracked
-        ? `《${title}》已加入我的追更`
+        ? `《${title}》正在追更，点击停止追更`
         : `将《${title}》加入我的追更`,
     );
-    if (pending) {
+    button.title = tracked ? "点击停止追更" : "加入追更";
+    if (busy) {
       button.setAttribute("aria-busy", "true");
     } else {
       button.removeAttribute("aria-busy");
     }
     button
       .querySelector("use")
-      ?.setAttribute("href", tracked ? "#icon-check" : "#icon-plus");
+      ?.setAttribute(
+        "href",
+        busy ? "#icon-refresh" : tracked ? "#icon-check" : "#icon-plus",
+      );
     const label = button.querySelector("span");
     if (label) {
-      label.textContent = tracked ? "已追更" : pending ? "加入中…" : "加入追更";
+      label.textContent = pendingRemoval
+        ? "取消中…"
+        : pendingAdd
+          ? "加入中…"
+          : tracked
+            ? "正在追更"
+            : "加入追更";
     }
   }
 
-  function markTracked(seriesId) {
+  function markTracked(seriesId, subscriptionId = "") {
     for (const item of state.items) {
       if (String(item?.seriesId || "") === String(seriesId)) {
         item.tracked = true;
+        item.subscriptionId = subscriptionId || item.subscriptionId || null;
+      }
+    }
+    updateRenderedButton(seriesId);
+  }
+
+  function markUntracked(seriesId) {
+    for (const item of state.items) {
+      if (String(item?.seriesId || "") === String(seriesId)) {
+        item.tracked = false;
+        item.subscriptionId = null;
       }
     }
     updateRenderedButton(seriesId);
@@ -643,6 +681,8 @@
       );
       error.code = payload?.error?.code || "REQUEST_FAILED";
       error.status = response.status;
+      error.subscriptionId = payload?.error?.subscriptionId || "";
+      error.seriesTitle = payload?.error?.seriesTitle || "";
       throw error;
     }
     return payload;
@@ -778,13 +818,13 @@
         });
       } catch (error) {
         if (error.status === 409 && error.code === "SUBSCRIPTION_EXISTS") {
-          markTracked(seriesId);
+          markTracked(seriesId, error.subscriptionId);
           showToast(`《${title}》已经在追更中。`);
           return;
         }
         throw error;
       }
-      markTracked(seriesId);
+      markTracked(seriesId, payload?.result?.subscriptionId);
       showToast(payload.message || `已加入追更：《${title}》`);
     } catch (error) {
       if (timedOut) {
@@ -799,6 +839,72 @@
       clearTimeout(timeout);
       state.pendingAdds.delete(String(seriesId));
       state.addControllers.delete(String(seriesId));
+      updateRenderedButton(seriesId);
+    }
+  }
+
+  async function removeRanking(seriesId, button) {
+    const item = state.items.find(
+      (candidate) => String(candidate?.seriesId || "") === String(seriesId),
+    );
+    if (
+      !item ||
+      !item.tracked ||
+      state.pendingAdds.has(String(seriesId)) ||
+      state.pendingRemovals.has(String(seriesId))
+    ) {
+      return;
+    }
+
+    const title = String(item.title || "未命名短剧").trim() || "未命名短剧";
+    let subscriptionId = String(item.subscriptionId || "");
+    if (!subscriptionId) {
+      const dashboard = await fetchJson("/api/state");
+      const subscription = (dashboard?.subscriptions || []).find((candidate) =>
+        (candidate?.seasons || []).some(
+          (season) => String(season?.seriesId || "") === String(seriesId),
+        ),
+      );
+      subscriptionId = String(subscription?.id || "");
+      if (subscriptionId) {
+        item.subscriptionId = subscriptionId;
+      }
+    }
+    if (!subscriptionId) {
+      showToast("未找到这条追更记录，请刷新榜单后重试。", "error");
+      return;
+    }
+
+    state.pendingRemovals.add(String(seriesId));
+    updateAddButton(button, item);
+    const controller = new AbortController();
+    state.removeControllers.set(String(seriesId), controller);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 30_000);
+
+    try {
+      const payload = await fetchJson(
+        `/api/subscriptions/${encodeURIComponent(subscriptionId)}`,
+        {
+          method: "DELETE",
+          signal: controller.signal,
+        },
+      );
+      markUntracked(seriesId);
+      showToast(payload.message || `已停止追更：《${title}》`);
+    } catch (error) {
+      if (timedOut) {
+        showToast("停止追更超时，请稍后重试。", "error");
+      } else if (error.name !== "AbortError") {
+        showToast(error.message || "停止追更失败，请稍后重试。", "error");
+      }
+    } finally {
+      clearTimeout(timeout);
+      state.pendingRemovals.delete(String(seriesId));
+      state.removeControllers.delete(String(seriesId));
       updateRenderedButton(seriesId);
     }
   }
@@ -955,8 +1061,17 @@
       loadRankings({ force: true });
       return;
     }
-    if (action.dataset.action === "add") {
-      addRanking(action.dataset.seriesId, action);
+    if (action.dataset.action === "toggle") {
+      const item = state.items.find(
+        (candidate) =>
+          String(candidate?.seriesId || "") ===
+          String(action.dataset.seriesId || ""),
+      );
+      if (item?.tracked) {
+        removeRanking(action.dataset.seriesId, action);
+      } else {
+        addRanking(action.dataset.seriesId, action);
+      }
     }
   });
 

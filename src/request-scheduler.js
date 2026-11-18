@@ -185,12 +185,22 @@ export class UpstreamRequestScheduler {
     this.active = 0;
     this.nextStartAt = 0;
     this.waiters = [];
+    this.waiterSequence = 0;
     this.dispatchTimer = null;
   }
 
-  async acquire() {
+  async acquire({ priority = 0 } = {}) {
     await new Promise((resolve) => {
-      this.waiters.push(resolve);
+      this.waiters.push({
+        resolve,
+        priority: normalizedInteger(priority, 0),
+        sequence: ++this.waiterSequence,
+      });
+      this.waiters.sort(
+        (left, right) =>
+          right.priority - left.priority ||
+          left.sequence - right.sequence,
+      );
       this.dispatch();
     });
   }
@@ -221,7 +231,7 @@ export class UpstreamRequestScheduler {
 
       this.active += 1;
       this.nextStartAt = now + this.minIntervalMs;
-      this.waiters.shift()();
+      this.waiters.shift().resolve();
       if (this.minIntervalMs > 0) {
         this.dispatchTimer = setTimeout(() => {
           this.dispatchTimer = null;
@@ -292,6 +302,7 @@ export class UpstreamRequestScheduler {
       timeoutMs = 15_000,
       label = "红果上游请求",
       readBody = null,
+      priority = 0,
     } = {},
   ) {
     const startedAt = this.now();
@@ -303,7 +314,7 @@ export class UpstreamRequestScheduler {
       let result;
       let response;
       let requestError = null;
-      await this.acquire();
+      await this.acquire({ priority });
       try {
         result = await executeRequestAttempt(
           fetchImpl,
@@ -432,6 +443,7 @@ export function performUpstreamFetch(
     timeoutMs = 15_000,
     label = "红果上游请求",
     readBody = null,
+    priority = 0,
   } = {},
 ) {
   if (scheduler) {
@@ -440,6 +452,7 @@ export function performUpstreamFetch(
       timeoutMs,
       label,
       readBody,
+      priority,
     });
   }
   return executeRequestAttempt(fetchImpl, input, init, {

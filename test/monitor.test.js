@@ -52,6 +52,7 @@ async function createHarness({
   discoveryIntervalMs = 60_000,
   candidateRecheckMs = 60_000,
   timers = null,
+  requestScheduler = null,
 } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hongguo-monitor-"));
   const statePath = path.join(directory, "state.json");
@@ -63,7 +64,10 @@ async function createHarness({
   }
   const notifications = [];
   const albumCalls = [];
-  const fetchDetail = async (seriesId) => {
+  const detailCalls = [];
+  const resolveSharedCalls = [];
+  const fetchDetail = async (seriesId, options = {}) => {
+    detailCalls.push({ seriesId, options });
     const found = details.get(seriesId);
     if (!found) {
       throw new Error(`unexpected series ${seriesId}`);
@@ -121,14 +125,18 @@ async function createHarness({
     fetchAlbumSeries: loadAlbumSeries,
     ...(fetchAlbumSeriesBatch ? { fetchAlbumSeriesBatch } : {}),
     ...(fetchSeriesProgressBatch ? { fetchSeriesProgressBatch } : {}),
-    resolveShared: async (input) => ({
-      seriesId: String(input),
-      sharedUrl: "",
-    }),
+    resolveShared: async (input, options = {}) => {
+      resolveSharedCalls.push({ input, options });
+      return {
+        seriesId: String(input),
+        sharedUrl: "",
+      };
+    },
     sendNotifications: notificationSender,
     now,
     discoveryIntervalMs,
     candidateRecheckMs,
+    ...(requestScheduler ? { requestScheduler } : {}),
     ...(timers ? { timers } : {}),
   });
   return {
@@ -140,6 +148,8 @@ async function createHarness({
     notificationSender,
     albumCalls,
     albumSeriesIds,
+    detailCalls,
+    resolveSharedCalls,
   };
 }
 
@@ -3391,6 +3401,76 @@ test("adding a later season displays the base series title", async () => {
   assert.equal(subscription.firstSeasonTitle, "万妖图录传第一季");
   assert.equal(subscription.firstSeasonId, ROOT_ID);
   assert.equal(subscription.seasons[0].title, "万妖图录传第六季");
+});
+
+test("adding a later season can defer first-season resolution to the background check", async () => {
+  const firstDetail = detail({
+    title: "万妖图录传第一季",
+    status: "completed",
+  });
+  const sixthDetail = detail({
+    seriesId: NEXT_ID,
+    title: "万妖图录传第六季",
+    status: "updating",
+    firstVisibleTime: "2026-10-20T08:00:00.000Z",
+  });
+  const harness = await createHarness({
+    rootDetail: firstDetail,
+    albumSeriesIds: [ROOT_ID, NEXT_ID],
+  });
+  harness.details.set(NEXT_ID, sixthDetail);
+
+  const result = await harness.service.addSubscription(NEXT_ID, {
+    deferFirstSeasonResolution: true,
+    requestPriority: 1,
+  });
+  assert.equal(result.title, "万妖图录传");
+  assert.deepEqual(harness.albumCalls, []);
+  assert.deepEqual(harness.detailCalls, [
+    {
+      seriesId: NEXT_ID,
+      options: { requestPriority: 1 },
+    },
+  ]);
+
+  await harness.service.checkSubscription(result.subscriptionId, {
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+    markUnread: false,
+    trigger: "add",
+  });
+  const state = await harness.store.read();
+  const subscription = state.subscriptions[0];
+  assert.equal(subscription.firstSeasonId, ROOT_ID);
+  assert.equal(subscription.firstSeasonTitle, "万妖图录传第一季");
+  assert.equal(
+    subscription.seasons.some((season) => season.seriesId === ROOT_ID),
+    true,
+  );
+});
+
+test("interactive add forwards request priority through scheduler wrappers", async () => {
+  const requestScheduler = {};
+  const harness = await createHarness({ requestScheduler });
+
+  await harness.service.addSubscription(ROOT_ID, {
+    deferFirstSeasonResolution: true,
+    requestPriority: 1,
+  });
+
+  assert.deepEqual(harness.resolveSharedCalls, [
+    {
+      input: ROOT_ID,
+      options: { requestPriority: 1, requestScheduler },
+    },
+  ]);
+  assert.deepEqual(harness.detailCalls, [
+    {
+      seriesId: ROOT_ID,
+      options: { requestPriority: 1, requestScheduler },
+    },
+  ]);
 });
 
 test("a manual check combines multiple season discoveries into one detailed notification", async () => {

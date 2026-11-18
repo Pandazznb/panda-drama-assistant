@@ -64,7 +64,9 @@
     loadController: null,
     loadMoreController: null,
     pendingAdds: new Set(),
+    pendingRemovals: new Set(),
     addControllers: new Map(),
+    removeControllers: new Map(),
     toastTimer: null,
     toastHideTimer: null,
     filterExpanded: true,
@@ -121,7 +123,7 @@
   }
 
   function groupLabel(group) {
-    return GROUP_LABELS[group?.type] || String(group?.label || "筛选");
+    return GROUP_LABELS[group?.type] || String(group?.label || "分类");
   }
 
   function findGroup(type) {
@@ -389,25 +391,36 @@
   function addButtonMarkup(item, title) {
     const seriesId = String(item?.seriesId || "");
     const tracked = Boolean(item?.tracked);
-    const pending = state.pendingAdds.has(seriesId);
+    const pendingAdd = state.pendingAdds.has(seriesId);
+    const pendingRemoval = state.pendingRemovals.has(seriesId);
+    const busy = pendingAdd || pendingRemoval;
+    const iconName = busy ? "refresh" : tracked ? "check" : "plus";
+    const label = pendingRemoval
+      ? "取消中…"
+      : pendingAdd
+        ? "加入中…"
+        : tracked
+          ? "正在追更"
+          : "加入追更";
     return `
       <button
         class="button discovery-card__add${tracked ? " is-tracked" : ""}${
-          pending ? " is-busy" : ""
+          busy ? " is-busy" : ""
         }"
         type="button"
-        data-action="add"
+        data-action="toggle"
         data-series-id="${escapeHtml(seriesId)}"
+        aria-pressed="${String(tracked)}"
         aria-label="${escapeHtml(
           tracked
-            ? `《${title}》已加入我的追更`
+            ? `《${title}》正在追更，点击停止追更`
             : `将《${title}》加入我的追更`,
         )}"
-        ${tracked || pending ? 'aria-disabled="true"' : ""}
-        ${pending ? 'aria-busy="true"' : ""}
+        title="${escapeHtml(tracked ? "点击停止追更" : "加入追更")}"
+        ${busy ? 'aria-disabled="true" aria-busy="true"' : ""}
       >
-        ${icon(tracked ? "check" : "plus")}
-        <span>${tracked ? "已追更" : pending ? "加入中…" : "加入追更"}</span>
+        ${icon(iconName)}
+        <span>${label}</span>
       </button>
     `;
   }
@@ -485,7 +498,7 @@
   }
 
   function emptyMarkup({ error = false, message = "" } = {}) {
-    const title = error ? "暂时无法筛选短剧" : "没有找到符合条件的短剧";
+    const title = error ? "暂时无法加载短剧" : "没有找到符合条件的短剧";
     const detail =
       message ||
       (error
@@ -531,10 +544,10 @@
     );
     elements.resultTitle.textContent =
       state.selection.genre === "comic_series"
-        ? "漫剧筛选结果"
+        ? "漫剧找剧结果"
         : state.selection.genre === "ai_series"
-          ? "AI 剧筛选结果"
-          : "筛选结果";
+          ? "AI 剧找剧结果"
+          : "找剧结果";
     elements.resultCount.textContent = state.loaded
       ? `${state.items.length} 部`
       : "-";
@@ -623,6 +636,8 @@
       );
       error.code = payload?.error?.code || "REQUEST_FAILED";
       error.status = response.status;
+      error.subscriptionId = payload?.error?.subscriptionId || "";
+      error.seriesTitle = payload?.error?.seriesTitle || "";
       throw error;
     }
     return payload;
@@ -703,8 +718,8 @@
     }
     setStatus(
       hadContent && !clear
-        ? "正在刷新筛选结果…"
-        : "正在读取红果官方筛选结果…",
+        ? "正在刷新找剧结果…"
+        : "正在读取红果官方找剧结果…",
     );
     renderFilters();
     renderResults();
@@ -747,10 +762,10 @@
       }
       const message =
         error.name === "AbortError" && timedOut
-          ? "筛选加载超时，请稍后重试。"
+          ? "找剧加载超时，请稍后重试。"
           : error.name === "AbortError"
             ? ""
-            : error.message || "筛选加载失败，请稍后重试。";
+            : error.message || "找剧加载失败，请稍后重试。";
       if (message) {
         if (hadContent && !clear) {
           state.notice = `刷新失败，继续显示上次结果：${message}`;
@@ -969,45 +984,72 @@
       return;
     }
     const button = elements.list.querySelector(
-      `[data-action="add"][data-series-id="${escapeSelectorValue(seriesId)}"]`,
+      `[data-action="toggle"][data-series-id="${escapeSelectorValue(
+        seriesId,
+      )}"]`,
     );
     if (!button) {
       return;
     }
     const title = String(item.title || "未命名短剧").trim() || "未命名短剧";
     const tracked = Boolean(item.tracked);
-    const pending = state.pendingAdds.has(String(seriesId));
+    const normalizedSeriesId = String(seriesId);
+    const pendingAdd = state.pendingAdds.has(normalizedSeriesId);
+    const pendingRemoval = state.pendingRemovals.has(normalizedSeriesId);
+    const busy = pendingAdd || pendingRemoval;
     button.classList.toggle("is-tracked", tracked);
-    button.classList.toggle("is-busy", pending);
-    if (tracked || pending) {
+    button.classList.toggle("is-busy", busy);
+    if (busy) {
       button.setAttribute("aria-disabled", "true");
     } else {
       button.removeAttribute("aria-disabled");
     }
+    button.setAttribute("aria-pressed", String(tracked));
     button.setAttribute(
       "aria-label",
       tracked
-        ? `《${title}》已加入我的追更`
+        ? `《${title}》正在追更，点击停止追更`
         : `将《${title}》加入我的追更`,
     );
-    if (pending) {
+    button.title = tracked ? "点击停止追更" : "加入追更";
+    if (busy) {
       button.setAttribute("aria-busy", "true");
     } else {
       button.removeAttribute("aria-busy");
     }
     button
       .querySelector("use")
-      ?.setAttribute("href", tracked ? "#icon-check" : "#icon-plus");
+      ?.setAttribute(
+        "href",
+        busy ? "#icon-refresh" : tracked ? "#icon-check" : "#icon-plus",
+      );
     const label = button.querySelector("span");
     if (label) {
-      label.textContent = tracked ? "已追更" : pending ? "加入中…" : "加入追更";
+      label.textContent = pendingRemoval
+        ? "取消中…"
+        : pendingAdd
+          ? "加入中…"
+          : tracked
+            ? "正在追更"
+            : "加入追更";
     }
   }
 
-  function markTracked(seriesId) {
+  function markTracked(seriesId, subscriptionId = "") {
     for (const item of state.items) {
       if (String(item?.seriesId || "") === String(seriesId)) {
         item.tracked = true;
+        item.subscriptionId = subscriptionId || item.subscriptionId || null;
+      }
+    }
+    updateAddButton(seriesId);
+  }
+
+  function markUntracked(seriesId) {
+    for (const item of state.items) {
+      if (String(item?.seriesId || "") === String(seriesId)) {
+        item.tracked = false;
+        item.subscriptionId = null;
       }
     }
     updateAddButton(seriesId);
@@ -1042,13 +1084,13 @@
         });
       } catch (error) {
         if (error.status === 409 && error.code === "SUBSCRIPTION_EXISTS") {
-          markTracked(seriesId);
+          markTracked(seriesId, error.subscriptionId);
           showToast(`《${title}》已经在追更中。`);
           return;
         }
         throw error;
       }
-      markTracked(seriesId);
+      markTracked(seriesId, payload?.result?.subscriptionId);
       showToast(payload.message || `已加入追更：《${title}》`);
     } catch (error) {
       if (timedOut) {
@@ -1063,6 +1105,72 @@
       clearTimeout(timeout);
       state.pendingAdds.delete(String(seriesId));
       state.addControllers.delete(String(seriesId));
+      updateAddButton(seriesId);
+    }
+  }
+
+  async function removeFromWatchlist(seriesId, button) {
+    const item = state.items.find(
+      (candidate) => String(candidate?.seriesId || "") === String(seriesId),
+    );
+    if (
+      !item ||
+      !item.tracked ||
+      state.pendingAdds.has(String(seriesId)) ||
+      state.pendingRemovals.has(String(seriesId))
+    ) {
+      return;
+    }
+
+    const title = String(item.title || "未命名短剧").trim() || "未命名短剧";
+    let subscriptionId = String(item.subscriptionId || "");
+    if (!subscriptionId) {
+      const dashboard = await fetchJson("/api/state");
+      const subscription = (dashboard?.subscriptions || []).find((candidate) =>
+        (candidate?.seasons || []).some(
+          (season) => String(season?.seriesId || "") === String(seriesId),
+        ),
+      );
+      subscriptionId = String(subscription?.id || "");
+      if (subscriptionId) {
+        item.subscriptionId = subscriptionId;
+      }
+    }
+    if (!subscriptionId) {
+      showToast("未找到这条追更记录，请刷新找剧结果后重试。", "error");
+      return;
+    }
+
+    state.pendingRemovals.add(String(seriesId));
+    updateAddButton(seriesId);
+    const controller = new AbortController();
+    state.removeControllers.set(String(seriesId), controller);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 30_000);
+
+    try {
+      const payload = await fetchJson(
+        `/api/subscriptions/${encodeURIComponent(subscriptionId)}`,
+        {
+          method: "DELETE",
+          signal: controller.signal,
+        },
+      );
+      markUntracked(seriesId);
+      showToast(payload.message || `已停止追更：《${title}》`);
+    } catch (error) {
+      if (timedOut) {
+        showToast("停止追更超时，请稍后重试。", "error");
+      } else if (error.name !== "AbortError") {
+        showToast(error.message || "停止追更失败，请稍后重试。", "error");
+      }
+    } finally {
+      clearTimeout(timeout);
+      state.pendingRemovals.delete(String(seriesId));
+      state.removeControllers.delete(String(seriesId));
       updateAddButton(seriesId);
     }
   }
@@ -1144,8 +1252,17 @@
     if (!action) {
       return;
     }
-    if (action.dataset.action === "add") {
-      addToWatchlist(action.dataset.seriesId, action);
+    if (action.dataset.action === "toggle") {
+      const item = state.items.find(
+        (candidate) =>
+          String(candidate?.seriesId || "") ===
+          String(action.dataset.seriesId || ""),
+      );
+      if (item?.tracked) {
+        removeFromWatchlist(action.dataset.seriesId, action);
+      } else {
+        addToWatchlist(action.dataset.seriesId, action);
+      }
     } else if (action.dataset.action === "retry") {
       loadFirstPage({ clear: true });
     } else if (action.dataset.action === "reset") {

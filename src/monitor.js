@@ -1362,7 +1362,8 @@ export class ReminderService {
         ? fetchSeriesProgressBatch
         : null);
     this.fetchDetail = requestScheduler
-      ? (seriesId) => fetchDetail(seriesId, { requestScheduler })
+      ? (seriesId, options = {}) =>
+          fetchDetail(seriesId, { ...options, requestScheduler })
       : fetchDetail;
     this.fetchAlbumSeries = requestScheduler
       ? (seriesId) => fetchAlbumSeries(seriesId, { requestScheduler })
@@ -1378,7 +1379,8 @@ export class ReminderService {
         : resolvedProgressBatch
       : null;
     this.resolveShared = requestScheduler
-      ? (input) => resolveShared(input, { requestScheduler })
+      ? (input, options = {}) =>
+          resolveShared(input, { ...options, requestScheduler })
       : resolveShared;
     this.sendNotifications = sendNotifications;
     this.systemLog = systemLog;
@@ -1420,7 +1422,11 @@ export class ReminderService {
         "";
     }
     const triggerLabel =
-      trigger === "cron" ? "自动检查" : "手动检查";
+      trigger === "cron"
+        ? "自动检查"
+        : trigger === "add"
+          ? "新增追更核验"
+          : "手动检查";
     const scopeLabel =
       scope === "single" ? (title ? `《${title}》` : "单个系列") : "全部追更";
     const skipped = [
@@ -1526,13 +1532,24 @@ export class ReminderService {
     }
   }
 
-  async addSubscription(input, { detail: preparedDetail = null } = {}) {
+  async addSubscription(
+    input,
+    {
+      detail: preparedDetail = null,
+      deferFirstSeasonResolution = false,
+      requestPriority = 0,
+    } = {},
+  ) {
     let detail = preparedDetail;
     if (!detail) {
-      const resolved = await this.resolveShared(input);
-      ({ detail } = await this.fetchDetail(resolved.seriesId));
+      const resolved = await this.resolveShared(input, { requestPriority });
+      ({ detail } = await this.fetchDetail(resolved.seriesId, {
+        requestPriority,
+      }));
     }
-    const firstSeasonDetail = await this.resolveFirstSeasonDetail(detail);
+    const firstSeasonDetail = deferFirstSeasonResolution
+      ? null
+      : await this.resolveFirstSeasonDetail(detail);
     const timestamp = this.now().toISOString();
 
     return this.store.mutate((state) => {
