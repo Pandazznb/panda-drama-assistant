@@ -1,18 +1,94 @@
 # 熊猫 · 短剧助手
 
-界面显示名为“短剧助手”。这是一个本地运行的短剧追更工具，通过红果公开分享链接、剧集 ID、收藏页截图或账号登录建立追更，定时检查同一官方系列的新季、新集与完结状态，并通过 Bark、ntfy、Telegram Bot、企业微信群机器人、企业微信应用或钉钉发送提醒。
+<p align="center">
+  <b>简体中文</b> · <a href="#快速开始">快速开始</a> · <a href="#文档导航">文档导航</a> · <a href="https://github.com/Pandazznb/panda-drama-assistant/releases/latest">更新日志</a>
+</p>
 
-项目：`panda-drama-assistant`
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme-hero-dark.webp">
+    <img src="docs/assets/readme-hero-light.webp" alt="熊猫 · 短剧助手：追新季，也不漏新集" width="100%">
+  </picture>
+</p>
 
-GitHub：<https://github.com/Pandazznb/panda-drama-assistant>
+<p align="center">
+  <b>把短剧放进一个地方，更新交给它盯着。</b><br>
+  从分享链接、账号收藏、截图或官方榜单建立追更，自动发现同一系列的新季、新集和完结变化。
+</p>
 
-Docker Hub：<https://hub.docker.com/r/pandazzz/panda-drama-assistant>
+<p align="center">
+  <a href="https://github.com/Pandazznb/panda-drama-assistant/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/Pandazznb/panda-drama-assistant?style=flat-square&amp;color=dc2626&amp;label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&amp;labelColor=18181b"></a>
+  <a href="#运行"><img alt="Node.js 24+" src="https://img.shields.io/badge/Node.js-24%2B-339933?style=flat-square&amp;logo=node.js&amp;logoColor=white&amp;labelColor=18181b"></a>
+  <a href="#docker-部署"><img alt="Docker amd64 / arm64" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ed?style=flat-square&amp;logo=docker&amp;logoColor=white&amp;labelColor=18181b"></a>
+  <a href="#安装为-pwa"><img alt="PWA Ready" src="https://img.shields.io/badge/PWA-Ready-5a0fc8?style=flat-square&amp;labelColor=18181b"></a>
+  <a href="https://github.com/Pandazznb/panda-drama-assistant/stargazers"><img alt="GitHub Star 数" src="https://img.shields.io/github/stars/Pandazznb/panda-drama-assistant?style=flat-square&amp;logo=github&amp;label=Star&amp;color=dc2626&amp;labelColor=18181b"></a>
+</p>
 
-![短剧助手手机端界面截图](docs/mobile-screenshot-v5.jpg)
+<p align="center">
+  <a href="#快速开始"><img alt="快速开始" src="https://img.shields.io/badge/%E5%BF%AB%E9%80%9F%E5%BC%80%E5%A7%8B-%E7%AB%8B%E5%8D%B3%E9%83%A8%E7%BD%B2-dc2626?style=for-the-badge&amp;labelColor=18181b"></a>&nbsp;
+  <a href="https://hub.docker.com/r/pandazzz/panda-drama-assistant"><img alt="Docker Hub" src="https://img.shields.io/badge/Docker%20Hub-pandazzz-2496ed?style=for-the-badge&amp;logo=docker&amp;logoColor=white&amp;labelColor=18181b"></a>&nbsp;
+  <a href="https://github.com/Pandazznb/panda-drama-assistant/releases"><img alt="查看更新" src="https://img.shields.io/badge/GitHub-%E6%9F%A5%E7%9C%8B%E6%9B%B4%E6%96%B0-24292f?style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;labelColor=18181b"></a>
+</p>
 
-收藏截图使用本机 Tesseract OCR 识别，不会上传到第三方图片服务。识别出的剧名会通过红果官方公开搜索接口核对候选，用户确认后才加入追更。
+## 核心能力
 
-## 功能
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>新季、新集都跟踪</h3>
+      <p>按官方系列分组识别同一系列，持续检查已确认季度，并发现后来上线的新季。</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>提醒按你的习惯来</h3>
+      <p>支持 Cron 检查计划、加集汇总、持续提醒、消息模板，以及六种通知渠道和独立代理。</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>账号双向同步</h3>
+      <p>读取红果账号中的收藏和预约；本地新增或删除追更，也会在下一次同步时写回账号。</p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h3>多种方式建立追更</h3>
+      <p>分享文本、短链、剧集 ID、收藏截图、官方榜单和找剧结果，都可以直接加入。</p>
+    </td>
+    <td valign="top">
+      <h3>找剧和发现更新</h3>
+      <p>按官方分类浏览每日榜单，或组合题材、状态、集数和标签筛选，再一键加入追更。</p>
+    </td>
+    <td valign="top">
+      <h3>本地优先，随时迁移</h3>
+      <p>SQLite 保存数据，支持 Docker 多架构、PWA 安装和旧版 JSON 自动迁移。</p>
+    </td>
+  </tr>
+</table>
+
+## 快速开始
+
+推荐使用 Docker Compose 部署。先下载仓库中的 [`docker-compose.yml`](docker-compose.yml)，在同目录执行：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+启动后访问 <http://127.0.0.1:3417>，即可从分享链接、截图或账号登录开始添加追更。完整部署、数据迁移和源码运行说明见 [Docker 部署](#docker-部署) 与 [运行](#运行)。
+
+项目名：`panda-drama-assistant`<br>
+Docker 镜像：`pandazzz/panda-drama-assistant:latest`
+
+## 文档导航
+
+| 我想了解 | 查看 |
+| --- | --- |
+| 如何部署和升级 | [Docker 部署](#docker-部署) · [数据库自动升级](#数据库自动升级) |
+| 如何添加、检查和整理追更 | [使用](#使用) |
+| 如何配置 Bark、ntfy、Telegram、企业微信或钉钉 | [通知渠道](#通知渠道) |
+| 新季、新集和完结状态怎样判断 | [同系列与最新季](#同系列与最新季) · [更新规则](#更新规则) |
+| 账号收藏、预约和本机数据是否安全 | [账号同步与隐私](#账号同步与隐私) · [数据与限制](#数据与限制) |
+| 如何安装为手机应用 | [安装为 PWA](#安装为-pwa) |
+
+## 完整功能
 
 - 支持红果分享文本、短链、详情页 URL、播放页 URL 和纯数字剧集 ID。
 - 顶部导航提供红果榜单页，按官方内容分类（全部、漫剧、真人剧、AI 剧）和榜单类型（热播、臻果、预约、新剧、热搜、必看、收藏）浏览，并直接从榜单加入追更。

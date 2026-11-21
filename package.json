@@ -6,7 +6,8 @@
   "description": "熊猫 · 短剧助手：追踪短剧新季、新集并通过多渠道发送提醒",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "readme:assets": "node scripts/generate-readme-assets.mjs"
   },
   "engines": {
     "node": ">=24"
