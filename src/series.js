@@ -5,7 +5,18 @@ import {
 } from "./utils.js";
 
 const SEASON_PATTERN = /第\s*([零〇一二两三四五六七八九十百\d]+)\s*季/gu;
-const SERIES_FINALE_PATTERN = /完结篇/u;
+const SERIES_FINALE_MARKERS = [
+  "完结篇",
+  "大结局",
+  "全剧终",
+  "最终季",
+  "收官季",
+  "收官篇",
+];
+const SERIES_FINALE_PATTERN = new RegExp(
+  SERIES_FINALE_MARKERS.join("|"),
+  "u",
+);
 
 export function chineseNumber(value) {
   const text = String(value || "");
@@ -153,12 +164,20 @@ export function highestSeason(seasons) {
   )[0];
 }
 
-export function hasSeriesFinaleMarker(seasonOrTitle) {
+export function seriesCompletionMarker(seasonOrTitle) {
   const title =
     typeof seasonOrTitle === "string"
       ? seasonOrTitle
       : seasonOrTitle?.title;
-  return SERIES_FINALE_PATTERN.test(normalizeWhitespace(title || ""));
+  const searchableTitle = normalizeWhitespace(title || "").replace(
+    /\s+/gu,
+    "",
+  );
+  return searchableTitle.match(SERIES_FINALE_PATTERN)?.[0] || null;
+}
+
+export function hasSeriesFinaleMarker(seasonOrTitle) {
+  return Boolean(seriesCompletionMarker(seasonOrTitle));
 }
 
 export function selectFirstSeason(seasons) {
@@ -442,17 +461,18 @@ export function deriveSeriesStatus(
       seriesVerificationComplete(normalizedSeasons, confirmedSeriesIds)
     ) {
       const finalSeason = highestSeason(normalizedSeasons);
-      if (!hasSeriesFinaleMarker(finalSeason)) {
+      const completionMarker = seriesCompletionMarker(finalSeason);
+      if (!completionMarker) {
         return {
           status: SERIES_STATUS.UNKNOWN,
           reason: `官方多季列表已核验：${normalizedSeasons.length} 季均已完结，但最高季《${
             finalSeason?.title || "未知季度"
-          }》标题没有明确“完结篇”标识，无法确认整个系列完结。`,
+          }》标题没有明确的系列完结标识（例如“完结篇”“大结局”或“全剧终”），无法确认整个系列完结。`,
         };
       }
       return {
         status: SERIES_STATUS.COMPLETED,
-        reason: `官方多季列表已核验：最高季《${finalSeason.title}》明确标注“完结篇”，整个系列已完结，已停止自动检查。`,
+        reason: `官方多季列表已核验：最高季《${finalSeason.title}》以“${completionMarker}”明确标注系列完结，已停止自动检查。`,
       };
     }
     return {

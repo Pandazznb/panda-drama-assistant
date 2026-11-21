@@ -47,6 +47,7 @@ import {
   highestSeason,
   normalizeAlbumMetadata,
   seasonNumber,
+  seriesCompletionMarker,
   seriesVerificationComplete,
   titleWithoutSeason,
 } from "./series.js";
@@ -1631,7 +1632,7 @@ export class ReminderService {
           seriesStatusReason:
             detail.status === SERIES_STATUS.UPDATING
               ? "已确认季度中有季度仍在更新。"
-              : "已确认季度均已完结，等待官方多季列表及最高季“完结篇”标识核验。",
+              : "已确认季度均已完结，等待官方多季列表及最高季系列完结标识核验。",
           seriesStatusOverride: null,
           seriesStatusOverrideAt: null,
           completedAt: null,
@@ -3444,6 +3445,9 @@ export class ReminderService {
         current.seriesCompletionVerifiedAt ||= timestamp;
         current.completedAt ||= timestamp;
         if (!current.seriesCompletionAnnounced) {
+          const completionMarker =
+            seriesCompletionMarker(highestSeason(current.seasons)) ||
+            "系列完结";
           resumeMutedReminderForNewUpdate(current);
           const seasonEpisodeCount = current.seasons.reduce(
             (sum, season) => sum + (season.highWaterEpisodeCount || 0),
@@ -3455,7 +3459,7 @@ export class ReminderService {
             subscriptionId: current.id,
             seasonId: null,
             seasonTitle: identity.displayTitle,
-            message: `《${identity.displayTitle}》最高季明确标注“完结篇”，整个系列已完结，共 ${current.seasons.length} 季，合计 ${seasonEpisodeCount} 集。`,
+            message: `《${identity.displayTitle}》最高季以“${completionMarker}”明确标注系列完结，共 ${current.seasons.length} 季，合计 ${seasonEpisodeCount} 集。`,
             episodeCount: seasonEpisodeCount,
             seasonCount: current.seasons.length,
             previousEpisodeCount: null,

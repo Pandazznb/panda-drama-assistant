@@ -964,7 +964,7 @@ test("normalizeState clears a verified legacy completion without a finale marker
   const subscription = normalized.subscriptions[0];
   assert.equal(normalized.version, 14);
   assert.equal(subscription.seriesStatus, "unknown");
-  assert.match(subscription.seriesStatusReason, /完结篇/);
+  assert.match(subscription.seriesStatusReason, /系列完结标识/);
   assert.equal(subscription.completedAt, null);
   assert.equal(subscription.seriesCompletionAnnounced, false);
   assert.equal(subscription.seriesCompletionVerifiedAt, null);

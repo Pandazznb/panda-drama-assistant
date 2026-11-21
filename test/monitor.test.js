@@ -2238,7 +2238,7 @@ test("all completed seasons stay unknown without a series finale marker", async 
   );
   const state = await harness.store.read();
   assert.equal(state.subscriptions[0].seriesStatus, "unknown");
-  assert.match(state.subscriptions[0].seriesStatusReason, /完结篇/);
+  assert.match(state.subscriptions[0].seriesStatusReason, /系列完结标识/);
   assert.equal(
     state.events.filter((event) => event.type === "completed").length,
     0,
@@ -2259,7 +2259,7 @@ test("complete series is announced once and non-forced checks are skipped", asyn
   harness.details.set(
     ROOT_ID,
     detail({
-      title: "测试短剧第一季完结篇",
+      title: "测试短剧第一季大结局",
       episodeCount: 12,
       status: "completed",
     }),
@@ -2279,6 +2279,10 @@ test("complete series is announced once and non-forced checks are skipped", asyn
   assert.equal(
     state.events.filter((event) => event.type === "completed").length,
     1,
+  );
+  assert.match(
+    state.events.find((event) => event.type === "completed").message,
+    /大结局/,
   );
   assert.equal(
     harness.notifications.filter(
