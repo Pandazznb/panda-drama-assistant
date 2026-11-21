@@ -341,6 +341,15 @@ const appState = {
     busy: false,
     returnFocus: null,
   },
+  dashboardRefresh: {
+    timer: null,
+    eventTimer: null,
+    inFlight: false,
+    failures: 0,
+    fingerprint: "",
+    requestSequence: 0,
+    activeRequests: 0,
+  },
   addDialogReturnFocus: null,
   settingsTab: "account",
   templateFocusedField: null,
@@ -370,6 +379,9 @@ const SERIES_SEARCH_DELAY_MS = 320;
 const SERIES_SEARCH_MAX_QUERY_LENGTH = 30;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const DASHBOARD_REQUEST_TIMEOUT_MS = 12_000;
+const DASHBOARD_REFRESH_INTERVAL_MS = 30_000;
+const DASHBOARD_REFRESH_MAX_BACKOFF_MS = 120_000;
+const DASHBOARD_REFRESH_EVENT_DEBOUNCE_MS = 250;
 const SETTINGS_REQUEST_TIMEOUT_MS = 15_000;
 const SCREENSHOT_ANALYZE_TIMEOUT_MS = 70_000;
 const SCREENSHOT_IMPORT_TIMEOUT_MS = 180_000;
@@ -2387,17 +2399,111 @@ function renderDashboard({ listMotion = "" } = {}) {
   document.dispatchEvent(new Event("scroll-controls:update"));
 }
 
-async function loadDashboard({ silent = false } = {}) {
+function dashboardFingerprint(dashboard) {
+  try {
+    return JSON.stringify(dashboard);
+  } catch {
+    return "";
+  }
+}
+
+function dashboardRefreshDelay() {
+  const exponent = Math.min(
+    Math.max(appState.dashboardRefresh.failures - 1, 0),
+    2,
+  );
+  return Math.min(
+    DASHBOARD_REFRESH_INTERVAL_MS * 2 ** exponent,
+    DASHBOARD_REFRESH_MAX_BACKOFF_MS,
+  );
+}
+
+function clearDashboardRefreshTimer() {
+  clearTimeout(appState.dashboardRefresh.timer);
+  appState.dashboardRefresh.timer = null;
+}
+
+function scheduleDashboardRefresh(delay = DASHBOARD_REFRESH_INTERVAL_MS) {
+  clearDashboardRefreshTimer();
+  if (document.visibilityState !== "visible") {
+    return;
+  }
+  appState.dashboardRefresh.timer = window.setTimeout(() => {
+    appState.dashboardRefresh.timer = null;
+    void refreshDashboardInBackground();
+  }, Math.max(0, delay));
+}
+
+async function refreshDashboardInBackground() {
+  const refreshState = appState.dashboardRefresh;
+  if (document.visibilityState !== "visible") {
+    return;
+  }
+  if (refreshState.inFlight || refreshState.activeRequests > 0) {
+    scheduleDashboardRefresh(DASHBOARD_REFRESH_INTERVAL_MS);
+    return;
+  }
+
+  clearDashboardRefreshTimer();
+  refreshState.inFlight = true;
+  let succeeded = false;
+  try {
+    succeeded = await loadDashboard({
+      silent: true,
+      background: true,
+    });
+  } finally {
+    refreshState.inFlight = false;
+    refreshState.failures = succeeded ? 0 : refreshState.failures + 1;
+    scheduleDashboardRefresh(dashboardRefreshDelay());
+  }
+}
+
+function refreshDashboardAfterPageEvent() {
+  if (document.visibilityState !== "visible") {
+    return;
+  }
+  clearTimeout(appState.dashboardRefresh.eventTimer);
+  appState.dashboardRefresh.eventTimer = window.setTimeout(() => {
+    appState.dashboardRefresh.eventTimer = null;
+    clearDashboardRefreshTimer();
+    void refreshDashboardInBackground();
+  }, DASHBOARD_REFRESH_EVENT_DEBOUNCE_MS);
+}
+
+async function loadDashboard({
+  silent = false,
+  background = false,
+  forceRender = false,
+} = {}) {
+  const refreshState = appState.dashboardRefresh;
+  const requestSequence = ++refreshState.requestSequence;
+  refreshState.activeRequests += 1;
   if (!silent) {
     setPageBusy(true);
   }
   try {
-    appState.dashboard = await requestJson("/api/state", {
+    const dashboard = await requestJson("/api/state", {
       method: "GET",
       timeoutMs: DASHBOARD_REQUEST_TIMEOUT_MS,
     });
-    renderDashboard();
+    if (requestSequence !== refreshState.requestSequence) {
+      return false;
+    }
+    const nextFingerprint = dashboardFingerprint(dashboard);
+    const hasChanged =
+      !refreshState.fingerprint ||
+      nextFingerprint !== refreshState.fingerprint;
+    appState.dashboard = dashboard;
+    refreshState.fingerprint = nextFingerprint;
+    if (hasChanged || forceRender || !appState.hasRenderedSubscriptionList) {
+      renderDashboard();
+    }
+    return true;
   } catch (error) {
+    if (requestSequence !== refreshState.requestSequence) {
+      return false;
+    }
     if (!appState.dashboard) {
       elements.subscriptionList.innerHTML = `
         <div class="empty-state">
@@ -2407,11 +2513,21 @@ async function loadDashboard({ silent = false } = {}) {
         </div>
       `;
     }
-    showToast(error.message, "error");
+    if (!background) {
+      showToast(error.message, "error");
+    }
+    return false;
   } finally {
-    if (!silent) {
+    refreshState.activeRequests = Math.max(
+      0,
+      refreshState.activeRequests - 1,
+    );
+    if (
+      !silent &&
+      (requestSequence === refreshState.requestSequence ||
+        refreshState.activeRequests === 0)
+    ) {
       setPageBusy(false);
-      renderDashboard();
     }
   }
 }
@@ -7667,8 +7783,28 @@ for (const input of elements.settingsForm.querySelectorAll(
   });
 }
 
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    refreshDashboardAfterPageEvent();
+    return;
+  }
+  clearDashboardRefreshTimer();
+  clearTimeout(appState.dashboardRefresh.eventTimer);
+  appState.dashboardRefresh.eventTimer = null;
+});
+
+window.addEventListener("focus", refreshDashboardAfterPageEvent);
+window.addEventListener("online", refreshDashboardAfterPageEvent);
+window.addEventListener("pageshow", refreshDashboardAfterPageEvent);
+window.addEventListener("pagehide", () => {
+  clearDashboardRefreshTimer();
+  clearTimeout(appState.dashboardRefresh.eventTimer);
+  appState.dashboardRefresh.eventTimer = null;
+});
+
 resetSeriesSearch();
 void loadDashboard().then(() => {
+  scheduleDashboardRefresh();
   watchBatchCheck();
   const pageUrl = new URL(window.location.href);
   if (pageUrl.searchParams.get("settings") === "1") {
