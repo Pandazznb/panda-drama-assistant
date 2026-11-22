@@ -274,24 +274,12 @@
   border-radius: 999px;
 }
 
-.calendar-legend__dot--season,
-.calendar-legend__item--season .calendar-legend__dot {
+.calendar-legend__dot--season {
   background: var(--color-info);
 }
 
-.calendar-legend__dot--episode,
-.calendar-legend__item--episode .calendar-legend__dot {
+.calendar-legend__dot--episode {
   background: var(--color-accent);
-}
-
-.calendar-legend__dot--reservation,
-.calendar-legend__item--reservation .calendar-legend__dot {
-  background: var(--color-success);
-}
-
-.calendar-legend__dot--pending,
-.calendar-legend__item--pending .calendar-legend__dot {
-  background: var(--color-warning);
 }
 
 .calendar-legend__dot--today,
@@ -1733,20 +1721,6 @@
   box-shadow: 0 3px 10px color-mix(in srgb, var(--color-accent) 13%, transparent);
 }
 
-.calendar-page .calendar-type-filter__button[data-calendar-type="reservation"].is-active {
-  color: var(--color-success);
-  background: var(--color-success-soft);
-  border-color: var(--color-success-border);
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--color-success) 12%, transparent);
-}
-
-.calendar-page .calendar-type-filter__button[data-calendar-type="pending"].is-active {
-  color: var(--color-warning-ink);
-  background: var(--color-warning-soft);
-  border-color: var(--color-warning-border);
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--color-warning) 12%, transparent);
-}
-
 .calendar-page .calendar-view-switch__button:active,
 .calendar-page .calendar-type-filter__button:active {
   transform: scale(0.97);
@@ -1781,14 +1755,6 @@
 
 .calendar-page .calendar-legend__dot--episode {
   background: var(--color-accent);
-}
-
-.calendar-page .calendar-legend__dot--reservation {
-  background: var(--color-success);
-}
-
-.calendar-page .calendar-legend__dot--pending {
-  background: var(--color-warning);
 }
 
 .calendar-page .calendar-legend__dot--today {

@@ -1729,6 +1729,13 @@ test("calendar page is served and linked from every primary page", async (t) => 
     assert.match(page, /aria-current="page"/);
     assert.match(page, /href="\/calendar\.css"/);
     assert.match(page, /type="module" src="\/calendar\.js"/);
+    assert.match(page, /data-calendar-type="season"/);
+    assert.match(page, /data-calendar-type="episode"/);
+    assert.doesNotMatch(page, /data-calendar-type="reservation"/);
+    assert.doesNotMatch(page, /data-calendar-type="pending"/);
+    assert.doesNotMatch(page, /calendar-legend__item--season/);
+    assert.doesNotMatch(page, /calendar-legend__item--episode/);
+    assert.match(page, /calendar-legend__item--today/);
   }
 
   const scriptResponse = await fetch(`${harness.origin}/calendar.js`);

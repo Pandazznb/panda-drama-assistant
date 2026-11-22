@@ -138,11 +138,7 @@ import {
   function readStoredType() {
     try {
       const type = window.localStorage.getItem(TYPE_STORAGE_KEY);
-      return ["season", "episode", "reservation", "pending"].includes(
-        type,
-      )
-        ? type
-        : "all";
+      return ["season", "episode"].includes(type) ? type : "all";
     } catch {
       return "all";
     }
@@ -1060,23 +1056,11 @@ import {
         (entry) => entry.type === "update" && entry.kind === "episode",
       );
     }
-    if (state.typeFilter === "reservation") {
-      return entries.filter((entry) => entry.type === "reservation");
-    }
     return [];
   }
 
   function filterPendingEntries(entries) {
-    if (state.typeFilter === "all") {
-      return entries;
-    }
-    if (state.typeFilter === "reservation") {
-      return entries.filter((entry) => entry.type === "reservation");
-    }
-    if (state.typeFilter === "pending") {
-      return entries;
-    }
-    return [];
+    return state.typeFilter === "all" ? entries : [];
   }
 
   function typeFilterLabel() {
@@ -1084,8 +1068,6 @@ import {
       {
         season: "季更新",
         episode: "集更新",
-        reservation: "账号预约",
-        pending: "待公布",
       }[state.typeFilter] || "全部"
     );
   }
@@ -1656,11 +1638,7 @@ import {
   }
 
   function switchType(type, { focus = false } = {}) {
-    if (
-      !["all", "season", "episode", "reservation", "pending"].includes(
-        type,
-      )
-    ) {
+    if (!["all", "season", "episode"].includes(type)) {
       return;
     }
     state.typeFilter = type;
