@@ -35,6 +35,7 @@ import {
   hasSeriesFinaleMarker,
   highestSeason,
   normalizeConfirmedSeriesIds,
+  normalizeUnpublishedSeasons,
   seriesVerificationComplete,
 } from "./series.js";
 import {
@@ -633,10 +634,21 @@ function normalizeSubscription(subscription) {
     subscription.discovery?.confirmedSeriesIds,
   );
   const unpublishedSeriesIds = normalizeConfirmedSeriesIds(
-    subscription.discovery?.unpublishedSeriesIds,
+    [
+      ...(Array.isArray(subscription.discovery?.unpublishedSeriesIds)
+        ? subscription.discovery.unpublishedSeriesIds
+        : []),
+      ...normalizeUnpublishedSeasons(
+        subscription.discovery?.unpublishedSeasons,
+      ).map((season) => season.seriesId),
+    ],
+  );
+  const unpublishedSeasons = normalizeUnpublishedSeasons(
+    subscription.discovery?.unpublishedSeasons,
   );
   const unpublishedSeasonCount = Math.max(
     unpublishedSeriesIds.length,
+    unpublishedSeasons.length,
     toSafeInteger(subscription.discovery?.unpublishedSeasonCount, 0),
   );
   const lastDiscoveryIssue = normalizeWhitespace(
@@ -777,6 +789,7 @@ function normalizeSubscription(subscription) {
       lastDiscoveryIssue: lastDiscoveryIssue || null,
       confirmedSeriesIds,
       unpublishedSeriesIds,
+      unpublishedSeasons,
       unpublishedSeasonCount,
       albumSeasonCount: Number.isFinite(
         Number(subscription.discovery?.albumSeasonCount),

@@ -1179,6 +1179,7 @@ function normalizeAlbumSeriesInfo(albumInfo) {
     : [];
   const publishedSeriesIds = new Set();
   const unpublishedSeriesIds = new Set();
+  const unpublishedSeasons = new Map();
   const unpublishedSlots = new Set();
   for (const [index, item] of seriesItems.entries()) {
     if (!item || typeof item !== "object") {
@@ -1189,6 +1190,11 @@ function normalizeAlbumSeriesInfo(albumInfo) {
       unpublishedSlots.add(candidateId || `shell-${index}`);
       if (/^\d{8,25}$/.test(candidateId)) {
         unpublishedSeriesIds.add(candidateId);
+        unpublishedSeasons.set(candidateId, {
+          seriesId: candidateId,
+          seasonIndex: toSafeInteger(item.season_index, null),
+          coverUrl: normalizeWhitespace(item.series_cover || ""),
+        });
       }
       continue;
     }
@@ -1209,6 +1215,7 @@ function normalizeAlbumSeriesInfo(albumInfo) {
     publishedSeriesIds: [...publishedSeriesIds],
     seriesIds: [...publishedSeriesIds],
     unpublishedSeriesIds: [...unpublishedSeriesIds],
+    unpublishedSeasons: [...unpublishedSeasons.values()],
     unpublishedSeasonCount: unpublishedSlots.size,
     declaredSeasonCount: toSafeInteger(
       albumInfo.album_serial_count,

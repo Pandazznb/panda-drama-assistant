@@ -2,7 +2,7 @@ import { APP_NAME, BARK_API_ORIGIN } from "./constants.js";
 
 const MAX_BARK_KEY_LENGTH = 128;
 const MAX_TITLE_LENGTH = 64;
-const MAX_BODY_LENGTH = 180;
+const MAX_BODY_LENGTH = 500;
 const NOTIFICATION_TIMEOUT_MS = 12_000;
 const BARK_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -48,6 +48,29 @@ function truncate(value, maxLength) {
   return `${text.slice(0, maxLength - 1)}…`;
 }
 
+function truncateNotificationBody(value, maxLength, title = "") {
+  const text = String(value || "").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  const lines = text.split("\n");
+  const updateLines = lines.filter((line) => line.startsWith("• "));
+  if (updateLines.length < 2 || updateLines.length !== lines.length) {
+    return truncate(text, maxLength);
+  }
+
+  const countLabel = /部更新/u.test(String(title || "")) ? "部" : "条";
+  for (let count = updateLines.length - 1; count > 0; count -= 1) {
+    const omitted = updateLines.length - count;
+    const candidate = `${updateLines.slice(0, count).join("\n")}\n另有 ${omitted} ${countLabel}，打开${APP_NAME}查看`;
+    if (candidate.length <= maxLength) {
+      return candidate;
+    }
+  }
+  return truncate(text, maxLength);
+}
+
 export function buildBarkRequest(key, { title, body, group = APP_NAME }) {
   const normalizedKey = normalizeBarkKey(key);
   if (!normalizedKey) {
@@ -66,7 +89,7 @@ export function buildBarkRequest(key, { title, body, group = APP_NAME }) {
     endpoint: endpoint.href,
     payload: {
       title: truncate(title, MAX_TITLE_LENGTH),
-      body: truncate(body, MAX_BODY_LENGTH),
+      body: truncateNotificationBody(body, MAX_BODY_LENGTH, title),
       group: truncate(group, 32),
       level: "active",
     },

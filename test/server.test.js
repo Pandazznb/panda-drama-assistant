@@ -350,24 +350,59 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /id="settings-account-sync-details"/);
   assert.doesNotMatch(page, /id="settings-account-details"/);
   assert.match(page, /同步明细/);
-  const templateVariableLabels = {
-    appName: "助手名称",
-    seriesTitle: "系列名称",
-    checkTime: "检查时间",
-    updateCount: "更新系列数",
-    updates: "更新明细",
-    seasonCount: "季数",
-    reminderTime: "提醒时间",
-  };
-  for (const [variable, label] of Object.entries(templateVariableLabels)) {
-    assert.match(
-      page,
-      new RegExp(
-        `data-template-variable="${variable}"[\\s\\S]{0,280}?` +
-          `<span class="template-variable__label">${label}</span>`,
-      ),
-    );
+  const templateSectionStart = page.indexOf(
+    'data-settings-panel="templates"',
+  );
+  const templateSection = page.slice(
+    templateSectionStart,
+    page.indexOf("</section>", templateSectionStart),
+  );
+  for (const type of ["detailed", "batch", "reminder"]) {
+    for (const field of [
+      "title",
+      "body",
+      "seasonLine",
+      "episodeLine",
+      "completedLine",
+    ]) {
+      assert.match(
+        templateSection,
+        new RegExp(
+          `id="template-${type}-${field
+            .replaceAll(/([A-Z])/g, "-$1")
+            .toLowerCase()}"`,
+        ),
+      );
+    }
   }
+  assert.equal(
+    (templateSection.match(/data-template-field="/g) || []).length,
+    15,
+  );
+  assert.equal(
+    (
+      templateSection.match(
+        /data-template-variable-list="shell"/g,
+      ) || []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (
+      templateSection.match(
+        /data-template-variable-list="line"/g,
+      ) || []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (templateSection.match(/data-template-field-error/g) || []).length,
+    15,
+  );
+  assert.match(templateSection, /aria-describedby="[^"]*template-/);
+  assert.doesNotMatch(templateSection, /maxlength=/);
+  assert.doesNotMatch(templateSection, /data-restore-template(?:\s|>)/);
+  assert.doesNotMatch(page, /data-template-variable="appName"/);
   assert.match(page, /data-notification-channel="wecomApp"/);
   assert.match(page, /id="wecom-app-corp-id"/);
   assert.match(page, /id="wecom-app-to-user"/);
@@ -516,9 +551,27 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.equal(state.settings.pendingDiscoveryReminderCount, 0);
   assert.equal(state.settings.notifications.enabledCount, 0);
   assert.deepEqual(state.settings.notificationTemplates, {
-    detailed: { title: "", body: "" },
-    batch: { title: "", body: "" },
-    reminder: { title: "", body: "" },
+    detailed: {
+      title: "",
+      body: "",
+      seasonLine: "",
+      episodeLine: "",
+      completedLine: "",
+    },
+    batch: {
+      title: "",
+      body: "",
+      seasonLine: "",
+      episodeLine: "",
+      completedLine: "",
+    },
+    reminder: {
+      title: "",
+      body: "",
+      seasonLine: "",
+      episodeLine: "",
+      completedLine: "",
+    },
   });
 });
 
@@ -954,14 +1007,28 @@ test("settings API saves and returns custom notification templates", async (t) =
     detailed: {
       title: "{appName}｜{seriesTitle}",
       body: "检查于 {checkTime}\n{updates}\n共 {seasonCount} 季",
+      seasonLine:
+        "{seriesTitle}｜{seasonTitle}｜{episodeCount}集｜{updatedAt}",
+      episodeLine:
+        "{seriesTitle}｜{seasonTitle}｜+{addedEpisodeCount}集｜{updatedAt}",
+      completedLine:
+        "{seriesTitle}｜全系列完结｜{seasonCount}季/{episodeCount}集",
     },
     batch: {
       title: "{appName}汇总 {updateCount} 个系列",
       body: "{checkTime}\n{updates}",
+      seasonLine: "{seriesTitle}｜新季｜{episodeCount}集｜{updatedTime}",
+      episodeLine:
+        "{seriesTitle}｜+{addedEpisodeCount}集｜{updatedTime}",
+      completedLine: "{seriesTitle}｜全系列完结",
     },
     reminder: {
       title: "{appName}持续提醒",
       body: "提醒于 {reminderTime}\n{updates}",
+      seasonLine: "{seriesTitle}｜新季｜{episodeCount}集｜{updatedTime}",
+      episodeLine:
+        "{seriesTitle}｜+{addedEpisodeCount}集｜{updatedTime}",
+      completedLine: "{seriesTitle}｜全系列完结",
     },
   };
 
@@ -1004,8 +1071,8 @@ test("settings API saves and returns custom notification templates", async (t) =
   assert.deepEqual(partialPayload.settings.notificationTemplates, {
     ...notificationTemplates,
     batch: {
+      ...notificationTemplates.batch,
       title: "自定义汇总",
-      body: notificationTemplates.batch.body,
     },
   });
 });
@@ -1022,7 +1089,15 @@ test("settings API validates notification template structure, variables and leng
       "INVALID_NOTIFICATION_TEMPLATE_VARIABLE",
     ],
     [
+      { detailed: { seasonLine: "{checkTime}" } },
+      "INVALID_NOTIFICATION_TEMPLATE_VARIABLE",
+    ],
+    [
       { reminder: { title: "剧".repeat(81) } },
+      "INVALID_NOTIFICATION_TEMPLATE_LENGTH",
+    ],
+    [
+      { batch: { completedLine: "剧".repeat(301) } },
       "INVALID_NOTIFICATION_TEMPLATE_LENGTH",
     ],
   ]) {
@@ -1039,9 +1114,27 @@ test("settings API validates notification template structure, variables and leng
   const stateResponse = await fetch(`${harness.origin}/api/state`);
   const state = await stateResponse.json();
   assert.deepEqual(state.settings.notificationTemplates, {
-    detailed: { title: "", body: "" },
-    batch: { title: "", body: "" },
-    reminder: { title: "", body: "" },
+    detailed: {
+      title: "",
+      body: "",
+      seasonLine: "",
+      episodeLine: "",
+      completedLine: "",
+    },
+    batch: {
+      title: "",
+      body: "",
+      seasonLine: "",
+      episodeLine: "",
+      completedLine: "",
+    },
+    reminder: {
+      title: "",
+      body: "",
+      seasonLine: "",
+      episodeLine: "",
+      completedLine: "",
+    },
   });
 });
 
@@ -1622,6 +1715,78 @@ test("rankings pages are served from the application shell", async (t) => {
   assert.match(script, /正在追更/);
   assert.match(script, /取消中…/);
   assert.match(script, /markTracked\(seriesId, error\.subscriptionId\)/);
+});
+
+test("calendar page is served and linked from every primary page", async (t) => {
+  const harness = await startHarness(t);
+
+  for (const pathname of ["/calendar", "/calendar.html"]) {
+    const response = await fetch(`${harness.origin}${pathname}`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^text\/html/);
+    const page = await response.text();
+    assert.match(page, /更新日历/);
+    assert.match(page, /aria-current="page"/);
+    assert.match(page, /href="\/calendar\.css"/);
+    assert.match(page, /type="module" src="\/calendar\.js"/);
+  }
+
+  const scriptResponse = await fetch(`${harness.origin}/calendar.js`);
+  assert.equal(scriptResponse.status, 200);
+  assert.match(
+    scriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+  const script = await scriptResponse.text();
+  assert.match(script, /APP_TIME_ZONE = "Asia\/Shanghai"/);
+  assert.match(script, /new Set\(\["season", "episode"\]\)/);
+  assert.match(script, /\/api\/logs\?offset=\$\{offset\}/);
+  assert.match(script, /reservationsUpcoming/);
+  assert.match(script, /parseReservationExpectedDate/);
+  assert.match(script, /\/api\/account\/refresh/);
+  assert.match(script, /unpublishedSeasonCount/);
+  assert.match(script, /unpublishedSeasons/);
+  assert.match(script, /subscriptionPlaceholderSeasons/);
+  assert.match(script, /reservationPlaceholderId/);
+  assert.match(script, /fetching/);
+
+  const styleResponse = await fetch(`${harness.origin}/calendar.css`);
+  assert.equal(styleResponse.status, 200);
+  assert.match(styleResponse.headers.get("content-type"), /^text\/css/);
+  const style = await styleResponse.text();
+  assert.match(style, /\.calendar-week-strip/);
+  assert.match(style, /\.calendar-month-day/);
+  assert.match(style, /aspect-ratio:\s*3\s*\/\s*4/);
+
+  const reservationScriptResponse = await fetch(
+    `${harness.origin}/calendar-reservations.js`,
+  );
+  assert.equal(reservationScriptResponse.status, 200);
+  assert.match(
+    reservationScriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+  assert.match(
+    await reservationScriptResponse.text(),
+    /parseReservationExpectedDate/,
+  );
+
+  for (const pathname of ["/", "/rankings", "/filters", "/logs"]) {
+    const response = await fetch(`${harness.origin}${pathname}`);
+    assert.equal(response.status, 200);
+    const page = await response.text();
+    assert.match(page, /href="\/calendar"/);
+    assert.match(page, /更新日历/);
+  }
+
+  const serviceWorkerResponse = await fetch(`${harness.origin}/sw.js`);
+  assert.equal(serviceWorkerResponse.status, 200);
+  const serviceWorker = await serviceWorkerResponse.text();
+  assert.match(serviceWorker, /shell-v\d+/);
+  assert.match(serviceWorker, /"\/calendar"/);
+  assert.match(serviceWorker, /"\/calendar\.js"/);
+  assert.match(serviceWorker, /"\/calendar-reservations\.js"/);
+  assert.match(serviceWorker, /"\/calendar\.css"/);
 });
 
 test("catalog API passes detailed filters and tracked series IDs", async (t) => {

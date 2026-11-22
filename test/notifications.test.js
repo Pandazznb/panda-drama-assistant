@@ -294,6 +294,7 @@ test("notification requests stay on their fixed API origins", () => {
     ntfy.headers.authorization,
     "Bearer tk_abcdefghijklmnopqrstuvwxyz",
   );
+  assert.equal(ntfy.body, "测试\n正文");
 
   const telegram = buildTelegramRequest(ALL_CHANNELS.telegram, {
     title: "测试",
@@ -301,6 +302,7 @@ test("notification requests stay on their fixed API origins", () => {
   });
   assert.equal(new URL(telegram.endpoint).origin, "https://api.telegram.org");
   assert.equal(telegram.payload.chat_id, "123456789");
+  assert.equal(telegram.payload.text, "测试\n正文");
 
   const wecom = buildWeComRequest(ALL_CHANNELS.wecom, {
     title: "测试",
@@ -308,7 +310,7 @@ test("notification requests stay on their fixed API origins", () => {
   });
   assert.equal(new URL(wecom.endpoint).origin, "https://qyapi.weixin.qq.com");
   assert.equal(wecom.payload.msgtype, "text");
-  assert.match(wecom.payload.text.content, /【短剧助手】/);
+  assert.equal(wecom.payload.text.content, "【短剧助手】\n测试\n正文");
 
   const wecomAppToken = buildWeComAppTokenRequest(ALL_CHANNELS.wecomApp);
   const wecomAppTokenUrl = new URL(wecomAppToken.endpoint);
@@ -347,7 +349,10 @@ test("notification requests stay on their fixed API origins", () => {
     },
     safe: 0,
   });
-  assert.match(wecomApp.payload.text.content, /【短剧助手】/);
+  assert.equal(
+    wecomApp.payload.text.content,
+    "【短剧助手】\n测试\n正文",
+  );
 
   const timestamp = 1_700_000_000_000;
   const dingtalk = buildDingTalkRequest(
@@ -371,6 +376,7 @@ test("notification requests stay on their fixed API origins", () => {
       .update(`${timestamp}\n${ALL_CHANNELS.dingtalk.secret}`)
       .digest("base64"),
   );
+  assert.equal(dingtalk.payload.text.content, "【短剧助手】\n测试\n正文");
 });
 
 test("robot webhook text is safely limited to 2048 UTF-8 bytes", () => {

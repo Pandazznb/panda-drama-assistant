@@ -54,6 +54,12 @@
             </svg>
             <span>我的追更</span>
           </a>
+          <a class="app-nav__link" href="/calendar">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-calendar"></use>
+            </svg>
+            <span>更新日历</span>
+          </a>
           <a class="app-nav__link" href="/rankings">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
               <use href="#icon-trophy"></use>
@@ -2050,7 +2056,7 @@
               <div>
                 <h3 id="notification-template-settings-title">通知模板</h3>
                 <p>
-                  留空的标题或正文会使用系统内置内容。每类消息可单独设置。
+                  任一字段留空都会使用该字段的内置格式。正文是整条消息的外壳，单行字段只控制对应的更新条目。
                 </p>
               </div>
             </div>
@@ -2080,87 +2086,297 @@
                 </span>
               </summary>
               <div class="template-editor__body">
-                <div class="field">
-                  <label for="template-detailed-title">标题</label>
-                  <input
-                    id="template-detailed-title"
-                    name="notificationTemplateDetailedTitle"
-                    type="text"
-                    maxlength="80"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder="留空使用内置标题"
-                    data-template-field="title"
-                  >
-                </div>
+                <p class="template-editor__intro">
+                  标题和正文组成消息外壳；新季、集更新和完结条目分别控制正文中的每一类更新行。
+                </p>
 
-                <div class="template-variable-field">
-                  <p>可用变量</p>
-                  <p class="template-variable-help">
-                    先点选标题或正文，再插入变量。
-                  </p>
-                  <div class="template-variable-list">
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="appName"
-                      aria-label="插入变量 {appName}，助手名称"
-                    >
-                      <span class="template-variable__code">{appName}</span>
-                      <span class="template-variable__label">助手名称</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="seriesTitle"
-                      aria-label="插入变量 {seriesTitle}，系列名称"
-                    >
-                      <span class="template-variable__code">
-                        {seriesTitle}
+                <div class="template-field-group">
+                  <div class="template-field-group__heading">
+                    <h4>消息外壳</h4>
+                    <p>控制整条消息的标题和正文排版。</p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-detailed-title">标题</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="title"
+                          aria-label="恢复单系列详情的标题默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
                       </span>
-                      <span class="template-variable__label">系列名称</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="checkTime"
-                      aria-label="插入变量 {checkTime}，检查时间"
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-detailed-title-help"
                     >
-                      <span class="template-variable__code">{checkTime}</span>
-                      <span class="template-variable__label">检查时间</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="updates"
-                      aria-label="插入变量 {updates}，更新明细"
+                      留空使用内置标题，最多 80 个字符。
+                    </p>
+                    <input
+                      id="template-detailed-title"
+                      name="notificationTemplateDetailedTitle"
+                      type="text"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="留空使用内置标题"
+                      aria-describedby="template-detailed-title-help template-detailed-title-error"
+                      data-template-field="title"
                     >
-                      <span class="template-variable__code">{updates}</span>
-                      <span class="template-variable__label">更新明细</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="seasonCount"
-                      aria-label="插入变量 {seasonCount}，季数"
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-detailed-title-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-detailed-body">正文</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="body"
+                          aria-label="恢复单系列详情的正文默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-detailed-body-help"
                     >
-                      <span class="template-variable__code">{seasonCount}</span>
-                      <span class="template-variable__label">季数</span>
-                    </button>
+                      留空使用内置正文；自定义后会覆盖整条正文。要显示更新条目，请保留
+                      <code>{updates}</code>。最多 1200 个字符。
+                    </p>
+                    <textarea
+                      id="template-detailed-body"
+                      name="notificationTemplateDetailedBody"
+                      rows="5"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="留空使用系统自动生成的正文"
+                      aria-describedby="template-detailed-body-help template-detailed-body-error"
+                      data-template-field="body"
+                    ></textarea>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-detailed-body-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
                   </div>
                 </div>
 
-                <div class="field">
-                  <label for="template-detailed-body">正文</label>
-                  <textarea
-                    id="template-detailed-body"
-                    name="notificationTemplateDetailedBody"
-                    rows="5"
-                    maxlength="1200"
-                    spellcheck="false"
-                    placeholder="留空使用系统自动生成的正文"
-                    data-template-field="body"
-                  ></textarea>
+                <div class="template-variable-field">
+                  <p>消息外壳变量</p>
+                  <p class="template-variable-help">
+                    先点选标题或正文中的插入位置，再选择变量。
+                  </p>
+                  <div
+                    class="template-variable-list"
+                    data-template-variable-list="shell"
+                  ></div>
+                </div>
+
+                <div class="template-field-group">
+                  <div class="template-field-group__heading">
+                    <h4>更新条目</h4>
+                    <p>每类条目单独渲染，系统会自动在行首添加项目符号。</p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-detailed-season-line">新季条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="seasonLine"
+                          aria-label="恢复单系列详情的新季条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-detailed-season-line-help"
+                    >
+                      留空使用内置新季条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-detailed-season-line"
+                      name="notificationTemplateDetailedSeasonLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} {seasonTitle} {episodeCount}集 {updatedAt}"
+                      aria-describedby="template-detailed-season-line-help template-detailed-season-line-error"
+                      data-template-field="seasonLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="seasonLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-detailed-season-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-detailed-episode-line">集更新条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="episodeLine"
+                          aria-label="恢复单系列详情的集更新条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-detailed-episode-line-help"
+                    >
+                      留空使用内置集更新条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-detailed-episode-line"
+                      name="notificationTemplateDetailedEpisodeLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} +{addedEpisodeCount}集 {updatedAt}"
+                      aria-describedby="template-detailed-episode-line-help template-detailed-episode-line-error"
+                      data-template-field="episodeLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="episodeLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-detailed-episode-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-detailed-completed-line">完结条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="completedLine"
+                          aria-label="恢复单系列详情的完结条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-detailed-completed-line-help"
+                    >
+                      留空使用内置完结条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-detailed-completed-line"
+                      name="notificationTemplateDetailedCompletedLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} 全系列完结 {seasonCount}季/{episodeCount}集"
+                      aria-describedby="template-detailed-completed-line-help template-detailed-completed-line-error"
+                      data-template-field="completedLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="completedLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-detailed-completed-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+                </div>
+
+                <div class="template-variable-field">
+                  <p>更新条目变量</p>
+                  <p class="template-variable-help">
+                    先点选任一更新条目字段，再选择变量。
+                  </p>
+                  <div
+                    class="template-variable-list"
+                    data-template-variable-list="line"
+                  ></div>
                 </div>
 
                 <div class="template-preview">
@@ -2173,19 +2389,6 @@
                     class="template-preview__body"
                     data-template-preview-body
                   ></p>
-                </div>
-
-                <div class="template-editor__actions">
-                  <button
-                    class="text-button template-editor__restore"
-                    type="button"
-                    data-restore-template
-                  >
-                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                      <use href="#icon-refresh"></use>
-                    </svg>
-                    恢复内置内容
-                  </button>
                 </div>
               </div>
             </details>
@@ -2215,76 +2418,297 @@
                 </span>
               </summary>
               <div class="template-editor__body">
-                <div class="field">
-                  <label for="template-batch-title">标题</label>
-                  <input
-                    id="template-batch-title"
-                    name="notificationTemplateBatchTitle"
-                    type="text"
-                    maxlength="80"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder="留空使用内置标题"
-                    data-template-field="title"
-                  >
-                </div>
+                <p class="template-editor__intro">
+                  标题和正文组成消息外壳；新季、集更新和完结条目分别控制每个系列最新一条更新行。
+                </p>
 
-                <div class="template-variable-field">
-                  <p>可用变量</p>
-                  <p class="template-variable-help">
-                    先点选标题或正文，再插入变量。
-                  </p>
-                  <div class="template-variable-list">
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="appName"
-                      aria-label="插入变量 {appName}，助手名称"
+                <div class="template-field-group">
+                  <div class="template-field-group__heading">
+                    <h4>消息外壳</h4>
+                    <p>控制批量汇总消息的标题和正文排版。</p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-batch-title">标题</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="title"
+                          aria-label="恢复批量汇总的标题默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-batch-title-help"
                     >
-                      <span class="template-variable__code">{appName}</span>
-                      <span class="template-variable__label">助手名称</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="checkTime"
-                      aria-label="插入变量 {checkTime}，检查时间"
+                      留空使用内置标题，最多 80 个字符。
+                    </p>
+                    <input
+                      id="template-batch-title"
+                      name="notificationTemplateBatchTitle"
+                      type="text"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="留空使用内置标题"
+                      aria-describedby="template-batch-title-help template-batch-title-error"
+                      data-template-field="title"
                     >
-                      <span class="template-variable__code">{checkTime}</span>
-                      <span class="template-variable__label">检查时间</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="updateCount"
-                      aria-label="插入变量 {updateCount}，更新系列数"
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-batch-title-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-batch-body">正文</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="body"
+                          aria-label="恢复批量汇总的正文默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-batch-body-help"
                     >
-                      <span class="template-variable__code">{updateCount}</span>
-                      <span class="template-variable__label">更新系列数</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="updates"
-                      aria-label="插入变量 {updates}，更新明细"
-                    >
-                      <span class="template-variable__code">{updates}</span>
-                      <span class="template-variable__label">更新明细</span>
-                    </button>
+                      留空使用内置正文；自定义后会覆盖整条正文。要显示更新条目，请保留
+                      <code>{updates}</code>。最多 1200 个字符。
+                    </p>
+                    <textarea
+                      id="template-batch-body"
+                      name="notificationTemplateBatchBody"
+                      rows="5"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="留空使用系统自动生成的正文"
+                      aria-describedby="template-batch-body-help template-batch-body-error"
+                      data-template-field="body"
+                    ></textarea>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-batch-body-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
                   </div>
                 </div>
 
-                <div class="field">
-                  <label for="template-batch-body">正文</label>
-                  <textarea
-                    id="template-batch-body"
-                    name="notificationTemplateBatchBody"
-                    rows="5"
-                    maxlength="1200"
-                    spellcheck="false"
-                    placeholder="留空使用系统自动生成的正文"
-                    data-template-field="body"
-                  ></textarea>
+                <div class="template-variable-field">
+                  <p>消息外壳变量</p>
+                  <p class="template-variable-help">
+                    先点选标题或正文中的插入位置，再选择变量。
+                  </p>
+                  <div
+                    class="template-variable-list"
+                    data-template-variable-list="shell"
+                  ></div>
+                </div>
+
+                <div class="template-field-group">
+                  <div class="template-field-group__heading">
+                    <h4>更新条目</h4>
+                    <p>每个系列只显示最新一条更新，系统会自动添加项目符号。</p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-batch-season-line">新季条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="seasonLine"
+                          aria-label="恢复批量汇总的新季条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-batch-season-line-help"
+                    >
+                      留空使用内置新季条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-batch-season-line"
+                      name="notificationTemplateBatchSeasonLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} {seasonTitle} {episodeCount}集 {updatedAt}"
+                      aria-describedby="template-batch-season-line-help template-batch-season-line-error"
+                      data-template-field="seasonLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="seasonLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-batch-season-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-batch-episode-line">集更新条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="episodeLine"
+                          aria-label="恢复批量汇总的集更新条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-batch-episode-line-help"
+                    >
+                      留空使用内置集更新条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-batch-episode-line"
+                      name="notificationTemplateBatchEpisodeLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} +{addedEpisodeCount}集 {updatedAt}"
+                      aria-describedby="template-batch-episode-line-help template-batch-episode-line-error"
+                      data-template-field="episodeLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="episodeLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-batch-episode-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-batch-completed-line">完结条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="completedLine"
+                          aria-label="恢复批量汇总的完结条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-batch-completed-line-help"
+                    >
+                      留空使用内置完结条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-batch-completed-line"
+                      name="notificationTemplateBatchCompletedLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} 全系列完结 {seasonCount}季/{episodeCount}集"
+                      aria-describedby="template-batch-completed-line-help template-batch-completed-line-error"
+                      data-template-field="completedLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="completedLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-batch-completed-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+                </div>
+
+                <div class="template-variable-field">
+                  <p>更新条目变量</p>
+                  <p class="template-variable-help">
+                    先点选任一更新条目字段，再选择变量。
+                  </p>
+                  <div
+                    class="template-variable-list"
+                    data-template-variable-list="line"
+                  ></div>
                 </div>
 
                 <div class="template-preview">
@@ -2297,19 +2721,6 @@
                     class="template-preview__body"
                     data-template-preview-body
                   ></p>
-                </div>
-
-                <div class="template-editor__actions">
-                  <button
-                    class="text-button template-editor__restore"
-                    type="button"
-                    data-restore-template
-                  >
-                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                      <use href="#icon-refresh"></use>
-                    </svg>
-                    恢复内置内容
-                  </button>
                 </div>
               </div>
             </details>
@@ -2339,78 +2750,297 @@
                 </span>
               </summary>
               <div class="template-editor__body">
-                <div class="field">
-                  <label for="template-reminder-title">标题</label>
-                  <input
-                    id="template-reminder-title"
-                    name="notificationTemplateReminderTitle"
-                    type="text"
-                    maxlength="80"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder="留空使用内置标题"
-                    data-template-field="title"
-                  >
-                </div>
+                <p class="template-editor__intro">
+                  标题和正文组成消息外壳；三类条目控制持续提醒中每个系列最新一条更新行。
+                </p>
 
-                <div class="template-variable-field">
-                  <p>可用变量</p>
-                  <p class="template-variable-help">
-                    先点选标题或正文，再插入变量。
-                  </p>
-                  <div class="template-variable-list">
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="appName"
-                      aria-label="插入变量 {appName}，助手名称"
-                    >
-                      <span class="template-variable__code">{appName}</span>
-                      <span class="template-variable__label">助手名称</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="reminderTime"
-                      aria-label="插入变量 {reminderTime}，提醒时间"
-                    >
-                      <span class="template-variable__code">
-                        {reminderTime}
+                <div class="template-field-group">
+                  <div class="template-field-group__heading">
+                    <h4>消息外壳</h4>
+                    <p>控制持续提醒消息的标题和正文排版。</p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-reminder-title">标题</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="title"
+                          aria-label="恢复持续提醒的标题默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
                       </span>
-                      <span class="template-variable__label">提醒时间</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="updateCount"
-                      aria-label="插入变量 {updateCount}，更新系列数"
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-reminder-title-help"
                     >
-                      <span class="template-variable__code">{updateCount}</span>
-                      <span class="template-variable__label">更新系列数</span>
-                    </button>
-                    <button
-                      class="template-variable"
-                      type="button"
-                      data-template-variable="updates"
-                      aria-label="插入变量 {updates}，更新明细"
+                      留空使用内置标题，最多 80 个字符。
+                    </p>
+                    <input
+                      id="template-reminder-title"
+                      name="notificationTemplateReminderTitle"
+                      type="text"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="留空使用内置标题"
+                      aria-describedby="template-reminder-title-help template-reminder-title-error"
+                      data-template-field="title"
                     >
-                      <span class="template-variable__code">{updates}</span>
-                      <span class="template-variable__label">更新明细</span>
-                    </button>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-reminder-title-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-reminder-body">正文</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="body"
+                          aria-label="恢复持续提醒的正文默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-reminder-body-help"
+                    >
+                      留空使用内置正文；自定义后会覆盖整条正文。要显示更新条目，请保留
+                      <code>{updates}</code>。最多 1200 个字符。
+                    </p>
+                    <textarea
+                      id="template-reminder-body"
+                      name="notificationTemplateReminderBody"
+                      rows="5"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="留空使用系统自动生成的正文"
+                      aria-describedby="template-reminder-body-help template-reminder-body-error"
+                      data-template-field="body"
+                    ></textarea>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-reminder-body-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
                   </div>
                 </div>
 
-                <div class="field">
-                  <label for="template-reminder-body">正文</label>
-                  <textarea
-                    id="template-reminder-body"
-                    name="notificationTemplateReminderBody"
-                    rows="5"
-                    maxlength="1200"
-                    spellcheck="false"
-                    placeholder="留空使用系统自动生成的正文"
-                    data-template-field="body"
-                  ></textarea>
+                <div class="template-variable-field">
+                  <p>消息外壳变量</p>
+                  <p class="template-variable-help">
+                    先点选标题或正文中的插入位置，再选择变量。
+                  </p>
+                  <div
+                    class="template-variable-list"
+                    data-template-variable-list="shell"
+                  ></div>
+                </div>
+
+                <div class="template-field-group">
+                  <div class="template-field-group__heading">
+                    <h4>更新条目</h4>
+                    <p>持续提醒每次只显示每个系列最新一条内容。</p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-reminder-season-line">新季条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="seasonLine"
+                          aria-label="恢复持续提醒的新季条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-reminder-season-line-help"
+                    >
+                      留空使用内置新季条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-reminder-season-line"
+                      name="notificationTemplateReminderSeasonLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} {seasonTitle} {episodeCount}集 {updatedAt}"
+                      aria-describedby="template-reminder-season-line-help template-reminder-season-line-error"
+                      data-template-field="seasonLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="seasonLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-reminder-season-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-reminder-episode-line">集更新条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="episodeLine"
+                          aria-label="恢复持续提醒的集更新条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-reminder-episode-line-help"
+                    >
+                      留空使用内置集更新条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-reminder-episode-line"
+                      name="notificationTemplateReminderEpisodeLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} +{addedEpisodeCount}集 {updatedAt}"
+                      aria-describedby="template-reminder-episode-line-help template-reminder-episode-line-error"
+                      data-template-field="episodeLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="episodeLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-reminder-episode-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+
+                  <div class="field template-field">
+                    <div class="field__label-row template-field__label-row">
+                      <label for="template-reminder-completed-line">完结条目</label>
+                      <span class="template-field__tools">
+                        <span
+                          class="template-field__counter"
+                          data-template-counter
+                          aria-live="polite"
+                          aria-atomic="true"
+                        ></span>
+                        <button
+                          class="template-field__restore"
+                          type="button"
+                          data-restore-template-field="completedLine"
+                          aria-label="恢复持续提醒的完结条目默认格式"
+                          title="恢复此项默认"
+                        >
+                          恢复默认
+                        </button>
+                      </span>
+                    </div>
+                    <p
+                      class="field__help template-field__help"
+                      id="template-reminder-completed-line-help"
+                    >
+                      留空使用内置完结条目，最多 300 个字符。
+                    </p>
+                    <textarea
+                      class="template-line-input"
+                      id="template-reminder-completed-line"
+                      name="notificationTemplateReminderCompletedLine"
+                      rows="2"
+                      inputmode="text"
+                      autocomplete="off"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      spellcheck="false"
+                      placeholder="例如：{seriesTitle} 全系列完结 {seasonCount}季/{episodeCount}集"
+                      aria-describedby="template-reminder-completed-line-help template-reminder-completed-line-error"
+                      data-template-field="completedLine"
+                    ></textarea>
+                    <p class="template-field__sample">
+                      示例：<span data-template-field-preview="completedLine"></span>
+                    </p>
+                    <p
+                      class="field__feedback template-field__error"
+                      id="template-reminder-completed-line-error"
+                      data-template-field-error
+                      aria-live="polite"
+                    ></p>
+                  </div>
+                </div>
+
+                <div class="template-variable-field">
+                  <p>更新条目变量</p>
+                  <p class="template-variable-help">
+                    先点选任一更新条目字段，再选择变量。
+                  </p>
+                  <div
+                    class="template-variable-list"
+                    data-template-variable-list="line"
+                  ></div>
                 </div>
 
                 <div class="template-preview">
@@ -2423,19 +3053,6 @@
                     class="template-preview__body"
                     data-template-preview-body
                   ></p>
-                </div>
-
-                <div class="template-editor__actions">
-                  <button
-                    class="text-button template-editor__restore"
-                    type="button"
-                    data-restore-template
-                  >
-                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                      <use href="#icon-refresh"></use>
-                    </svg>
-                    恢复内置内容
-                  </button>
                 </div>
               </div>
             </details>
@@ -2710,6 +3327,10 @@
       <symbol id="icon-history" viewBox="0 0 24 24">
         <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
         <path d="M3 3v5h5M12 7v5l3 2"></path>
+      </symbol>
+      <symbol id="icon-calendar" viewBox="0 0 24 24">
+        <rect x="3" y="5" width="18" height="16" rx="2"></rect>
+        <path d="M16 3v4M8 3v4M3 10h18"></path>
       </symbol>
       <symbol id="icon-calendar-clock" viewBox="0 0 24 24">
         <path d="M21 10v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"></path>

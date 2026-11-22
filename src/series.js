@@ -323,14 +323,56 @@ export function normalizeConfirmedSeriesIds(values) {
   ].sort();
 }
 
+export function normalizeUnpublishedSeasons(values) {
+  const seasons = new Map();
+  for (const value of Array.isArray(values) ? values : []) {
+    const source =
+      value && typeof value === "object"
+        ? value
+        : { seriesId: value };
+    const seriesId = String(
+      source.seriesId || source.itemId || source.item_id || "",
+    );
+    if (!/^\d{8,25}$/.test(seriesId)) {
+      continue;
+    }
+    const seasonIndex = toSafeInteger(
+      source.seasonIndex ?? source.season_index,
+      null,
+    );
+    seasons.set(seriesId, {
+      seriesId,
+      seasonIndex:
+        Number.isInteger(seasonIndex) && seasonIndex > 0
+          ? seasonIndex
+          : null,
+      coverUrl: normalizeWhitespace(
+        source.coverUrl || source.series_cover || "",
+      ),
+    });
+  }
+  return [...seasons.values()].sort(
+    (left, right) =>
+      (left.seasonIndex ?? Number.MAX_SAFE_INTEGER) -
+        (right.seasonIndex ?? Number.MAX_SAFE_INTEGER) ||
+      left.seriesId.localeCompare(right.seriesId),
+  );
+}
+
 export function normalizeAlbumMetadata(value) {
   const source = Array.isArray(value) ? { seriesIds: value } : value || {};
   const publishedSeriesIds = normalizeConfirmedSeriesIds(
     source.publishedSeriesIds ?? source.seriesIds,
   );
-  const unpublishedSeriesIds = normalizeConfirmedSeriesIds(
-    source.unpublishedSeriesIds,
+  const unpublishedSeasons = normalizeUnpublishedSeasons(
+    source.unpublishedSeasons,
   );
+  const unpublishedSeriesIds = normalizeConfirmedSeriesIds([
+    ...(Array.isArray(source.unpublishedSeriesIds)
+      ? source.unpublishedSeriesIds
+      : []),
+    ...unpublishedSeasons.map((season) => season.seriesId),
+  ]);
   const parsedDeclaredCount = Number.parseInt(
     source.declaredSeasonCount,
     10,
@@ -349,14 +391,19 @@ export function normalizeAlbumMetadata(value) {
     10,
   );
   const unpublishedSeasonCount =
-    Number.isFinite(parsedUnpublishedCount) &&
-    parsedUnpublishedCount >= 0
-      ? parsedUnpublishedCount
-      : unpublishedSeriesIds.length;
+    Math.max(
+      Number.isFinite(parsedUnpublishedCount) &&
+        parsedUnpublishedCount >= 0
+        ? parsedUnpublishedCount
+        : 0,
+      unpublishedSeriesIds.length,
+      unpublishedSeasons.length,
+    );
 
   return {
     publishedSeriesIds,
     unpublishedSeriesIds,
+    unpublishedSeasons,
     unpublishedSeasonCount,
     declaredSeasonCount,
     itemCount,

@@ -102,6 +102,13 @@ function truncateUtf8(value, maxBytes, suffix = "…") {
   return `${result}${suffix}`;
 }
 
+function composeNotificationText(parts) {
+  return parts
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 function storedString(value, maxLength) {
   return String(value || "")
     .trim()
@@ -946,10 +953,10 @@ export function buildNtfyRequest(config, message) {
 
   return {
     endpoint: endpoint.href,
-    body: `${truncate(message?.title, MAX_TITLE_LENGTH)}\n\n${truncate(
-      message?.body,
-      MAX_BODY_LENGTH,
-    )}`,
+    body: composeNotificationText([
+      truncate(message?.title, MAX_TITLE_LENGTH),
+      truncate(message?.body, MAX_BODY_LENGTH),
+    ]),
     headers: {
       "content-type": "text/plain; charset=utf-8",
       accept: "application/json",
@@ -1016,10 +1023,10 @@ export function buildTelegramRequest(config, message) {
     endpoint: endpoint.href,
     payload: {
       chat_id: chatId,
-      text: `${truncate(message?.title, MAX_TITLE_LENGTH)}\n\n${truncate(
-        message?.body,
-        MAX_BODY_LENGTH,
-      )}`,
+      text: composeNotificationText([
+        truncate(message?.title, MAX_TITLE_LENGTH),
+        truncate(message?.body, MAX_BODY_LENGTH),
+      ]),
       disable_web_page_preview: true,
     },
   };
@@ -1084,7 +1091,7 @@ function webhookMessageText(message, maxBytes = MAX_WECOM_TEXT_BYTES) {
   const title = truncate(message?.title, MAX_TITLE_LENGTH);
   const body = truncate(message?.body, MAX_BODY_LENGTH);
   return truncateUtf8(
-    `${WEBHOOK_MESSAGE_PREFIX}\n${title}\n\n${body}`,
+    composeNotificationText([WEBHOOK_MESSAGE_PREFIX, title, body]),
     maxBytes,
   );
 }

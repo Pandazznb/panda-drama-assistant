@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   deriveSeriesStatus,
   highestSeason,
+  normalizeAlbumMetadata,
   seriesCompletionMarker,
 } from "../src/series.js";
 
@@ -101,4 +102,28 @@ test("a generic ending word does not complete a fully ended season list", () => 
 
   assert.equal(result.status, "unknown");
   assert.match(result.reason, /系列完结标识/);
+});
+
+test("album metadata preserves official placeholder seasons", () => {
+  const shellId = "7706751373240437784";
+  const album = normalizeAlbumMetadata({
+    publishedSeriesIds: ["7688007882683452441"],
+    unpublishedSeasonCount: 1,
+    unpublishedSeasons: [
+      {
+        seriesId: shellId,
+        seasonIndex: 8,
+        coverUrl: "https://example.com/cover.jpg",
+      },
+    ],
+  });
+
+  assert.deepEqual(album.unpublishedSeriesIds, [shellId]);
+  assert.deepEqual(album.unpublishedSeasons, [
+    {
+      seriesId: shellId,
+      seasonIndex: 8,
+      coverUrl: "https://example.com/cover.jpg",
+    },
+  ]);
 });

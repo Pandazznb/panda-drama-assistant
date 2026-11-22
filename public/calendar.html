@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    >
+    <meta
+      name="description"
+      content="按北京时间查看正在追更短剧的新季、集数更新和账号预约档期。"
+    >
+    <meta name="theme-color" content="#f3f5f7">
+    <meta name="application-name" content="短剧助手">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="短剧助手">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <title>更新日历 · 短剧助手</title>
+    <script src="/theme.js"></script>
+    <script src="/scroll-controls.js" defer></script>
+    <script src="/pwa.js" defer></script>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <link
+      rel="icon"
+      href="/assets/panda-drama-assistant-icon.svg"
+      type="image/svg+xml"
+    >
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/calendar.css">
+  </head>
+  <body class="calendar-page">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="app-header">
+      <div class="app-header__inner">
+        <a class="brand" href="/" aria-label="返回短剧助手首页">
+          <span class="brand__mark" aria-hidden="true">
+            <img
+              class="brand__logo"
+              src="/assets/panda-drama-assistant-icon.svg"
+              alt=""
+              width="38"
+              height="38"
+            >
+          </span>
+          <span class="brand__text">短剧助手</span>
+        </a>
+        <nav class="app-nav" aria-label="主导航">
+          <a class="app-nav__link" href="/">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-play-list"></use>
+            </svg>
+            <span>我的追更</span>
+          </a>
+          <a
+            class="app-nav__link is-active"
+            href="/calendar"
+            aria-current="page"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-calendar"></use>
+            </svg>
+            <span>更新日历</span>
+          </a>
+          <a class="app-nav__link" href="/rankings">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-trophy"></use>
+            </svg>
+            <span>榜单</span>
+          </a>
+          <a class="app-nav__link" href="/filters">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-filter"></use>
+            </svg>
+            <span>找剧</span>
+          </a>
+        </nav>
+        <div class="app-header__actions">
+          <button
+            class="button button--quiet pwa-install-button"
+            type="button"
+            data-pwa-install
+            aria-label="安装短剧助手应用"
+            title="安装应用"
+            hidden
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-download"></use>
+            </svg>
+            <span class="header-action__label">安装应用</span>
+          </button>
+          <button
+            class="theme-switcher"
+            type="button"
+            data-theme-toggle
+            data-theme-preference="auto"
+            aria-label="当前主题：自动，跟随系统。点击切换为白天主题"
+            title="当前：自动（跟随系统），点击切换为白天"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use data-theme-icon href="#icon-auto"></use>
+            </svg>
+            <span class="theme-switcher__label" data-theme-label aria-live="polite">
+              自动
+            </span>
+          </button>
+          <a
+            class="button button--quiet header-settings-button"
+            href="/?settings=1"
+            aria-label="打开设置"
+            title="设置"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-settings"></use>
+            </svg>
+            <span class="header-action__label">设置</span>
+          </a>
+        </div>
+      </div>
+    </header>
+
+    <main
+      id="main-content"
+      class="page page--has-scroll-controls calendar-page__main"
+    >
+      <section
+        class="calendar-overview page-overview"
+        aria-labelledby="calendar-page-title"
+      >
+        <div class="calendar-overview__copy">
+          <p class="eyebrow">订阅日历</p>
+          <h1 id="calendar-page-title">
+            <span id="calendar-hero-label">今天</span> ·
+            <span id="calendar-hero-date">--.--</span>
+          </h1>
+          <p
+            class="calendar-overview__description"
+            id="calendar-hero-summary"
+            aria-live="polite"
+          >
+            正在整理最近的更新与预约档期…
+          </p>
+          <div class="calendar-overview__footer">
+            <p
+              class="calendar-overview__account"
+              id="calendar-account-summary"
+            >
+              正在读取账号预约信息…
+            </p>
+            <div class="calendar-overview__actions">
+              <button
+                class="button button--secondary calendar-today-button"
+                type="button"
+                id="calendar-today"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-calendar-check"></use>
+                </svg>
+                <span>今天</span>
+              </button>
+              <button
+                class="button button--quiet calendar-refresh"
+                type="button"
+                id="calendar-refresh"
+                aria-label="刷新更新日历"
+                title="刷新"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-refresh"></use>
+                </svg>
+                <span class="calendar-refresh__label">刷新</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        class="calendar-workspace calendar-view"
+        aria-label="更新日历内容"
+      >
+        <header class="calendar-viewbar">
+          <div class="calendar-viewbar__group">
+            <p class="calendar-viewbar__label">视图</p>
+            <div
+              class="calendar-view-switch"
+              role="group"
+              aria-label="切换日历视图"
+            >
+              <button
+                class="calendar-view-switch__button is-active"
+                type="button"
+                data-calendar-view="week"
+                aria-pressed="true"
+              >
+                按周
+              </button>
+              <button
+                class="calendar-view-switch__button"
+                type="button"
+                data-calendar-view="month"
+                aria-pressed="false"
+              >
+                按月
+              </button>
+            </div>
+          </div>
+          <div class="calendar-viewbar__group">
+            <p class="calendar-viewbar__label">类型</p>
+            <div
+              class="calendar-type-filter"
+              role="group"
+              aria-label="按日历项类型筛选"
+            >
+              <button
+                class="calendar-type-filter__button is-active"
+                type="button"
+                data-calendar-type="all"
+                aria-pressed="true"
+              >
+                全部
+              </button>
+              <button
+                class="calendar-type-filter__button"
+                type="button"
+                data-calendar-type="season"
+                aria-pressed="false"
+              >
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--season"
+                  aria-hidden="true"
+                ></span>
+                季更新
+              </button>
+              <button
+                class="calendar-type-filter__button"
+                type="button"
+                data-calendar-type="episode"
+                aria-pressed="false"
+              >
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--episode"
+                  aria-hidden="true"
+                ></span>
+                集更新
+              </button>
+              <button
+                class="calendar-type-filter__button"
+                type="button"
+                data-calendar-type="reservation"
+                aria-pressed="false"
+              >
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--reservation"
+                  aria-hidden="true"
+                ></span>
+                账号预约
+              </button>
+              <button
+                class="calendar-type-filter__button"
+                type="button"
+                data-calendar-type="pending"
+                aria-pressed="false"
+              >
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--pending"
+                  aria-hidden="true"
+                ></span>
+                待公布
+              </button>
+            </div>
+          </div>
+          <div class="calendar-legend-group">
+            <div class="calendar-legend" aria-label="日历图例">
+              <span class="calendar-legend__item calendar-legend__item--season">
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--season"
+                  aria-hidden="true"
+                ></span>
+                季更新
+              </span>
+              <span class="calendar-legend__item calendar-legend__item--episode">
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--episode"
+                  aria-hidden="true"
+                ></span>
+                集更新
+              </span>
+              <span
+                class="calendar-legend__item calendar-legend__item--reservation"
+              >
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--reservation"
+                  aria-hidden="true"
+                ></span>
+                账号预约
+              </span>
+              <span class="calendar-legend__item calendar-legend__item--pending">
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--pending"
+                  aria-hidden="true"
+                ></span>
+                待公布
+              </span>
+              <span class="calendar-legend__item calendar-legend__item--today">
+                <span
+                  class="calendar-legend__dot calendar-legend__dot--today"
+                  aria-hidden="true"
+                ></span>
+                今天
+              </span>
+            </div>
+          </div>
+        </header>
+
+        <p
+          class="calendar-status"
+          id="calendar-status"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></p>
+
+        <section class="calendar-browser" aria-labelledby="calendar-period-title">
+          <div class="calendar-period-shell">
+            <div class="calendar-periodbar__title">
+              <div class="calendar-periodbar__heading">
+                <p class="calendar-periodbar__eyebrow">当前范围</p>
+                <h2 id="calendar-period-title" aria-live="polite">本周</h2>
+              </div>
+              <div
+                class="calendar-period-nav"
+                role="group"
+                aria-label="切换日历周期"
+              >
+                <button
+                  class="button button--quiet calendar-period-button"
+                  type="button"
+                  id="calendar-previous"
+                  aria-label="查看上一周"
+                  title="上一周"
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-chevron-left"></use>
+                  </svg>
+                </button>
+                <button
+                  class="button button--quiet calendar-period-button"
+                  type="button"
+                  id="calendar-next"
+                  aria-label="查看下一周"
+                  title="下一周"
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-chevron-right"></use>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="calendar-period-content">
+              <div class="calendar-week-view" id="calendar-week-view">
+                <div
+                  class="calendar-week-strip"
+                  id="calendar-week-strip"
+                  role="group"
+                  aria-label="本周日期"
+                  aria-busy="true"
+                ></div>
+                <p class="calendar-keyboard-help">
+                  使用左右方向键切换日期。
+                </p>
+              </div>
+
+              <div class="calendar-month-view" id="calendar-month-view" hidden>
+                <div class="calendar-weekdays" aria-hidden="true">
+                  <span>一</span>
+                  <span>二</span>
+                  <span>三</span>
+                  <span>四</span>
+                  <span>五</span>
+                  <span>六</span>
+                  <span>日</span>
+                </div>
+                <div
+                  class="calendar-grid"
+                  id="calendar-grid"
+                  role="grid"
+                  aria-label="月历"
+                  aria-busy="true"
+                ></div>
+                <p class="calendar-keyboard-help">
+                  使用方向键切换日期，Home 和 End 可跳到本周首尾。
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section
+          class="calendar-day-panel"
+          aria-labelledby="calendar-selected-date"
+        >
+          <div class="calendar-day-panel__header">
+            <div class="calendar-day-panel__heading">
+              <p class="calendar-day-panel__eyebrow">当天日历项</p>
+              <div class="calendar-day-panel__title-row">
+                <h2 id="calendar-selected-date">今天</h2>
+                <span
+                  class="calendar-today-badge"
+                  id="calendar-selected-today"
+                  hidden
+                >
+                  今天
+                </span>
+              </div>
+            </div>
+            <span
+              class="calendar-entry-count"
+              id="calendar-entry-count"
+              hidden
+            ></span>
+          </div>
+          <p
+            class="calendar-day-panel__summary"
+            id="calendar-selected-summary"
+          ></p>
+          <div
+            class="calendar-entry-list"
+            id="calendar-entry-list"
+            role="status"
+            aria-live="polite"
+            aria-busy="true"
+          ></div>
+        </section>
+
+        <section
+          class="calendar-pending"
+          id="calendar-pending-section"
+          aria-labelledby="calendar-pending-title"
+          hidden
+        >
+          <button
+            class="calendar-pending__toggle"
+            type="button"
+            id="calendar-pending-toggle"
+            aria-expanded="false"
+            aria-controls="calendar-pending-body"
+          >
+            <span class="calendar-pending__icon" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24">
+                <use href="#icon-hourglass"></use>
+              </svg>
+            </span>
+            <span class="calendar-pending__copy">
+              <span class="calendar-pending__title" id="calendar-pending-title">
+                待公布日期
+              </span>
+              <span class="calendar-pending__description">
+                没有明确上线日期的预约和官方占位季
+              </span>
+            </span>
+            <span class="calendar-pending__meta">
+              <span
+                class="calendar-entry-count"
+                id="calendar-pending-count"
+                hidden
+              ></span>
+              <span class="calendar-pending__chevron" aria-hidden="true">
+                <svg class="icon" viewBox="0 0 24 24">
+                  <use href="#icon-chevron-right"></use>
+                </svg>
+              </span>
+            </span>
+          </button>
+          <div class="calendar-pending__body" id="calendar-pending-body" hidden>
+            <div
+              class="calendar-entry-list calendar-entry-list--pending"
+              id="calendar-pending-list"
+              role="status"
+              aria-live="polite"
+            ></div>
+          </div>
+        </section>
+
+        <footer class="calendar-source">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <use href="#icon-info"></use>
+          </svg>
+          <p id="calendar-source-note">
+            日历按北京时间整理。只有官方预约文案中的明确上线日期会进入未来日期，模糊档期继续留在待公布。
+          </p>
+        </footer>
+      </section>
+    </main>
+
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="icon-play-list" viewBox="0 0 24 24">
+        <path d="M4 6h9M4 12h7M4 18h5"></path>
+        <path d="m15 8 6 4-6 4Z"></path>
+      </symbol>
+      <symbol id="icon-calendar" viewBox="0 0 24 24">
+        <rect x="3" y="5" width="18" height="16" rx="2"></rect>
+        <path d="M16 3v4M8 3v4M3 10h18"></path>
+      </symbol>
+      <symbol id="icon-calendar-check" viewBox="0 0 24 24">
+        <rect x="3" y="5" width="18" height="16" rx="2"></rect>
+        <path d="M16 3v4M8 3v4M3 10h18"></path>
+        <path d="m9 15 2 2 4-4"></path>
+      </symbol>
+      <symbol id="icon-trophy" viewBox="0 0 24 24">
+        <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0Z"></path>
+        <path d="M7 6H4v2a4 4 0 0 0 4 4M17 6h3v2a4 4 0 0 1-4 4"></path>
+      </symbol>
+      <symbol id="icon-filter" viewBox="0 0 24 24">
+        <path d="M4 5h16l-6 7v6l-4-2v-4L4 5Z"></path>
+      </symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24">
+        <path d="M12 3v12"></path>
+        <path d="m7 10 5 5 5-5"></path>
+        <path d="M5 21h14"></path>
+      </symbol>
+      <symbol id="icon-auto" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 3a9 9 0 0 1 0 18Z"></path>
+      </symbol>
+      <symbol id="icon-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path>
+      </symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24">
+        <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z"></path>
+      </symbol>
+      <symbol id="icon-settings" viewBox="0 0 24 24">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24">
+        <path d="M20 11a8 8 0 1 0-2.34 5.66"></path>
+        <path d="M20 4v7h-7"></path>
+      </symbol>
+      <symbol id="icon-chevron-left" viewBox="0 0 24 24">
+        <path d="m15 18-6-6 6-6"></path>
+      </symbol>
+      <symbol id="icon-chevron-right" viewBox="0 0 24 24">
+        <path d="m9 18 6-6-6-6"></path>
+      </symbol>
+      <symbol id="icon-play" viewBox="0 0 24 24">
+        <path d="m8 5 11 7-11 7Z"></path>
+      </symbol>
+      <symbol id="icon-bookmark" viewBox="0 0 24 24">
+        <path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-4-6 4Z"></path>
+      </symbol>
+      <symbol id="icon-hourglass" viewBox="0 0 24 24">
+        <path d="M6 2h12M6 22h12M7 2v5a5 5 0 0 0 5 5 5 5 0 0 0 5-5V2M7 22v-5a5 5 0 0 1 5-5 5 5 0 0 1 5 5v5"></path>
+      </symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 7v5l3 2"></path>
+      </symbol>
+      <symbol id="icon-arrow-up-right" viewBox="0 0 24 24">
+        <path d="M7 17 17 7M7 7h10v10"></path>
+      </symbol>
+      <symbol id="icon-image" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+        <circle cx="9" cy="9" r="2"></circle>
+        <path d="m21 15-5-5L5 20"></path>
+      </symbol>
+      <symbol id="icon-inbox" viewBox="0 0 24 24">
+        <path d="M4 4h16v16H4z"></path>
+        <path d="M4 13h4l2 3h4l2-3h4"></path>
+      </symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 8v5M12 16h.01"></path>
+      </symbol>
+      <symbol id="icon-info" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M12 11v5M12 8h.01"></path>
+      </symbol>
+    </svg>
+
+    <noscript>
+      <p class="calendar-noscript">
+        需要启用 JavaScript 才能读取更新日历。
+      </p>
+    </noscript>
+    <script type="module" src="/calendar.js"></script>
+  </body>
+</html>

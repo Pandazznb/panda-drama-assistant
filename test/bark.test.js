@@ -31,12 +31,34 @@ test("Bark request is fixed to api.day.app and encodes the key path", () => {
 test("Bark title and body are length limited", () => {
   const request = buildBarkRequest("abc_DEF-123", {
     title: "标".repeat(100),
-    body: "文".repeat(300),
+    body: "文".repeat(600),
   });
   assert.equal(request.payload.title.length, __test.MAX_TITLE_LENGTH);
   assert.equal(request.payload.body.length, __test.MAX_BODY_LENGTH);
   assert.ok(request.payload.title.endsWith("…"));
   assert.ok(request.payload.body.endsWith("…"));
+});
+
+test("Bark keeps complete update lines and summarizes omitted series", () => {
+  const updates = Array.from(
+    { length: 20 },
+    (_, index) =>
+      `• 第${index + 1}部短剧 第1季 +1集 11-22 12:${String(index).padStart(2, "0")}`,
+  ).join("\n");
+  const request = buildBarkRequest("abc_DEF-123", {
+    title: "20 部更新",
+    body: updates,
+  });
+  const lines = request.payload.body.split("\n");
+
+  assert.ok(request.payload.body.length <= __test.MAX_BODY_LENGTH);
+  assert.ok(lines.length > 2);
+  assert.ok(lines.slice(0, -1).every((line) => line.startsWith("• ")));
+  assert.match(
+    lines.at(-1),
+    /^另有 \d+ 部，打开短剧助手查看$/,
+  );
+  assert.doesNotMatch(request.payload.body, /…$/);
 });
 
 test("sendBarkNotification posts JSON and parses Bark success", async () => {

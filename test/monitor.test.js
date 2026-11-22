@@ -189,6 +189,63 @@ test("first subscription creates a baseline and never notifies immediately", asy
   assert.equal(dashboard.subscriptions[0].searchText, "测试短剧");
   assert.equal(dashboard.subscriptions[0].searchPinyin, "ceshiduanju");
   assert.equal(dashboard.subscriptions[0].searchInitials, "csdj");
+  assert.equal(
+    dashboard.subscriptions[0].discovery.unpublishedSeasonCount,
+    0,
+  );
+});
+
+test("dashboard exposes a safe discovery summary without candidates", async () => {
+  const harness = await createHarness();
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.store.mutate((state) => {
+    state.subscriptions[0].discovery = {
+      ...state.subscriptions[0].discovery,
+      unpublishedSeasonCount: 2,
+      albumSeasonCount: 9,
+      albumItemCount: 10,
+      lastCompletedAt: "2026-10-27T07:30:00.000Z",
+      lastDiscoveryIssue: "官方多季列表暂时不完整。",
+      candidates: [
+        {
+          seriesId: OTHER_ID,
+          token: "private-discovery-token",
+        },
+      ],
+    };
+  });
+
+  const dashboard = await harness.service.getDashboard();
+  assert.deepEqual(dashboard.subscriptions[0].discovery, {
+    unpublishedSeasonCount: 2,
+    unpublishedSeriesIds: [],
+    unpublishedSeasons: [],
+    albumSeasonCount: 9,
+    albumItemCount: 10,
+    lastCompletedAt: "2026-10-27T07:30:00.000Z",
+    lastDiscoveryIssue: "官方多季列表暂时不完整。",
+  });
+  assert.doesNotMatch(
+    JSON.stringify(dashboard.subscriptions[0].discovery),
+    /private-discovery-token/,
+  );
+});
+
+test("dashboard preserves an unknown official season count", async () => {
+  const harness = await createHarness();
+  await harness.service.addSubscription(ROOT_ID);
+  await harness.store.mutate((state) => {
+    state.subscriptions[0].discovery = {
+      ...state.subscriptions[0].discovery,
+      albumSeasonCount: null,
+    };
+  });
+
+  const dashboard = await harness.service.getDashboard();
+  assert.equal(
+    dashboard.subscriptions[0].discovery.albumSeasonCount,
+    null,
+  );
 });
 
 test("dashboard exposes up to 100 recent events", async () => {
@@ -702,8 +759,8 @@ test("new seasons also start a continuous reminder", async () => {
   now = new Date("2026-10-27T08:10:00.000Z");
   assert.equal((await harness.service.flushDiscoveryReminders()).sent, 1);
   const reminderBody = harness.notifications.at(-1).message.body;
-  assert.match(reminderBody, /《测试短剧》第二季 · 新季 6 集/);
-  assert.match(reminderBody, /季上线：2026-10-18 00:04/);
+  assert.match(reminderBody, /^• 测试短剧第二季 6集 10-18 00:04$/m);
+  assert.doesNotMatch(reminderBody, /季上线：/);
   assert.doesNotMatch(reminderBody, /检测到新季：/);
   assert.doesNotMatch(reminderBody, /提醒有效至：/);
 });
@@ -885,7 +942,10 @@ test("muting pauses current reminders and resumes on the next episode", async ()
     false,
   );
   assert.equal(harness.notifications.length, 1);
-  assert.match(harness.notifications[0].message.body, /第 16 集/);
+  assert.match(
+    harness.notifications[0].message.body,
+    /^• 测试短剧 \+1集 10-27 16:00$/m,
+  );
   assert.equal(state.discoveryReminders.length, 1);
   dashboard = await harness.service.getDashboard();
   assert.equal(dashboard.subscriptions[0].reminderMode, "enabled");
@@ -920,7 +980,10 @@ test("restoring a reminder resumes its animation and due notifications", async (
 
   assert.equal(enabled.reminderMode, "enabled");
   assert.equal(harness.notifications.length, 1);
-  assert.match(harness.notifications[0].message.body, /第 15 集/);
+  assert.match(
+    harness.notifications[0].message.body,
+    /^• 测试短剧 \+3集 10-27 16:00$/m,
+  );
   const dashboard = await harness.service.getDashboard();
   assert.equal(dashboard.subscriptions[0].reminderActive, true);
   assert.ok(dashboard.subscriptions[0].reminderExpiresAt);
@@ -959,7 +1022,10 @@ test("enabling reminders rebuilds a queue cleared by the previous mute behavior"
   const state = await harness.store.read();
   assert.equal(state.discoveryReminders.length, 1);
   assert.equal(harness.notifications.length, 1);
-  assert.match(harness.notifications[0].message.body, /第 15 集/);
+  assert.match(
+    harness.notifications[0].message.body,
+    /^• 测试短剧 \+3集 10-27 16:00$/m,
+  );
   const dashboard = await harness.service.getDashboard();
   assert.equal(dashboard.subscriptions[0].reminderActive, true);
 });
@@ -1075,7 +1141,10 @@ test("a muted reminder resumes when a new season is discovered", async () => {
     false,
   );
   assert.equal(harness.notifications.length, 1);
-  assert.match(harness.notifications[0].message.body, /新季/);
+  assert.match(
+    harness.notifications[0].message.body,
+    /^• 测试短剧第二季 6集 10-18 00:04$/m,
+  );
 });
 
 test("enabling a paused summary sends its due notification without another update", async () => {
@@ -1114,7 +1183,10 @@ test("enabling a paused summary sends its due notification without another updat
   assert.equal(enabled.reminderEnabled, true);
   assert.equal(state.pendingNotifications.length, 0);
   assert.equal(harness.notifications.length, 1);
-  assert.match(harness.notifications[0].message.body, /第 15 集/);
+  assert.match(
+    harness.notifications[0].message.body,
+    /^• 测试短剧 \+3集 10-27 16:00$/m,
+  );
 });
 
 test("paused sustained reminders resume only after reminders are enabled again", async () => {
@@ -1386,16 +1458,22 @@ test("Cron reminders combine series and never trigger an automatic check", async
 
   assert.equal(harness.notifications.length, 2);
   const reminder = harness.notifications[1].message;
-  assert.equal(reminder.title, "红果短剧新内容提醒");
-  assert.match(reminder.body, /《测试短剧》 · 第 15 集（新增 3 集）/);
-  assert.match(reminder.body, /《另一部短剧》 · 第 7 集（新增 3 集）/);
-  assert.match(reminder.body, /季上线：/);
+  assert.equal(reminder.title, "2 部更新");
+  assert.match(
+    reminder.body,
+    /^• 测试短剧 \+3集 10-27 16:00$/m,
+  );
+  assert.match(
+    reminder.body,
+    /^• 另一部短剧 \+3集 10-27 16:00$/m,
+  );
+  assert.doesNotMatch(reminder.body, /季上线：/);
   assert.doesNotMatch(reminder.body, /检测到更新：/);
   assert.doesNotMatch(reminder.body, /提醒有效至：/);
   assert.equal(
     reminder.body
       .split("\n")
-      .filter((line) => /^\d+\. /u.test(line)).length,
+      .filter((line) => /^• /u.test(line)).length,
     2,
   );
   const latestState = await harness.store.read();
@@ -1407,7 +1485,7 @@ test("Cron reminders combine series and never trigger an automatic check", async
   harness.service.stop();
 });
 
-test("continuous reminders sort series by latest discovery time", async () => {
+test("continuous reminders sort series by latest episode update time", async () => {
   let now = new Date("2026-10-27T08:00:00.000Z");
   const harness = await createHarness({ now: () => now });
   harness.details.set(
@@ -1456,9 +1534,115 @@ test("continuous reminders sort series by latest discovery time", async () => {
   const reminderLines = harness.notifications
     .at(-1)
     .message.body.split("\n")
-    .filter((line) => /^\d+\. /u.test(line));
-  assert.match(reminderLines[0], /《另一部短剧》 · 第 7 集/);
-  assert.match(reminderLines[1], /《测试短剧》 · 第 15 集/);
+    .filter((line) => /^• /u.test(line));
+  assert.match(reminderLines[0], /^• 另一部短剧 \+3集 10-27 16:05$/);
+  assert.match(reminderLines[1], /^• 测试短剧 \+3集 10-27 16:00$/);
+});
+
+test("continuous reminders use season and episode content update times", async () => {
+  const now = new Date("2026-11-22T08:00:00.000Z");
+  const harness = await createHarness({
+    now: () => now,
+    rootDetail: detail({ title: "测试短剧第一季" }),
+  });
+  harness.details.set(
+    OTHER_ID,
+    detail({
+      seriesId: OTHER_ID,
+      title: "另一部短剧",
+      groupId: GROUP_B,
+      firstVisibleTime: "2026-11-20T16:00:00.000Z",
+    }),
+  );
+  await addAndEnableBark(harness);
+  await harness.service.addSubscription(OTHER_ID);
+
+  await harness.store.mutate((state) => {
+    const rootSubscription = state.subscriptions.find(
+      (subscription) => subscription.primarySeriesId === ROOT_ID,
+    );
+    const otherSubscription = state.subscriptions.find(
+      (subscription) => subscription.primarySeriesId === OTHER_ID,
+    );
+    const rootSeason = rootSubscription.seasons[0];
+    rootSeason.lastEpisodeChangedAt = "2026-11-20T15:00:00.000Z";
+    rootSubscription.seasons.push({
+      ...rootSeason,
+      seriesId: NEXT_ID,
+      title: "测试短剧第二季",
+      firstVisibleTime: "2026-11-10T15:00:00.000Z",
+      lastEpisodeChangedAt: null,
+    });
+    otherSubscription.seasons[0].firstVisibleTime =
+      "2026-11-22T00:00:00.000Z";
+    state.discoveryReminders = [
+      {
+        id: "repeat-root-season",
+        type: "season",
+        subscriptionId: rootSubscription.id,
+        seasonId: NEXT_ID,
+        seasonTitle: "测试短剧第二季",
+        previousEpisodeCount: null,
+        episodeCount: 6,
+        firstDiscoveredAt: "2026-11-22T07:00:00.000Z",
+        lastDiscoveredAt: "2026-11-22T07:00:00.000Z",
+        expiresAt: "2026-11-23T08:00:00.000Z",
+        eventIds: [],
+        nextReminderAt: "2026-11-22T07:10:00.000Z",
+        lastReminderAt: null,
+        lastError: null,
+      },
+      {
+        id: "repeat-root-episode",
+        type: "episode",
+        subscriptionId: rootSubscription.id,
+        seasonId: ROOT_ID,
+        seasonTitle: "测试短剧",
+        previousEpisodeCount: 12,
+        episodeCount: 15,
+        firstDiscoveredAt: "2026-11-21T08:00:00.000Z",
+        lastDiscoveredAt: "2026-11-21T08:00:00.000Z",
+        expiresAt: "2026-11-23T08:00:00.000Z",
+        eventIds: [],
+        nextReminderAt: "2026-11-21T08:10:00.000Z",
+        lastReminderAt: null,
+        lastError: null,
+      },
+      {
+        id: "repeat-other-season",
+        type: "season",
+        subscriptionId: otherSubscription.id,
+        seasonId: OTHER_ID,
+        seasonTitle: "另一部短剧",
+        previousEpisodeCount: null,
+        episodeCount: 4,
+        firstDiscoveredAt: "2026-11-20T08:00:00.000Z",
+        lastDiscoveredAt: "2026-11-20T08:00:00.000Z",
+        expiresAt: "2026-11-23T08:00:00.000Z",
+        eventIds: [],
+        nextReminderAt: "2026-11-20T08:10:00.000Z",
+        lastReminderAt: null,
+        lastError: null,
+      },
+    ];
+  });
+
+  const result = await harness.service.flushDiscoveryReminders();
+  assert.equal(result.sent, 1);
+  const reminderLines = harness.notifications
+    .at(-1)
+    .message.body.split("\n")
+    .filter((line) => /^• /u.test(line));
+  assert.match(reminderLines[0], /^• 另一部短剧 4集 11-22 08:00$/);
+  assert.match(
+    reminderLines[1],
+    /^• 测试短剧第一季 \+3集 11-21 16:00$/,
+  );
+  assert.doesNotMatch(
+    harness.notifications.at(-1).message.body,
+    /测试短剧第二季/,
+  );
+  assert.equal(reminderLines.length, 2);
 });
 
 test("continuous reminder failures retry and expire without sending again", async () => {
@@ -1511,7 +1695,7 @@ test("continuous reminder failures retry and expire without sending again", asyn
 
   now = new Date("2026-10-27T08:25:00.000Z");
   assert.equal((await harness.service.flushDiscoveryReminders()).sent, 1);
-  assert.equal(sentMessages.at(-1).title, "红果短剧新内容提醒");
+  assert.equal(sentMessages.at(-1).title, "1 部更新");
   state = await harness.store.read();
   assert.equal(
     state.discoveryReminders[0].nextReminderAt,
@@ -1591,7 +1775,7 @@ test("continuous reminders survive a service restart", async () => {
   assert.equal(restartedNotifications.length, 1);
   assert.equal(
     restartedNotifications[0].message.title,
-    "红果短剧新内容提醒",
+    "1 部更新",
   );
   const state = await restartedStore.read();
   assert.equal(
@@ -1694,14 +1878,23 @@ test("custom templates render detailed, batch and continuous reminder messages",
       detailed: {
         title: "单剧：{seriesTitle}（{seasonCount}季）",
         body: "检查：{checkTime}\n{updates}",
+        seasonLine: "详情新季｜{seasonTitle}｜{episodeCount}集｜{updatedAt}",
+        episodeLine: "详情条目｜{seriesTitle}｜+{addedEpisodeCount}集｜{updatedAt}",
+        completedLine: "详情完结｜{seasonCount}季｜{episodeCount}集｜{updatedAt}",
       },
       batch: {
         title: "汇总：{updateCount}个系列",
         body: "批次：{checkTime}\n{updates}",
+        seasonLine: "汇总新季｜{seasonTitle}｜{episodeCount}集｜{updatedAt}",
+        episodeLine: "汇总条目｜{seriesTitle}｜+{addedEpisodeCount}集｜{updatedAt}",
+        completedLine: "汇总完结｜{seasonCount}季｜{episodeCount}集｜{updatedAt}",
       },
       reminder: {
         title: "提醒：{updateCount}个系列",
         body: "提醒：{reminderTime}\n{updates}",
+        seasonLine: "提醒新季｜{seasonTitle}｜{episodeCount}集｜{updatedAt}",
+        episodeLine: "• 提醒条目｜{seriesTitle}｜+{addedEpisodeCount}集｜{updatedAt}",
+        completedLine: "提醒完结｜{seasonCount}季｜{episodeCount}集｜{updatedAt}",
       },
     },
     discoveryReminderDurationMinutes: 60,
@@ -1720,7 +1913,7 @@ test("custom templates render detailed, batch and continuous reminder messages",
   );
   assert.match(
     harness.notifications[0].message.body,
-    /^检查：2026-10-27 16:00\n• 集数更新：《测试短剧》更新到第 15 集，新增 3 集。/,
+    /^检查：2026-10-27 16:00\n• 详情条目｜测试短剧｜\+3集｜2026-10-27 16:00$/,
   );
 
   now = new Date("2026-10-27T08:10:00.000Z");
@@ -1735,7 +1928,7 @@ test("custom templates render detailed, batch and continuous reminder messages",
   );
   assert.match(
     harness.notifications[1].message.body,
-    /^提醒：2026-10-27 16:10\n1\. 《测试短剧》 · 第 15 集/,
+    /^提醒：2026-10-27 16:10\n• 提醒条目｜测试短剧｜\+3集｜2026-10-27 16:00$/,
   );
 
   now = new Date("2026-10-27T08:20:00.000Z");
@@ -1750,7 +1943,82 @@ test("custom templates render detailed, batch and continuous reminder messages",
   );
   assert.match(
     harness.notifications[2].message.body,
-    /^批次：2026-10-27 16:20\n1\. 《测试短剧》 · 第 18 集/,
+    /^批次：2026-10-27 16:20\n• 汇总条目｜测试短剧｜\+3集｜2026-10-27 16:20$/,
+  );
+});
+
+test("custom season and completion lines render field-specific content", async () => {
+  const seasonHarness = await createHarness({
+    nextDetail: detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧 第二季",
+      episodeCount: 6,
+      firstVisibleTime: "2026-10-17T16:04:00.000Z",
+    }),
+    albumSeriesIds: [ROOT_ID, NEXT_ID],
+    recommendFromRoot: false,
+  });
+  await addAndEnableBark(seasonHarness);
+  await seasonHarness.service.updateSettings({
+    notificationTemplates: {
+      detailed: {
+        seasonLine:
+          "新季模板｜{seriesTitle}｜{seasonTitle}｜{episodeCount}集｜{updatedAt}",
+        episodeLine: "不应出现的集更新模板",
+        completedLine: "不应出现的完结模板",
+      },
+    },
+  });
+
+  await seasonHarness.service.checkSubscription(
+    (await seasonHarness.store.read()).subscriptions[0].id,
+    { discover: true, forceDiscovery: true },
+  );
+  assert.equal(seasonHarness.notifications.length, 1);
+  assert.match(
+    seasonHarness.notifications[0].message.body,
+    /^• 新季模板｜测试短剧｜测试短剧 第二季｜6集｜2026-10-18 00:04$/m,
+  );
+  assert.doesNotMatch(
+    seasonHarness.notifications[0].message.body,
+    /不应出现的集更新模板|不应出现的完结模板/,
+  );
+
+  const completedHarness = await createHarness({
+    albumSeriesIds: [ROOT_ID],
+  });
+  await addAndEnableBark(completedHarness);
+  await completedHarness.service.updateSettings({
+    notificationTemplates: {
+      detailed: {
+        seasonLine: "不应出现的新季模板",
+        episodeLine: "不应出现的集更新模板",
+        completedLine:
+          "完结模板｜{seriesTitle}｜{seasonCount}季｜{episodeCount}集｜{updatedAt}",
+      },
+    },
+  });
+  completedHarness.details.set(
+    ROOT_ID,
+    detail({
+      title: "测试短剧第一季大结局",
+      episodeCount: 12,
+      status: "completed",
+    }),
+  );
+
+  await completedHarness.service.checkSubscription(
+    (await completedHarness.store.read()).subscriptions[0].id,
+    { discover: true, forceDiscovery: true },
+  );
+  assert.equal(completedHarness.notifications.length, 1);
+  assert.match(
+    completedHarness.notifications[0].message.body,
+    /^• 完结模板｜测试短剧大结局｜1季｜12集｜2026-10-27 16:00$/m,
+  );
+  assert.doesNotMatch(
+    completedHarness.notifications[0].message.body,
+    /不应出现的新季模板|不应出现的集更新模板/,
   );
 });
 
@@ -1880,8 +2148,10 @@ test("episode growth is aggregated once per window", async () => {
   assert.equal(flushed.sent, 1);
   assert.equal(flushed.pending, 0);
   assert.equal(harness.notifications.length, 1);
-  assert.match(harness.notifications[0].message.body, /第 18 集/);
-  assert.match(harness.notifications[0].message.body, /新增 6 集/);
+  assert.match(
+    harness.notifications[0].message.body,
+    /^• 测试短剧 \+6集 10-27 16:20$/m,
+  );
   state = await harness.store.read();
   assert.equal(
     state.events.filter((event) => event.type === "episode").every(
@@ -1917,7 +2187,6 @@ test("due episode notifications combine multiple series into one message", async
   ).id;
 
   now = new Date("2026-10-27T08:06:00.000Z");
-  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
   harness.details.set(
     OTHER_ID,
     detail({
@@ -1927,37 +2196,44 @@ test("due episode notifications combine multiple series into one message", async
       episodeCount: 7,
     }),
   );
-  await harness.service.checkSubscriptions(
-    [rootSubscriptionId, otherSubscriptionId],
-    { discover: false },
-  );
+  await harness.service.checkSubscriptions([otherSubscriptionId], {
+    discover: false,
+  });
+
+  now = new Date("2026-10-27T08:07:00.000Z");
+  harness.details.set(ROOT_ID, detail({ episodeCount: 15 }));
+  await harness.service.checkSubscriptions([rootSubscriptionId], {
+    discover: false,
+  });
   assert.equal(
     (await harness.store.read()).pendingNotifications.length,
     2,
   );
   assert.equal(harness.notifications.length, 0);
 
-  now = new Date("2026-10-27T09:06:00.000Z");
+  now = new Date("2026-10-27T09:07:00.000Z");
   const result = await harness.service.flushDueNotifications();
   assert.equal(result.sent, 1);
   assert.equal(result.pending, 0);
   assert.equal(harness.notifications.length, 1);
   const message = harness.notifications[0].message;
-  assert.match(message.body, /最近检测：2026-10-27 16:06/);
-  assert.match(message.body, /季上线：2026-10-17 00:04/);
-  assert.match(message.body, /检测到更新：2026-10-27 16:06/);
+  assert.equal(message.title, "2 部更新");
+  assert.doesNotMatch(message.body, /最近检测：|季上线：|检测到更新：/);
   assert.match(
     message.body,
-    /《测试短剧》 · 第 15 集（本时段新增 3 集）/,
+    /^• 测试短剧 \+3集 10-27 16:07$/m,
   );
   assert.match(
     message.body,
-    /《另一部短剧》 · 第 7 集（本时段新增 3 集）/,
+    /^• 另一部短剧 \+3集 10-27 16:06$/m,
   );
+  const updateLines = message.body
+    .split("\n")
+    .filter((line) => /^• /u.test(line));
+  assert.match(updateLines[0], /测试短剧 \+3集/);
+  assert.match(updateLines[1], /另一部短剧 \+3集/);
   assert.equal(
-    message.body
-      .split("\n")
-      .filter((line) => /^\d+\. /u.test(line)).length,
+    updateLines.length,
     2,
   );
 });
@@ -2064,7 +2340,10 @@ test("pending aggregated notifications survive a service restart", async () => {
   await restartedService.start();
   restartedService.stop();
   assert.equal(restartedNotifications.length, 1);
-  assert.match(restartedNotifications[0].message.body, /第 15 集/);
+  assert.match(
+    restartedNotifications[0].message.body,
+    /^• 测试短剧 \+3集 10-27 16:05$/m,
+  );
   assert.equal(
     (await restartedStore.read()).pendingNotifications.length,
     0,
@@ -3947,17 +4226,96 @@ test("a batch check sends one summary with the latest change for every series", 
 
   assert.equal(harness.notifications.length, 1);
   const message = harness.notifications[0].message;
-  assert.equal(message.title, "短剧助手 · 2 个系列有更新");
-  assert.match(message.body, /检查时间：2026-10-27 16:05/);
-  assert.match(message.body, /季上线：2026-10-17 00:04/);
-  assert.match(message.body, /检测到更新：2026-10-27 16:05/);
-  assert.match(message.body, /《测试短剧》 · 第 15 集（新增 3 集）/);
-  assert.match(message.body, /《另一部短剧》 · 第 7 集（新增 3 集）/);
+  assert.equal(message.title, "2 部更新");
+  assert.doesNotMatch(message.body, /检查时间：|季上线：|检测到更新：/);
+  assert.match(
+    message.body,
+    /^• 测试短剧 \+3集 10-27 16:05$/m,
+  );
+  assert.match(
+    message.body,
+    /^• 另一部短剧 \+3集 10-27 16:05$/m,
+  );
   assert.equal(
     message.body
       .split("\n")
-      .filter((line) => /^\d+\. /u.test(line)).length,
+      .filter((line) => /^• /u.test(line)).length,
     2,
+  );
+});
+
+test("batch updates keep long series titles complete", async () => {
+  const harness = await createHarness({
+    rootDetail: detail({
+      title: "满园亲戚全是上古大妖 第一季",
+      episodeCount: 12,
+    }),
+  });
+  await addAndEnableBark(harness);
+  harness.details.set(
+    ROOT_ID,
+    detail({
+      title: "满园亲戚全是上古大妖 第一季",
+      episodeCount: 15,
+    }),
+  );
+
+  await harness.service.checkSubscriptions(
+    [(await harness.store.read()).subscriptions[0].id],
+    { discover: false },
+  );
+
+  assert.equal(harness.notifications.length, 1);
+  assert.match(
+    harness.notifications[0].message.body,
+    /^• 满园亲戚全是上古大妖第一季 \+3集 10-27 16:00$/m,
+  );
+  assert.doesNotMatch(harness.notifications[0].message.body, /…/);
+});
+
+test("episode updates do not invent a season number missing from the official title", async () => {
+  const harness = await createHarness({
+    nextDetail: detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧新篇章",
+      episodeCount: 6,
+      firstVisibleTime: "2026-10-20T16:04:00.000Z",
+    }),
+  });
+  await addAndEnableBark(harness);
+
+  const subscriptionId = await harness.store.mutate((state) => {
+    const subscription = state.subscriptions[0];
+    const rootSeason = subscription.seasons[0];
+    subscription.seasons.push({
+      ...rootSeason,
+      seriesId: NEXT_ID,
+      title: "测试短剧新篇章",
+      firstVisibleTime: "2026-10-20T16:04:00.000Z",
+      episodeCount: 6,
+      highWaterEpisodeCount: 6,
+      lastObservedEpisodeCount: 6,
+    });
+    return subscription.id;
+  });
+
+  harness.details.set(
+    NEXT_ID,
+    detail({
+      seriesId: NEXT_ID,
+      title: "测试短剧新篇章",
+      episodeCount: 8,
+      firstVisibleTime: "2026-10-20T16:04:00.000Z",
+    }),
+  );
+  await harness.service.checkSubscriptions([subscriptionId], {
+    discover: false,
+  });
+
+  assert.equal(harness.notifications.length, 1);
+  assert.match(
+    harness.notifications[0].message.body,
+    /^• 测试短剧新篇章 \+2集 10-27 16:00$/m,
   );
 });
 
@@ -4041,11 +4399,11 @@ test("batch discovery aligns series that share the same new-season release", asy
   assert.equal(harness.notifications.length, 1);
   assert.match(
     harness.notifications[0].message.body,
-    /《测试短剧》第二季 · 新季 6 集/,
+    /^• 测试短剧第二季 6集 10-27 08:04$/m,
   );
   assert.match(
     harness.notifications[0].message.body,
-    /《另一部短剧》第二季 · 新季 8 集/,
+    /^• 另一部短剧第二季 8集 10-27 08:04$/m,
   );
 
   state = await harness.store.read();
@@ -4102,14 +4460,14 @@ test("scheduled checks refresh the album list even within the discovery interval
   );
 });
 
-test("a batch check shows only the latest discovered season in one series", async () => {
+test("a batch check shows only the latest updated season in one series", async () => {
   const harness = await createHarness({
     rootDetail: detail({ title: "烛九阴第一季" }),
     nextDetail: detail({
       seriesId: NEXT_ID,
       title: "烛九阴第二季",
       episodeCount: 6,
-      firstVisibleTime: "2026-10-17T16:04:00.000Z",
+      firstVisibleTime: "2026-10-25T16:04:00.000Z",
     }),
     albumSeriesIds: [ROOT_ID, NEXT_ID, OTHER_ID],
     recommendFromRoot: false,
@@ -4132,12 +4490,10 @@ test("a batch check shows only the latest discovered season in one series", asyn
 
   assert.equal(harness.notifications.length, 1);
   const message = harness.notifications[0].message;
-  assert.equal(message.title, "短剧助手 · 1 个系列有更新");
-  assert.match(message.body, /《烛九阴》第八季 · 新季 149 集/);
-  assert.match(message.body, /季上线：2026-10-21 00:04/);
-  assert.match(message.body, /检测到新季：2026-10-27 16:00/);
-  assert.doesNotMatch(message.body, /烛九阴第二季/);
-  assert.doesNotMatch(message.body, /烛九阴第八季 · 新季/);
+  assert.equal(message.title, "1 部更新");
+  assert.match(message.body, /^• 烛九阴第二季 6集 10-26 00:04$/m);
+  assert.doesNotMatch(message.body, /季上线：|检测到新季：/);
+  assert.doesNotMatch(message.body, /烛九阴第八季/);
 });
 
 test("album discovery failure does not block normal episode checks", async () => {

@@ -407,68 +407,202 @@ const DEFAULT_SUBSCRIPTION_RENDER_LIMIT = 20;
 const SUBSCRIPTION_LOAD_MORE_SIZE = 10;
 const MAX_NOTIFICATION_TEMPLATE_TITLE_LENGTH = 80;
 const MAX_NOTIFICATION_TEMPLATE_BODY_LENGTH = 1_200;
+const MAX_NOTIFICATION_TEMPLATE_LINE_LENGTH = 300;
 
 const notificationTemplateLabels = Object.freeze({
   detailed: "单系列详情",
   batch: "批量汇总",
   reminder: "持续提醒",
 });
-const notificationTemplateVariables = Object.freeze({
-  detailed: [
+const notificationTemplateFieldOrder = Object.freeze([
+  "title",
+  "body",
+  "seasonLine",
+  "episodeLine",
+  "completedLine",
+]);
+const notificationTemplateLineVariables = Object.freeze([
+  "appName",
+  "seriesTitle",
+  "seasonTitle",
+  "eventLabel",
+  "episodeCount",
+  "addedEpisodeCount",
+  "seasonCount",
+  "updatedAt",
+  "updatedDate",
+  "updatedTime",
+  "updateText",
+]);
+const notificationTemplateShellVariables = Object.freeze({
+  detailed: Object.freeze([
     "appName",
     "seriesTitle",
     "checkTime",
     "updates",
     "seasonCount",
-  ],
-  batch: ["appName", "checkTime", "updateCount", "updates"],
-  reminder: [
+    "updateCount",
+    "updateDate",
+    "updateTime",
+  ]),
+  batch: Object.freeze([
+    "appName",
+    "checkTime",
+    "updateCount",
+    "updates",
+    "updateDate",
+    "updateTime",
+  ]),
+  reminder: Object.freeze([
     "appName",
     "reminderTime",
     "updateCount",
     "updates",
-  ],
+    "updateDate",
+    "updateTime",
+  ]),
+});
+const notificationTemplateFieldVariables = Object.freeze({
+  detailed: Object.freeze({
+    title: notificationTemplateShellVariables.detailed,
+    body: notificationTemplateShellVariables.detailed,
+    seasonLine: notificationTemplateLineVariables,
+    episodeLine: notificationTemplateLineVariables,
+    completedLine: notificationTemplateLineVariables,
+  }),
+  batch: Object.freeze({
+    title: notificationTemplateShellVariables.batch,
+    body: notificationTemplateShellVariables.batch,
+    seasonLine: notificationTemplateLineVariables,
+    episodeLine: notificationTemplateLineVariables,
+    completedLine: notificationTemplateLineVariables,
+  }),
+  reminder: Object.freeze({
+    title: notificationTemplateShellVariables.reminder,
+    body: notificationTemplateShellVariables.reminder,
+    seasonLine: notificationTemplateLineVariables,
+    episodeLine: notificationTemplateLineVariables,
+    completedLine: notificationTemplateLineVariables,
+  }),
 });
 const notificationTemplateFieldLabels = Object.freeze({
   title: "标题",
   body: "正文",
+  seasonLine: "新季条目",
+  episodeLine: "集更新条目",
+  completedLine: "完结条目",
+});
+const notificationTemplateFieldMaxLengths = Object.freeze({
+  title: MAX_NOTIFICATION_TEMPLATE_TITLE_LENGTH,
+  body: MAX_NOTIFICATION_TEMPLATE_BODY_LENGTH,
+  seasonLine: MAX_NOTIFICATION_TEMPLATE_LINE_LENGTH,
+  episodeLine: MAX_NOTIFICATION_TEMPLATE_LINE_LENGTH,
+  completedLine: MAX_NOTIFICATION_TEMPLATE_LINE_LENGTH,
+});
+const notificationTemplateVariableLabels = Object.freeze({
+  appName: "助手名称",
+  seriesTitle: "系列名称",
+  seasonTitle: "官方季标题",
+  checkTime: "检查时间",
+  reminderTime: "提醒时间",
+  updateCount: "更新数量",
+  updates: "更新明细",
+  seasonCount: "季数",
+  eventLabel: "事件类型",
+  episodeCount: "当前总集数",
+  addedEpisodeCount: "本次新增集数",
+  updatedAt: "内容更新时间",
+  updatedDate: "更新日期",
+  updatedTime: "更新时间",
+  updateDate: "批次日期",
+  updateTime: "批次时间",
+  updateText: "默认更新行",
+});
+const notificationTemplateExampleEvents = Object.freeze({
+  season: Object.freeze({
+    defaultLine: "万妖图录传第七季 80集 11-01 00:04",
+    variables: Object.freeze({
+      appName: "短剧助手",
+      seriesTitle: "万妖图录传",
+      seasonTitle: "万妖图录传第七季",
+      eventLabel: "新季",
+      episodeCount: 80,
+      addedEpisodeCount: 0,
+      seasonCount: 7,
+      updatedAt: "2026-11-01 00:04",
+      updatedDate: "2026-11-01",
+      updatedTime: "00:04",
+      updateText: "万妖图录传第七季 80集 11-01 00:04",
+    }),
+  }),
+  episode: Object.freeze({
+    defaultLine: "太玄胎珠传第六季 +2集 11-01 08:20",
+    variables: Object.freeze({
+      appName: "短剧助手",
+      seriesTitle: "太玄胎珠传",
+      seasonTitle: "太玄胎珠传第六季",
+      eventLabel: "集更新",
+      episodeCount: 42,
+      addedEpisodeCount: 2,
+      seasonCount: 6,
+      updatedAt: "2026-11-01 08:20",
+      updatedDate: "2026-11-01",
+      updatedTime: "08:20",
+      updateText: "太玄胎珠传第六季 +2集 11-01 08:20",
+    }),
+  }),
+  completed: Object.freeze({
+    defaultLine: "苏忆穿书 全系列完结 4季/120集 11-01 07:45",
+    variables: Object.freeze({
+      appName: "短剧助手",
+      seriesTitle: "苏忆穿书",
+      seasonTitle: "苏忆穿书第四季",
+      eventLabel: "系列完结",
+      episodeCount: 120,
+      addedEpisodeCount: 0,
+      seasonCount: 4,
+      updatedAt: "2026-11-01 07:45",
+      updatedDate: "2026-11-01",
+      updatedTime: "07:45",
+      updateText: "苏忆穿书 全系列完结 4季/120集 11-01 07:45",
+    }),
+  }),
 });
 const notificationTemplateExamples = Object.freeze({
   detailed: {
     defaultTitle: "《万妖图录传》更新详情",
-    defaultBody:
-      "检查时间：2026-11-01 08:30\n\n• 发现新季：《万妖图录传第七季》，当前 80 集。\n  季上线：2026-11-01 00:04\n\n当前共收录 7 季。",
-    variables: {
+    defaultBodyTemplate:
+      "检查时间：{checkTime}\n\n{updates}\n\n当前共收录 {seasonCount} 季。",
+    shellVariables: {
       appName: "短剧助手",
       seriesTitle: "万妖图录传",
       checkTime: "2026-11-01 08:30",
-      updates:
-        "• 发现新季：《万妖图录传第七季》，当前 80 集。\n  季上线：2026-11-01 00:04",
       seasonCount: 7,
+      updateCount: 3,
+      updateDate: "2026-11-01",
+      updateTime: "08:30",
     },
   },
   batch: {
-    defaultTitle: "短剧助手 · 2 个系列有更新",
-    defaultBody:
-      "检查时间：2026-11-01 08:30\n\n1. 《万妖图录传》第七季 · 新季 80 集\n2. 《太玄胎珠传》 · 第 42 集（新增 2 集）",
-    variables: {
+    defaultTitle: "3 部更新",
+    defaultBodyTemplate: "{updates}",
+    shellVariables: {
       appName: "短剧助手",
       checkTime: "2026-11-01 08:30",
-      updateCount: 2,
-      updates:
-        "1. 《万妖图录传》第七季 · 新季 80 集\n2. 《太玄胎珠传》 · 第 42 集（新增 2 集）",
+      updateCount: 3,
+      updateDate: "2026-11-01",
+      updateTime: "08:30",
     },
   },
   reminder: {
-    defaultTitle: "短剧助手新内容提醒",
-    defaultBody:
-      "提醒时间：2026-11-01 12:00\n\n1. 《万妖图录传》第七季 · 新季 80 集 · 季上线：2026-11-01 00:04",
-    variables: {
+    defaultTitle: "3 部更新",
+    defaultBodyTemplate: "{updates}",
+    shellVariables: {
       appName: "短剧助手",
       reminderTime: "2026-11-01 12:00",
-      updateCount: 1,
-      updates:
-        "1. 《万妖图录传》第七季 · 新季 80 集 · 季上线：2026-11-01 00:04",
+      updateCount: 3,
+      updateDate: "2026-11-01",
+      updateTime: "12:00",
     },
   },
 });
@@ -1170,9 +1304,15 @@ function setFormFeedback(element, message = "", type = "error") {
   element.classList.toggle("is-success", type === "success");
 }
 
-function setFieldError(input, hasError) {
-  input.closest(".field")?.classList.toggle("has-error", hasError);
+function setFieldError(input, hasError, message = "") {
+  const field = input.closest(".field");
+  field?.classList.toggle("has-error", hasError);
   input.setAttribute("aria-invalid", hasError ? "true" : "false");
+  const feedback = field?.querySelector("[data-template-field-error]");
+  if (feedback) {
+    feedback.textContent = hasError ? message : "";
+    feedback.classList.toggle("is-visible", Boolean(hasError && message));
+  }
 }
 
 function showToast(message, type = "success") {
@@ -6663,6 +6803,12 @@ function notificationTemplateField(type, field) {
   );
 }
 
+function notificationTemplateFieldElements(type) {
+  return notificationTemplateFieldOrder
+    .map((field) => notificationTemplateField(type, field))
+    .filter(Boolean);
+}
+
 function renderNotificationTemplateText(template, variables) {
   return String(template ?? "").replace(
     notificationTemplateVariablePattern,
@@ -6673,12 +6819,21 @@ function renderNotificationTemplateText(template, variables) {
   );
 }
 
+function notificationTemplatePreviewLine(value, variables) {
+  return renderNotificationTemplateText(value, variables)
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/^(?:[•·]\s*)+/u, "")
+    .trim();
+}
+
 function refreshNotificationTemplateEditor(editor) {
   const type = editor?.dataset.notificationTemplate;
   const example = notificationTemplateExamples[type];
   if (!editor || !example) {
     return;
   }
+  const fields = notificationTemplateFieldElements(type);
   const titleField = notificationTemplateField(type, "title");
   const bodyField = notificationTemplateField(type, "body");
   const previewTitle = editor.querySelector(
@@ -6688,20 +6843,68 @@ function refreshNotificationTemplateEditor(editor) {
     "[data-template-preview-body]",
   );
   const stateLabel = editor.querySelector("[data-template-state]");
-  const restoreButton = editor.querySelector("[data-restore-template]");
   const title = titleField?.value || "";
   const body = bodyField?.value || "";
-  const customized = Boolean(title.trim() || body.trim());
+  const customized = fields.some((field) =>
+    String(field.value || "").trim(),
+  );
+  const updates = [
+    ["seasonLine", "season"],
+    ["episodeLine", "episode"],
+    ["completedLine", "completed"],
+  ]
+    .map(([fieldName, eventName]) => {
+      const field = notificationTemplateField(type, fieldName);
+      const eventExample = notificationTemplateExampleEvents[eventName];
+      const value = String(field?.value || "").trim();
+      const content =
+        (value
+          ? notificationTemplatePreviewLine(value, eventExample.variables)
+          : "") || eventExample.defaultLine;
+      const sample = editor.querySelector(
+        `[data-template-field-preview="${fieldName}"]`,
+      );
+      if (sample) {
+        sample.textContent = `• ${content}`;
+      }
+      return `• ${content}`;
+    })
+    .join("\n");
+  const variables = {
+    ...example.shellVariables,
+    updates,
+  };
 
   stateLabel.textContent = customized ? "已自定义" : "内置默认";
   stateLabel.classList.toggle("is-customized", customized);
-  restoreButton.disabled = !customized;
+  for (const field of fields) {
+    const restoreButton = field
+      .closest(".template-field")
+      ?.querySelector("[data-restore-template-field]");
+    if (restoreButton) {
+      restoreButton.disabled = !String(field.value || "").trim();
+    }
+    const counter = field
+      .closest(".template-field")
+      ?.querySelector("[data-template-counter]");
+    if (counter) {
+      const length = [...String(field.value || "")].length;
+      const maxLength =
+        notificationTemplateFieldMaxLengths[field.dataset.templateField];
+      const showCounter = length >= Math.ceil(maxLength * 0.75);
+      counter.textContent = showCounter ? `${length} / ${maxLength}` : "";
+      counter.classList.toggle("is-over-limit", length > maxLength);
+    }
+  }
   previewTitle.textContent = title.trim()
-    ? renderNotificationTemplateText(title, example.variables)
+    ? renderNotificationTemplateText(title, variables)
     : example.defaultTitle;
   previewBody.textContent = body.trim()
-    ? renderNotificationTemplateText(body, example.variables)
-    : example.defaultBody;
+    ? renderNotificationTemplateText(body, variables)
+    : renderNotificationTemplateText(
+        example.defaultBodyTemplate,
+        variables,
+      );
 }
 
 function refreshAllNotificationTemplateEditors() {
@@ -6714,12 +6917,11 @@ function setNotificationTemplateValues(templates) {
   for (const editor of elements.notificationTemplates) {
     const type = editor.dataset.notificationTemplate;
     const template = templates?.[type] || {};
-    const titleField = notificationTemplateField(type, "title");
-    const bodyField = notificationTemplateField(type, "body");
-    titleField.value = String(template.title ?? "");
-    bodyField.value = String(template.body ?? "");
-    setFieldError(titleField, false);
-    setFieldError(bodyField, false);
+    for (const field of notificationTemplateFieldElements(type)) {
+      const fieldName = field.dataset.templateField;
+      field.value = String(template[fieldName] ?? "");
+      setFieldError(field, false);
+    }
     editor.open = false;
     refreshNotificationTemplateEditor(editor);
   }
@@ -6727,10 +6929,7 @@ function setNotificationTemplateValues(templates) {
 
 function validateNotificationTemplateField(type, field, input) {
   const value = String(input.value ?? "").replace(/\r\n?/g, "\n");
-  const maxLength =
-    field === "title"
-      ? MAX_NOTIFICATION_TEMPLATE_TITLE_LENGTH
-      : MAX_NOTIFICATION_TEMPLATE_BODY_LENGTH;
+  const maxLength = notificationTemplateFieldMaxLengths[field];
   if ([...value].length > maxLength) {
     throw settingsValidationError(
       `${notificationTemplateLabels[type]}的${
@@ -6741,7 +6940,9 @@ function validateNotificationTemplateField(type, field, input) {
     );
   }
 
-  const allowedVariables = new Set(notificationTemplateVariables[type]);
+  const allowedVariables = new Set(
+    notificationTemplateFieldVariables[type]?.[field] || [],
+  );
   for (const match of value.matchAll(
     new RegExp(notificationTemplateVariablePattern.source, "g"),
   )) {
@@ -6762,18 +6963,16 @@ function notificationTemplatesPayload() {
   const templates = {};
   for (const editor of elements.notificationTemplates) {
     const type = editor.dataset.notificationTemplate;
-    templates[type] = {
-      title: validateNotificationTemplateField(
-        type,
-        "title",
-        notificationTemplateField(type, "title"),
-      ),
-      body: validateNotificationTemplateField(
-        type,
-        "body",
-        notificationTemplateField(type, "body"),
-      ),
-    };
+    templates[type] = Object.fromEntries(
+      notificationTemplateFieldOrder.map((fieldName) => [
+        fieldName,
+        validateNotificationTemplateField(
+          type,
+          fieldName,
+          notificationTemplateField(type, fieldName),
+        ),
+      ]),
+    );
   }
   return templates;
 }
@@ -6795,9 +6994,20 @@ function rememberNotificationTemplateSelection(field) {
 
 function insertNotificationTemplateVariable(editor, variableName) {
   const type = editor.dataset.notificationTemplate;
-  let field = appState.templateFocusedField;
-  if (!field || !editor.contains(field)) {
-    field = notificationTemplateField(type, "title");
+  let field =
+    appState.templateFocusedField &&
+    editor.contains(appState.templateFocusedField)
+      ? appState.templateFocusedField
+      : null;
+  const fieldSupportsVariable = (candidate) =>
+    candidate &&
+    notificationTemplateFieldVariables[type]?.[
+      candidate.dataset.templateField
+    ]?.includes(variableName);
+  if (!fieldSupportsVariable(field)) {
+    field = notificationTemplateFieldElements(type).find(
+      fieldSupportsVariable,
+    );
   }
   if (!field) {
     return;
@@ -6828,6 +7038,39 @@ function insertNotificationTemplateVariable(editor, variableName) {
   rememberNotificationTemplateSelection(field);
 }
 
+function notificationTemplateVariableButton(variableName) {
+  const label =
+    notificationTemplateVariableLabels[variableName] || variableName;
+  return `
+    <button
+      class="template-variable"
+      type="button"
+      data-template-variable="${escapeHtml(variableName)}"
+      aria-label="插入变量 {${escapeHtml(variableName)}}，${escapeHtml(label)}"
+    >
+      <span class="template-variable__code">{${escapeHtml(variableName)}}</span>
+      <span class="template-variable__label">${escapeHtml(label)}</span>
+    </button>
+  `;
+}
+
+function renderNotificationTemplateVariableLists() {
+  for (const editor of elements.notificationTemplates) {
+    const type = editor.dataset.notificationTemplate;
+    for (const list of editor.querySelectorAll(
+      "[data-template-variable-list]",
+    )) {
+      const variables =
+        list.dataset.templateVariableList === "shell"
+          ? notificationTemplateShellVariables[type] || []
+          : notificationTemplateLineVariables;
+      list.innerHTML = variables
+        .map(notificationTemplateVariableButton)
+        .join("");
+    }
+  }
+}
+
 function focusSettingsError(error) {
   const code = error?.code || "";
   if (
@@ -6842,13 +7085,16 @@ function focusSettingsError(error) {
       Object.keys(notificationTemplateLabels).find((key) =>
         error.message.includes(notificationTemplateLabels[key]),
       ) || "detailed";
-    const fieldName = error.message.includes("正文") ? "body" : "title";
+    const fieldName =
+      notificationTemplateFieldOrder.find((name) =>
+        error.message.includes(notificationTemplateFieldLabels[name]),
+      ) || "title";
     const field = notificationTemplateField(type, fieldName);
     const editor = field?.closest("[data-notification-template]");
     if (editor) {
       editor.open = true;
     }
-    setFieldError(field, true);
+    setFieldError(field, true, error.message);
     field?.scrollIntoView({
       block: "center",
       behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -6904,7 +7150,7 @@ function focusSettingsError(error) {
     setSettingsTab("account");
   }
   if (field) {
-    setFieldError(field, true);
+    setFieldError(field, true, error.message);
     field.focus();
   }
 }
@@ -6957,6 +7203,8 @@ elements.openEvents.addEventListener("click", () => {
   openDialog(elements.eventsDialog);
 });
 
+renderNotificationTemplateVariableLists();
+
 elements.settingsTabs.forEach((tab, index) => {
   tab.addEventListener("click", () => {
     setSettingsTab(tab.dataset.settingsTab);
@@ -6987,10 +7235,7 @@ elements.settingsTabs.forEach((tab, index) => {
 
 for (const editor of elements.notificationTemplates) {
   const type = editor.dataset.notificationTemplate;
-  const fields = [
-    notificationTemplateField(type, "title"),
-    notificationTemplateField(type, "body"),
-  ].filter(Boolean);
+  const fields = notificationTemplateFieldElements(type);
 
   for (const field of fields) {
     field.addEventListener("focus", () => {
@@ -7022,15 +7267,23 @@ for (const editor of elements.notificationTemplates) {
   });
 
   editor
-    .querySelector("[data-restore-template]")
-    ?.addEventListener("click", () => {
-      for (const field of fields) {
+    .querySelectorAll("[data-restore-template-field]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        const field = notificationTemplateField(
+          type,
+          button.dataset.restoreTemplateField,
+        );
+        if (!field) {
+          return;
+        }
         field.value = "";
         setFieldError(field, false);
-      }
-      appState.templateFocusedField = fields[0] || null;
-      refreshNotificationTemplateEditor(editor);
-      fields[0]?.focus();
+        appState.templateFocusedField = field;
+        refreshNotificationTemplateEditor(editor);
+        setFormFeedback(elements.settingsFeedback);
+        field.focus();
+      });
     });
 }
 
@@ -7538,7 +7791,7 @@ async function saveSettings({ closeAfter = true } = {}) {
   } catch (error) {
     setFormFeedback(elements.settingsFeedback, error.message);
     if (error.field) {
-      setFieldError(error.field, true);
+      setFieldError(error.field, true, error.message);
       error.field.focus();
     }
     return false;

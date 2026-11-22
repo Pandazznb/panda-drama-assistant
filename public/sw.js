@@ -1,19 +1,24 @@
 const CACHE_PREFIX = "panda-drama-assistant-";
-const CACHE_NAME = `${CACHE_PREFIX}shell-v27`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-v33`;
 const APP_SHELL = [
   "/",
   "/index.html",
   "/logs",
   "/logs.html",
+  "/calendar",
+  "/calendar.html",
   "/rankings",
   "/rankings.html",
   "/filters",
   "/filters.html",
   "/styles.css",
+  "/calendar.css",
   "/theme.js",
   "/pwa.js",
   "/app.js",
   "/logs.js",
+  "/calendar-reservations.js",
+  "/calendar.js",
   "/rankings.js",
   "/filters.js",
   "/scroll-controls.js",

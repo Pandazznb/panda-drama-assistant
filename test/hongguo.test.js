@@ -7,6 +7,7 @@ import {
   extractAnimationSeriesId,
   extractRecommendations,
   extractSeriesId,
+  fetchAlbumSeriesInfo,
   fetchAlbumSeriesInfoBatch,
   fetchAlbumSeriesIds,
   fetchOfficialRanking,
@@ -288,7 +289,7 @@ test("fetchAlbumSeriesIds uses exact string IDs and skips subscription shells", 
   const fetchImpl = async (url, options) => {
     requestedUrl = String(url);
     requestedOptions = options;
-    const body = `{"code":0,"data":{"${seriesId}":{"album_info":{"album_id":7624475539960499262,"album_serial_count":14,"album_series_item":[{"is_subscribe_shell":false,"item_id":"${firstId}"},{"is_subscribe_shell":false,"item_id":"${firstId}"},{"is_subscribe_shell":false,"item_id":"${latestPublishedId}"},{"is_subscribe_shell":true,"item_id":"${upcomingId}"}]}}}}`;
+    const body = `{"code":0,"data":{"${seriesId}":{"album_info":{"album_id":7624475539960499262,"album_serial_count":14,"album_series_item":[{"is_subscribe_shell":false,"item_id":"${firstId}"},{"is_subscribe_shell":false,"item_id":"${firstId}"},{"is_subscribe_shell":false,"item_id":"${latestPublishedId}"},{"is_subscribe_shell":true,"item_id":"${upcomingId}","season_index":4,"series_cover":"https://example.com/upcoming.jpg"}]}}}}`;
     return new Response(body, { status: 200 });
   };
 
@@ -301,6 +302,49 @@ test("fetchAlbumSeriesIds uses exact string IDs and skips subscription shells", 
   assert.match(requestedOptions.body, new RegExp(`"req_ids":\\[${seriesId}\\]`));
   assert.equal(requestedOptions.credentials, "omit");
   assert.equal(requestedOptions.redirect, "error");
+});
+
+test("album discovery keeps official placeholder season details", async () => {
+  const seriesId = "7645616042022014014";
+  const firstId = "7621200213801176126";
+  const upcomingId = "7691518344146455576";
+
+  const album = await fetchAlbumSeriesInfo(seriesId, {
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          code: 0,
+          data: {
+            [seriesId]: {
+              album_info: {
+                album_serial_count: 2,
+                album_series_item: [
+                  {
+                    is_subscribe_shell: false,
+                    item_id: firstId,
+                  },
+                  {
+                    is_subscribe_shell: true,
+                    item_id: upcomingId,
+                    season_index: 2,
+                    series_cover: "https://example.com/upcoming.jpg",
+                  },
+                ],
+              },
+            },
+          },
+        }),
+        { status: 200 },
+      ),
+  });
+
+  assert.deepEqual(album.unpublishedSeasons, [
+    {
+      seriesId: upcomingId,
+      seasonIndex: 2,
+      coverUrl: "https://example.com/upcoming.jpg",
+    },
+  ]);
 });
 
 test("fetchAlbumSeriesIds turns upstream API errors into a readable error", async () => {

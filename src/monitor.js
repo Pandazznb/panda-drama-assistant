@@ -46,6 +46,8 @@ import {
   hasNewerSeason,
   highestSeason,
   normalizeAlbumMetadata,
+  normalizeConfirmedSeriesIds,
+  normalizeUnpublishedSeasons,
   seasonNumber,
   seriesCompletionMarker,
   seriesVerificationComplete,
@@ -593,6 +595,23 @@ function formatNotificationTime(value) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
+function formatCompactNotificationTime(value) {
+  const formatted = formatNotificationTime(value);
+  return /^\d{4}-\d{2}-\d{2} /u.test(formatted)
+    ? formatted.slice(5)
+    : formatted;
+}
+
+function notificationTimeParts(value) {
+  const full = formatNotificationTime(value);
+  const match = full.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$/u);
+  return {
+    full,
+    date: match?.[1] || full,
+    time: match?.[2] || full,
+  };
+}
+
 function latestEventTime(events) {
   return events.reduce((latest, event) => {
     const eventMs = Date.parse(event.createdAt || event.lastObservedAt || "");
@@ -628,6 +647,127 @@ function seasonForEvent(subscription, event) {
   );
 }
 
+function notificationTimeMs(value) {
+  return Date.parse(value || "") || 0;
+}
+
+function notificationContentUpdateMs(subscription, item) {
+  const season = seasonForEvent(subscription, item);
+  const observedMs = notificationTimeMs(
+    item.createdAt || item.lastObservedAt || item.lastDiscoveredAt,
+  );
+  const seasonVisibleMs = notificationTimeMs(season?.firstVisibleTime);
+  const episodeChangedMs = notificationTimeMs(season?.lastEpisodeChangedAt);
+  if (item.type === EVENT_TYPE.SEASON) {
+    return Math.max(seasonVisibleMs, episodeChangedMs) || observedMs;
+  }
+  if (item.type === EVENT_TYPE.EPISODE) {
+    return Math.max(seasonVisibleMs, episodeChangedMs, observedMs);
+  }
+  return observedMs;
+}
+
+function notificationUpdateTemplateField(type) {
+  if (type === EVENT_TYPE.SEASON) {
+    return "seasonLine";
+  }
+  if (type === EVENT_TYPE.EPISODE) {
+    return "episodeLine";
+  }
+  if (type === EVENT_TYPE.COMPLETED) {
+    return "completedLine";
+  }
+  return "";
+}
+
+function notificationUpdateVariables(subscription, item) {
+  const season = seasonForEvent(subscription, item);
+  const seriesTitle =
+    subscription.displayTitle ||
+    subscription.firstSeasonTitle ||
+    subscription.title ||
+    "未知短剧";
+  const seasonTitle =
+    normalizeWhitespace(item.seasonTitle || season?.title || seriesTitle) ||
+    seriesTitle;
+  const episodeCount = Number.isFinite(Number(item.episodeCount))
+    ? Number(item.episodeCount)
+    : 0;
+  const baselineEpisodeCount =
+    item.previousEpisodeCount ?? item.baselineEpisodeCount;
+  const addedEpisodeCount =
+    item.type === EVENT_TYPE.EPISODE &&
+    Number.isFinite(Number(baselineEpisodeCount))
+      ? Math.max(0, episodeCount - Number(baselineEpisodeCount))
+      : 0;
+  const updated = notificationTimeParts(
+    notificationContentUpdateMs(subscription, item),
+  );
+  const updateText = [
+    notificationItemTitle(subscription, item),
+    compactUpdateDetail(subscription, item),
+    formatCompactNotificationTime(
+      notificationContentUpdateMs(subscription, item),
+    ),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return {
+    appName: APP_NAME,
+    seriesTitle,
+    seasonTitle,
+    eventLabel:
+      item.type === EVENT_TYPE.SEASON
+        ? "新季"
+        : item.type === EVENT_TYPE.EPISODE
+          ? "集更新"
+          : item.type === EVENT_TYPE.COMPLETED
+            ? "系列完结"
+            : "更新",
+    episodeCount,
+    addedEpisodeCount,
+    seasonCount:
+      Number(item.seasonCount) || subscription.seasons?.length || 0,
+    updatedAt: updated.full,
+    updatedDate: updated.date,
+    updatedTime: updated.time,
+    updateText,
+  };
+}
+
+function notificationUpdateLine(
+  state,
+  templateType,
+  subscription,
+  item,
+  defaultContent,
+) {
+  const field = notificationUpdateTemplateField(item.type);
+  const template = state.settings.notificationTemplates?.[templateType] || {};
+  const customLine = field
+    ? normalizeWhitespace(template[field] || "").replace(
+        /^(?:[•·]\s*)+/u,
+        "",
+      )
+    : "";
+  const content = customLine
+    ? renderNotificationTemplate(
+        customLine,
+        notificationUpdateVariables(subscription, item),
+      ).trim() || defaultContent
+    : defaultContent;
+  return `• ${content}`;
+}
+
+function compareNotificationContentTime(left, right) {
+  return (
+    right.contentUpdateMs - left.contentUpdateMs ||
+    right.discoveredMs - left.discoveredMs ||
+    left.order - right.order
+  );
+}
+
 function eventTimingParts(subscription, event) {
   const season = seasonForEvent(subscription, event);
   const parts = [];
@@ -644,34 +784,67 @@ function eventTimingParts(subscription, event) {
   return parts;
 }
 
-function subscriptionEventLines(subscription, events) {
+function subscriptionEventLines(state, subscription, events) {
+  const ranks = seasonRankMap(subscription);
   return events
     .filter((event) => SUMMARY_EVENT_TYPES.has(event.type))
     .sort((left, right) => {
-      const leftMs = Date.parse(left.createdAt || "") || 0;
-      const rightMs = Date.parse(right.createdAt || "") || 0;
-      return leftMs - rightMs;
+      const contentTimeDifference =
+        notificationContentUpdateMs(subscription, right) -
+        notificationContentUpdateMs(subscription, left);
+      if (contentTimeDifference) {
+        return contentTimeDifference;
+      }
+      const discoveredTimeDifference =
+        notificationTimeMs(right.createdAt) -
+        notificationTimeMs(left.createdAt);
+      if (discoveredTimeDifference) {
+        return discoveredTimeDifference;
+      }
+      const leftRank =
+        ranks.get(left.seasonId) ?? Number.MAX_SAFE_INTEGER;
+      const rightRank =
+        ranks.get(right.seasonId) ?? Number.MAX_SAFE_INTEGER;
+      return leftRank - rightRank;
     })
     .map((event) => {
       if (event.type === EVENT_TYPE.EPISODE) {
         const delta =
           Number(event.episodeCount) - Number(event.previousEpisodeCount);
         const timing = eventTimingParts(subscription, event);
-        return `• 集数更新：《${event.seasonTitle}》更新到第 ${event.episodeCount} 集${
+        return notificationUpdateLine(
+          state,
+          "detailed",
+          subscription,
+          event,
+          `集数更新：《${event.seasonTitle}》更新到第 ${event.episodeCount} 集${
           Number.isFinite(delta) && delta > 0 ? `，新增 ${delta} 集` : ""
-        }。${timing.length ? `\n  ${timing.join("；")}` : ""}`;
+          }。${timing.length ? `\n  ${timing.join("；")}` : ""}`,
+        );
       }
       if (event.type === EVENT_TYPE.SEASON) {
         const timing = eventTimingParts(subscription, event);
-        return `• 发现新季：《${event.seasonTitle}》，当前 ${event.episodeCount} 集。${
-          timing.length ? `\n  ${timing.join("；")}` : ""
-        }`;
+        return notificationUpdateLine(
+          state,
+          "detailed",
+          subscription,
+          event,
+          `发现新季：《${event.seasonTitle}》，当前 ${event.episodeCount} 集。${
+            timing.length ? `\n  ${timing.join("；")}` : ""
+          }`,
+        );
       }
       if (event.type === EVENT_TYPE.COMPLETED) {
         const timing = eventTimingParts(subscription, event);
-        return `• 系列完结：共 ${event.seasonCount || 0} 季，合计 ${event.episodeCount || 0} 集。${
-          timing.length ? `\n  ${timing.join("；")}` : ""
-        }`;
+        return notificationUpdateLine(
+          state,
+          "detailed",
+          subscription,
+          event,
+          `系列完结：共 ${event.seasonCount || 0} 季，合计 ${event.episodeCount || 0} 集。${
+            timing.length ? `\n  ${timing.join("；")}` : ""
+          }`,
+        );
       }
       return "";
     })
@@ -710,25 +883,30 @@ function detailedCheckMessage(state, events, subscriptionId) {
   const lines = [
     `检查时间：${formatNotificationTime(latestEventTime(relevantEvents))}`,
     "",
-    ...subscriptionEventLines(subscription, relevantEvents),
+    ...subscriptionEventLines(state, subscription, relevantEvents),
     "",
     `当前共收录 ${subscription.seasons.length} 季。`,
   ];
 
+  const checkTime = notificationTimeParts(
+    latestEventTime(relevantEvents),
+  );
   return notificationTemplateCopy(state, "detailed", {
     defaultTitle: notificationTitle,
     defaultBody: lines.join("\n"),
     variables: {
       appName: APP_NAME,
       seriesTitle,
-      checkTime: formatNotificationTime(
-        latestEventTime(relevantEvents),
-      ),
+      checkTime: checkTime.full,
       updates: subscriptionEventLines(
+        state,
         subscription,
         relevantEvents,
       ).join("\n"),
       seasonCount: subscription.seasons.length,
+      updateCount: relevantEvents.length,
+      updateDate: checkTime.date,
+      updateTime: checkTime.time,
     },
   });
 }
@@ -748,14 +926,21 @@ function latestChangedEvent(subscription, events) {
       event.type === EVENT_TYPE.EPISODE || event.type === EVENT_TYPE.SEASON,
   );
   contentEvents.sort((left, right) => {
+    const contentTimeDifference =
+      notificationContentUpdateMs(subscription, right) -
+      notificationContentUpdateMs(subscription, left);
+    if (contentTimeDifference) {
+      return contentTimeDifference;
+    }
+    const discoveredTimeDifference =
+      notificationTimeMs(right.createdAt) -
+      notificationTimeMs(left.createdAt);
+    if (discoveredTimeDifference) {
+      return discoveredTimeDifference;
+    }
     const leftRank = ranks.get(left.seasonId) ?? Number.MAX_SAFE_INTEGER;
     const rightRank = ranks.get(right.seasonId) ?? Number.MAX_SAFE_INTEGER;
-    if (leftRank !== rightRank) {
-      return leftRank - rightRank;
-    }
-    const leftMs = Date.parse(left.createdAt || "") || 0;
-    const rightMs = Date.parse(right.createdAt || "") || 0;
-    return rightMs - leftMs;
+    return leftRank - rightRank;
   });
   return (
     contentEvents[0] ||
@@ -764,65 +949,70 @@ function latestChangedEvent(subscription, events) {
   );
 }
 
-function compactSeasonTitle(seriesTitle, seasonTitle) {
-  const normalizedSeriesTitle = normalizeWhitespace(
-    seriesTitle || seasonTitle || "未知短剧",
+function notificationDisplayTitle(value) {
+  return (
+    normalizeWhitespace(value || "未知短剧").replace(
+      /\s+(?=第\s*[零〇一二两三四五六七八九十百\d]+\s*季)/gu,
+      "",
+    ) || "未知短剧"
   );
-  const normalizedSeasonTitle = normalizeWhitespace(
-    seasonTitle || seriesTitle || "未知短剧",
-  );
-  if (normalizedSeasonTitle === normalizedSeriesTitle) {
-    return `《${normalizedSeriesTitle}》`;
-  }
-
-  const seriesBase = titleWithoutSeason(normalizedSeriesTitle);
-  const seasonBase = titleWithoutSeason(normalizedSeasonTitle);
-  if (
-    seriesBase &&
-    seriesBase === seasonBase &&
-    normalizedSeasonTitle.startsWith(seasonBase)
-  ) {
-    const seasonSuffix = normalizeWhitespace(
-      normalizedSeasonTitle.slice(seasonBase.length),
-    );
-    if (seasonSuffix) {
-      return `《${seasonBase}》${seasonSuffix}`;
-    }
-  }
-  return `《${normalizedSeasonTitle}》`;
 }
 
-function compactChangeLine(subscription, events) {
-  const seriesTitle =
-    subscription.displayTitle ||
-    subscription.firstSeasonTitle ||
-    subscription.title;
-  const event = latestChangedEvent(subscription, events);
-  if (!event) {
-    return "";
+function notificationItemTitle(subscription, item) {
+  const season = seasonForEvent(subscription, item);
+  const eventTitle = normalizeWhitespace(item.seasonTitle || "");
+  const seasonTitle = normalizeWhitespace(season?.title || "");
+  const preferredTitle =
+    Number.isInteger(seasonNumber(eventTitle)) || !seasonTitle
+      ? eventTitle
+      : seasonTitle;
+  return notificationDisplayTitle(
+    preferredTitle ||
+      subscription.displayTitle ||
+      subscription.firstSeasonTitle ||
+      subscription.title,
+  );
+}
+
+function compactUpdateDetail(subscription, item) {
+  if (item.type === EVENT_TYPE.COMPLETED) {
+    return `全系列完结 ${item.seasonCount || subscription.seasons.length}季/${item.episodeCount || 0}集`;
   }
 
-  let detail;
-  if (event.type === EVENT_TYPE.COMPLETED) {
-    detail = `《${seriesTitle}》全系列完结 · ${event.seasonCount || subscription.seasons.length} 季/${event.episodeCount || 0} 集`;
-  } else {
-    const title = compactSeasonTitle(seriesTitle, event.seasonTitle);
-    if (event.type === EVENT_TYPE.SEASON) {
-      detail = `${title} · 新季 ${event.episodeCount} 集`;
-    } else {
-      const delta =
-        Number(event.episodeCount) - Number(event.previousEpisodeCount);
-      detail = `${title} · 第 ${event.episodeCount} 集${
-        Number.isFinite(delta) && delta > 0 ? `（新增 ${delta} 集）` : ""
-      }`;
-    }
-    if (events.some((item) => item.type === EVENT_TYPE.COMPLETED)) {
-      detail += " · 已完结";
-    }
+  if (item.type === EVENT_TYPE.SEASON) {
+    return `${item.episodeCount || 0}集`;
   }
 
-  const timing = eventTimingParts(subscription, event);
-  return timing.length ? `${detail} · ${timing.join(" · ")}` : detail;
+  const baselineEpisodeCount =
+    item.previousEpisodeCount ?? item.baselineEpisodeCount;
+  const delta = Number(item.episodeCount) - Number(baselineEpisodeCount);
+  return Number.isFinite(delta) && delta > 0
+    ? `+${delta}集`
+    : `${item.episodeCount || 0}集`;
+}
+
+function compactUpdateContent(subscription, item) {
+  const title = notificationItemTitle(subscription, item);
+  const detail = compactUpdateDetail(subscription, item);
+  const updatedAt = formatCompactNotificationTime(
+    notificationContentUpdateMs(subscription, item),
+  );
+  return `${title} ${detail} ${updatedAt}`.trim();
+}
+
+function compactUpdateLine(
+  state,
+  templateType,
+  subscription,
+  item,
+) {
+  return notificationUpdateLine(
+    state,
+    templateType,
+    subscription,
+    item,
+    compactUpdateContent(subscription, item),
+  );
 }
 
 function groupedCheckEvents(state, events) {
@@ -845,7 +1035,20 @@ function groupedCheckEvents(state, events) {
     group.events.push(event);
     groups.set(event.subscriptionId, group);
   }
-  return [...groups.values()].sort((left, right) => left.order - right.order);
+  return [...groups.values()]
+    .map((group) => {
+      const event = latestChangedEvent(group.subscription, group.events);
+      return {
+        ...group,
+        contentUpdateMs: event
+          ? notificationContentUpdateMs(group.subscription, event)
+          : 0,
+        discoveredMs: event
+          ? notificationTimeMs(event.createdAt)
+          : 0,
+      };
+    })
+    .sort(compareNotificationContentTime);
 }
 
 function batchCheckMessage(state, events) {
@@ -855,26 +1058,34 @@ function batchCheckMessage(state, events) {
   }
   const allEvents = groups.flatMap((group) => group.events);
   const lines = groups
-    .map((group, index) => {
-      const line = compactChangeLine(group.subscription, group.events);
-      return line ? `${index + 1}. ${line}` : "";
+    .map((group) => {
+      const event = latestChangedEvent(group.subscription, group.events);
+      return event
+        ? compactUpdateLine(
+            state,
+            "batch",
+            group.subscription,
+            event,
+          )
+        : "";
     })
     .filter(Boolean);
   if (!lines.length) {
     return null;
   }
 
-  const checkTime = formatNotificationTime(
-    latestEventTime(allEvents),
-  );
+  const checkTimeValue = latestEventTime(allEvents);
+  const checkTime = notificationTimeParts(checkTimeValue);
   return notificationTemplateCopy(state, "batch", {
-    defaultTitle: `${APP_NAME} · ${lines.length} 个系列有更新`,
-    defaultBody: `检查时间：${checkTime}\n\n${lines.join("\n")}`,
+    defaultTitle: `${lines.length} 部更新`,
+    defaultBody: lines.join("\n"),
     variables: {
       appName: APP_NAME,
-      checkTime,
+      checkTime: checkTime.full,
       updateCount: groups.length,
       updates: lines.join("\n"),
+      updateDate: checkTime.date,
+      updateTime: checkTime.time,
     },
   });
 }
@@ -898,63 +1109,55 @@ function pendingNotificationCopy(state, pendingNotifications) {
   }
 
   const groups = [...pendingBySubscription.values()]
-    .sort((left, right) => left.order - right.order)
     .map((group) => {
-      const ranks = seasonRankMap(group.subscription);
-      const pending = [...group.pending].sort((left, right) => {
-        const leftRank =
-          ranks.get(left.seasonId) ?? Number.MAX_SAFE_INTEGER;
-        const rightRank =
-          ranks.get(right.seasonId) ?? Number.MAX_SAFE_INTEGER;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return (
-          (Date.parse(right.lastObservedAt || "") || 0) -
-          (Date.parse(left.lastObservedAt || "") || 0)
-        );
-      })[0];
+      const pending = [...group.pending]
+        .map((item) => ({
+          item,
+          contentUpdateMs: notificationContentUpdateMs(
+            group.subscription,
+            item,
+          ),
+          discoveredMs: notificationTimeMs(item.lastObservedAt),
+          order: group.order,
+        }))
+        .sort(compareNotificationContentTime)[0];
       if (!pending) {
         return null;
       }
-      const seriesTitle =
-        group.subscription.displayTitle ||
-        group.subscription.firstSeasonTitle ||
-        group.subscription.title;
-      const title = compactSeasonTitle(seriesTitle, pending.seasonTitle);
-      const delta = pending.episodeCount - pending.baselineEpisodeCount;
-      const season = group.subscription.seasons.find(
-        (item) => item.seriesId === pending.seasonId,
-      );
-      const timing = [
-        `季上线：${formatNotificationTime(season?.firstVisibleTime)}`,
-        `检测到更新：${formatNotificationTime(pending.lastObservedAt)}`,
-      ];
+      const item = pending.item;
       return {
         subscriptionId: group.subscription.id,
-        line: `${title} · 第 ${pending.episodeCount} 集（本时段新增 ${delta} 集） · ${timing.join(" · ")}`,
-        lastObservedAt: pending.lastObservedAt,
+        line: compactUpdateLine(
+          state,
+          "batch",
+          group.subscription,
+          item,
+        ),
+        lastObservedAt: item.lastObservedAt,
+        contentUpdateMs: pending.contentUpdateMs,
+        discoveredMs: pending.discoveredMs,
+        order: group.order,
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort(compareNotificationContentTime);
 
   if (!groups.length) {
     return null;
   }
-  const checkTime = formatNotificationTime(
-    latestEventTime(groups),
-  );
-  const updates = groups
-    .map((group, index) => `${index + 1}. ${group.line}`)
-    .join("\n");
+  const checkTimeValue = latestEventTime(groups);
+  const checkTime = notificationTimeParts(checkTimeValue);
+  const updates = groups.map((group) => group.line).join("\n");
   return notificationTemplateCopy(state, "batch", {
-    defaultTitle: "红果短剧更新汇总",
-    defaultBody: `最近检测：${checkTime}\n\n${updates}`,
+    defaultTitle: `${groups.length} 部更新`,
+    defaultBody: updates,
     variables: {
       appName: APP_NAME,
-      checkTime,
+      checkTime: checkTime.full,
       updateCount: groups.length,
       updates,
+      updateDate: checkTime.date,
+      updateTime: checkTime.time,
     },
   });
 }
@@ -979,81 +1182,54 @@ function discoveryReminderCopy(state, reminders, nowMs) {
 
   const groups = [...remindersBySubscription.values()]
     .map((group) => {
-      const ranks = seasonRankMap(group.subscription);
-      const reminder = [...group.reminders].sort((left, right) => {
-        const leftRank =
-          ranks.get(left.seasonId) ?? Number.MAX_SAFE_INTEGER;
-        const rightRank =
-          ranks.get(right.seasonId) ?? Number.MAX_SAFE_INTEGER;
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-        return (
-          (Date.parse(right.lastDiscoveredAt || "") || 0) -
-          (Date.parse(left.lastDiscoveredAt || "") || 0)
-        );
-      })[0];
-      if (!reminder) {
+      const candidate = [...group.reminders]
+        .map((item) => ({
+          item,
+          contentUpdateMs: notificationContentUpdateMs(
+            group.subscription,
+            item,
+          ),
+          discoveredMs: notificationTimeMs(item.lastDiscoveredAt),
+          order: group.order,
+        }))
+        .sort(compareNotificationContentTime)[0];
+      if (!candidate) {
         return null;
       }
-
-      const seriesTitle =
-        group.subscription.displayTitle ||
-        group.subscription.firstSeasonTitle ||
-        group.subscription.title;
-      const title = compactSeasonTitle(
-        seriesTitle,
-        reminder.seasonTitle,
-      );
-      const season = group.subscription.seasons.find(
-        (item) => item.seriesId === reminder.seasonId,
-      );
-      const change =
-        reminder.type === EVENT_TYPE.SEASON
-          ? `${title} · 新季 ${reminder.episodeCount} 集`
-          : `${title} · 第 ${reminder.episodeCount} 集${
-              reminder.episodeCount > reminder.previousEpisodeCount
-                ? `（新增 ${
-                    reminder.episodeCount -
-                    reminder.previousEpisodeCount
-                  } 集）`
-                : ""
-            }`;
-      const seasonLine = season
-        ? `季上线：${formatNotificationTime(season.firstVisibleTime)}`
-        : "";
+      const reminder = candidate.item;
 
       return {
-        line: seasonLine ? `${change} · ${seasonLine}` : change,
-        lastDiscoveredAt:
-          Date.parse(reminder.lastDiscoveredAt || "") || 0,
+        line: compactUpdateLine(
+          state,
+          "reminder",
+          group.subscription,
+          reminder,
+        ),
+        contentUpdateMs: candidate.contentUpdateMs,
+        discoveredMs: candidate.discoveredMs,
         order: group.order,
       };
     })
     .filter(Boolean)
-    .sort(
-      (left, right) =>
-        right.lastDiscoveredAt - left.lastDiscoveredAt ||
-        left.order - right.order,
-    );
+    .sort(compareNotificationContentTime);
 
   if (!groups.length) {
     return null;
   }
-  const reminderTime = formatNotificationTime(
+  const reminderTime = notificationTimeParts(
     new Date(nowMs).toISOString(),
   );
-  const updates = groups
-    .map((group, index) => `${index + 1}. ${group.line}`)
-    .join("\n");
+  const updates = groups.map((group) => group.line).join("\n");
   return notificationTemplateCopy(state, "reminder", {
-    defaultTitle: "红果短剧新内容提醒",
-    defaultBody: `提醒时间：${reminderTime}\n\n${updates}`,
+    defaultTitle: `${groups.length} 部更新`,
+    defaultBody: updates,
     variables: {
       appName: APP_NAME,
-      reminderTime,
+      reminderTime: reminderTime.full,
       updateCount: groups.length,
       updates,
+      updateDate: reminderTime.date,
+      updateTime: reminderTime.time,
     },
   });
 }
@@ -1600,6 +1776,7 @@ export class ReminderService {
         subscription.discovery.lastDiscoveryIssue = null;
         subscription.discovery.confirmedSeriesIds = [];
         subscription.discovery.unpublishedSeriesIds = [];
+        subscription.discovery.unpublishedSeasons = [];
         subscription.discovery.unpublishedSeasonCount = 0;
         subscription.discovery.albumSeasonCount = null;
         subscription.discovery.albumItemCount = null;
@@ -1656,6 +1833,7 @@ export class ReminderService {
             lastDiscoveryIssue: null,
             confirmedSeriesIds: [],
             unpublishedSeriesIds: [],
+            unpublishedSeasons: [],
             unpublishedSeasonCount: 0,
             albumSeasonCount: null,
             albumItemCount: null,
@@ -1777,6 +1955,7 @@ export class ReminderService {
       current.discovery.lastDiscoveryIssue = null;
       current.discovery.confirmedSeriesIds = [];
       current.discovery.unpublishedSeriesIds = [];
+      current.discovery.unpublishedSeasons = [];
       current.discovery.unpublishedSeasonCount = 0;
       current.discovery.albumSeasonCount = null;
       current.discovery.albumItemCount = null;
@@ -2392,6 +2571,19 @@ export class ReminderService {
         subscription.title,
         ...subscription.seasons.map((season) => season.title),
       ]);
+      const discovery = subscription.discovery || {};
+      const albumSeasonCount =
+        discovery.albumSeasonCount === null ||
+        discovery.albumSeasonCount === undefined ||
+        discovery.albumSeasonCount === ""
+          ? Number.NaN
+          : Number(discovery.albumSeasonCount);
+      const albumItemCount =
+        discovery.albumItemCount === null ||
+        discovery.albumItemCount === undefined ||
+        discovery.albumItemCount === ""
+          ? Number.NaN
+          : Number(discovery.albumItemCount);
       return {
         id: subscription.id,
         title: subscription.displayTitle || subscription.title,
@@ -2437,6 +2629,26 @@ export class ReminderService {
         seasonCount: seasons.length,
         highWaterEpisodeCount: currentEpisodeCount,
         latestSeasonId: latestSeason?.seriesId || null,
+        discovery: {
+          unpublishedSeasonCount: Math.max(
+            0,
+            Number(discovery.unpublishedSeasonCount) || 0,
+          ),
+          unpublishedSeriesIds: normalizeConfirmedSeriesIds(
+            discovery.unpublishedSeriesIds,
+          ),
+          unpublishedSeasons: normalizeUnpublishedSeasons(
+            discovery.unpublishedSeasons,
+          ),
+          albumSeasonCount: Number.isFinite(albumSeasonCount)
+            ? albumSeasonCount
+            : null,
+          albumItemCount: Number.isFinite(albumItemCount)
+            ? albumItemCount
+            : null,
+          lastCompletedAt: discovery.lastCompletedAt || null,
+          lastDiscoveryIssue: discovery.lastDiscoveryIssue || null,
+        },
         ...searchIndex,
         seasons: seasons.map((season) => ({
           seriesId: season.seriesId,
@@ -3409,6 +3621,8 @@ export class ReminderService {
           verificationComplete && !metadataIssue ? timestamp : null;
         current.discovery.unpublishedSeriesIds =
           albumMetadata.unpublishedSeriesIds;
+        current.discovery.unpublishedSeasons =
+          albumMetadata.unpublishedSeasons;
         current.discovery.unpublishedSeasonCount =
           albumMetadata.unpublishedSeasonCount;
         current.discovery.albumSeasonCount =

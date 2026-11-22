@@ -5,34 +5,104 @@ export const NOTIFICATION_TEMPLATE_TYPES = Object.freeze([
   "batch",
   "reminder",
 ]);
+export const NOTIFICATION_TEMPLATE_FIELDS = Object.freeze([
+  "title",
+  "body",
+  "seasonLine",
+  "episodeLine",
+  "completedLine",
+]);
 export const MAX_NOTIFICATION_TEMPLATE_TITLE_LENGTH = 80;
 export const MAX_NOTIFICATION_TEMPLATE_BODY_LENGTH = 1_200;
-export const NOTIFICATION_TEMPLATE_VARIABLES = Object.freeze({
+export const MAX_NOTIFICATION_TEMPLATE_LINE_LENGTH = 300;
+
+const SHELL_VARIABLES = Object.freeze({
   detailed: Object.freeze([
     "appName",
     "seriesTitle",
     "checkTime",
     "updates",
     "seasonCount",
+    "updateCount",
+    "updateDate",
+    "updateTime",
   ]),
   batch: Object.freeze([
     "appName",
     "checkTime",
     "updateCount",
     "updates",
+    "updateDate",
+    "updateTime",
   ]),
   reminder: Object.freeze([
     "appName",
     "reminderTime",
     "updateCount",
     "updates",
+    "updateDate",
+    "updateTime",
   ]),
 });
+const LINE_VARIABLES = Object.freeze([
+  "appName",
+  "seriesTitle",
+  "seasonTitle",
+  "eventLabel",
+  "episodeCount",
+  "addedEpisodeCount",
+  "seasonCount",
+  "updatedAt",
+  "updatedDate",
+  "updatedTime",
+  "updateText",
+]);
+export const NOTIFICATION_TEMPLATE_VARIABLES = Object.freeze(
+  Object.fromEntries(
+    NOTIFICATION_TEMPLATE_TYPES.map((type) => [
+      type,
+      Object.freeze([
+        ...new Set([
+          ...SHELL_VARIABLES[type],
+          ...LINE_VARIABLES,
+        ]),
+      ]),
+    ]),
+  ),
+);
+export const NOTIFICATION_TEMPLATE_FIELD_VARIABLES = Object.freeze(
+  Object.fromEntries(
+    NOTIFICATION_TEMPLATE_TYPES.map((type) => [
+      type,
+      Object.freeze({
+        title: SHELL_VARIABLES[type],
+        body: SHELL_VARIABLES[type],
+        seasonLine: LINE_VARIABLES,
+        episodeLine: LINE_VARIABLES,
+        completedLine: LINE_VARIABLES,
+      }),
+    ]),
+  ),
+);
 
 const TEMPLATE_LABELS = Object.freeze({
   detailed: "单系列详情",
   batch: "批量汇总",
   reminder: "持续提醒",
+});
+const TEMPLATE_FIELD_LABELS = Object.freeze({
+  title: "标题",
+  body: "正文",
+  seasonLine: "新季条目",
+  episodeLine: "集更新条目",
+  completedLine: "完结条目",
+});
+const TEMPLATE_FIELD_MAX_LENGTHS = Object.freeze({
+  title: MAX_NOTIFICATION_TEMPLATE_TITLE_LENGTH,
+  body: MAX_NOTIFICATION_TEMPLATE_BODY_LENGTH,
+  seasonLine: MAX_NOTIFICATION_TEMPLATE_LINE_LENGTH,
+  episodeLine: MAX_NOTIFICATION_TEMPLATE_LINE_LENGTH,
+  completedLine: MAX_NOTIFICATION_TEMPLATE_LINE_LENGTH,
 });
 const TEMPLATE_VARIABLE_PATTERN = /\{([A-Za-z][A-Za-z0-9]*)\}/g;
 
@@ -54,11 +124,13 @@ function templateLength(value) {
 }
 
 function validateTemplateVariables(type, field, value) {
-  const allowed = new Set(NOTIFICATION_TEMPLATE_VARIABLES[type]);
+  const allowed = new Set(
+    NOTIFICATION_TEMPLATE_FIELD_VARIABLES[type][field],
+  );
   for (const match of value.matchAll(TEMPLATE_VARIABLE_PATTERN)) {
     if (!allowed.has(match[1])) {
       throw new NotificationTemplateError(
-        `${TEMPLATE_LABELS[type]}的${field}包含不支持的变量 {${match[1]}}。`,
+        `${TEMPLATE_LABELS[type]}的${TEMPLATE_FIELD_LABELS[field]}包含不支持的变量 {${match[1]}}。`,
         "INVALID_NOTIFICATION_TEMPLATE_VARIABLE",
       );
     }
@@ -69,7 +141,7 @@ function validateTemplateField(type, field, value, maxLength) {
   const normalized = normalizeTemplateText(value);
   if (templateLength(normalized) > maxLength) {
     throw new NotificationTemplateError(
-      `${TEMPLATE_LABELS[type]}的${field}不能超过 ${maxLength} 个字符。`,
+      `${TEMPLATE_LABELS[type]}的${TEMPLATE_FIELD_LABELS[field]}不能超过 ${maxLength} 个字符。`,
       "INVALID_NOTIFICATION_TEMPLATE_LENGTH",
     );
   }
@@ -81,7 +153,9 @@ export function createDefaultNotificationTemplates() {
   return Object.fromEntries(
     NOTIFICATION_TEMPLATE_TYPES.map((type) => [
       type,
-      { title: "", body: "" },
+      Object.fromEntries(
+        NOTIFICATION_TEMPLATE_FIELDS.map((field) => [field, ""]),
+      ),
     ]),
   );
 }
@@ -91,18 +165,26 @@ export function normalizeNotificationTemplates(input) {
   return Object.fromEntries(
     NOTIFICATION_TEMPLATE_TYPES.map((type) => {
       const template = isPlainObject(source[type]) ? source[type] : {};
+      const legacyTemplate =
+        template.seasonLine === undefined &&
+        template.episodeLine === undefined &&
+        template.completedLine === undefined;
+      const legacyPlaceholderBody =
+        legacyTemplate &&
+        normalizeTemplateText(template.body).trim() === "{updates}";
       return [
         type,
-        {
-          title: normalizeTemplateText(template.title).slice(
-            0,
-            MAX_NOTIFICATION_TEMPLATE_TITLE_LENGTH,
-          ),
-          body: normalizeTemplateText(template.body).slice(
-            0,
-            MAX_NOTIFICATION_TEMPLATE_BODY_LENGTH,
-          ),
-        },
+        Object.fromEntries(
+          NOTIFICATION_TEMPLATE_FIELDS.map((field) => [
+            field,
+            normalizeTemplateText(
+              field === "body" && legacyPlaceholderBody
+                ? ""
+                : template[field],
+            )
+              .slice(0, TEMPLATE_FIELD_MAX_LENGTHS[field]),
+          ]),
+        ),
       ];
     }),
   );
@@ -130,20 +212,15 @@ export function validateNotificationTemplatesPatch(input) {
     }
 
     const normalized = {};
-    if (template.title !== undefined) {
-      normalized.title = validateTemplateField(
+    for (const field of NOTIFICATION_TEMPLATE_FIELDS) {
+      if (template[field] === undefined) {
+        continue;
+      }
+      normalized[field] = validateTemplateField(
         type,
-        "标题",
-        template.title,
-        MAX_NOTIFICATION_TEMPLATE_TITLE_LENGTH,
-      );
-    }
-    if (template.body !== undefined) {
-      normalized.body = validateTemplateField(
-        type,
-        "正文",
-        template.body,
-        MAX_NOTIFICATION_TEMPLATE_BODY_LENGTH,
+        field,
+        template[field],
+        TEMPLATE_FIELD_MAX_LENGTHS[field],
       );
     }
     result[type] = normalized;

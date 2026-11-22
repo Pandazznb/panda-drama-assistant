@@ -31,6 +31,11 @@ const STATIC_FILES = new Map([
   ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/logs", { file: "logs.html", type: "text/html; charset=utf-8" }],
   ["/logs.html", { file: "logs.html", type: "text/html; charset=utf-8" }],
+  ["/calendar", { file: "calendar.html", type: "text/html; charset=utf-8" }],
+  [
+    "/calendar.html",
+    { file: "calendar.html", type: "text/html; charset=utf-8" },
+  ],
   ["/rankings", { file: "rankings.html", type: "text/html; charset=utf-8" }],
   [
     "/rankings.html",
@@ -43,6 +48,10 @@ const STATIC_FILES = new Map([
   ],
   ["/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
   [
+    "/calendar.css",
+    { file: "calendar.css", type: "text/css; charset=utf-8" },
+  ],
+  [
     "/theme.js",
     { file: "theme.js", type: "text/javascript; charset=utf-8" },
   ],
@@ -53,6 +62,17 @@ const STATIC_FILES = new Map([
   [
     "/logs.js",
     { file: "logs.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/calendar.js",
+    { file: "calendar.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
+    "/calendar-reservations.js",
+    {
+      file: "calendar-reservations.js",
+      type: "text/javascript; charset=utf-8",
+    },
   ],
   [
     "/rankings.js",
