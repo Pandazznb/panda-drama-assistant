@@ -575,6 +575,116 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   });
 });
 
+test("cover cache endpoint serves immutable images and retries without caching errors", async (t) => {
+  const calls = [];
+  const imageCache = {
+    async get(query) {
+      calls.push(query);
+      if (!query.url && !query.seriesId) {
+        const error = new Error("缺少封面地址或剧集 ID。");
+        error.statusCode = 400;
+        error.code = "COVER_SOURCE_REQUIRED";
+        throw error;
+      }
+      return {
+        image: Buffer.from([137, 80, 78, 71]),
+        contentType: "image/png",
+        etag: "cover-etag",
+      };
+    },
+  };
+  const harness = await startHarness(t, { imageCache });
+  const params = new URLSearchParams({
+    url: "https://p3-novel.byteimg.com/novel-pic/test.image",
+    seriesId: "7694653385668037657",
+  });
+
+  const response = await fetch(
+    `${harness.origin}/api/covers?${params.toString()}`,
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/png");
+  assert.equal(
+    response.headers.get("cache-control"),
+    "public, max-age=31536000, immutable",
+  );
+  assert.equal(response.headers.get("etag"), '"cover-etag"');
+  assert.deepEqual(
+    Buffer.from(await response.arrayBuffer()),
+    Buffer.from([137, 80, 78, 71]),
+  );
+  assert.deepEqual(calls[0], {
+    url: params.get("url"),
+    seriesId: params.get("seriesId"),
+    refresh: false,
+  });
+
+  const cachedResponse = await fetch(
+    `${harness.origin}/api/covers?${params.toString()}`,
+    { headers: { "if-none-match": '"cover-etag"' } },
+  );
+  assert.equal(cachedResponse.status, 304);
+  assert.equal((await cachedResponse.arrayBuffer()).byteLength, 0);
+
+  const errorResponse = await fetch(`${harness.origin}/api/covers`);
+  assert.equal(errorResponse.status, 400);
+  assert.equal(errorResponse.headers.get("cache-control"), "no-store");
+  assert.equal(
+    (await errorResponse.json()).error.code,
+    "COVER_SOURCE_REQUIRED",
+  );
+
+  const helperResponse = await fetch(
+    `${harness.origin}/cover-image.js`,
+  );
+  assert.equal(helperResponse.status, 200);
+  const helper = await helperResponse.text();
+  assert.match(helper, /refresh: true/);
+  assert.match(helper, /coverRetried/);
+
+  for (const pathname of ["/", "/calendar", "/rankings", "/filters"]) {
+    const pageResponse = await fetch(`${harness.origin}${pathname}`);
+    const page = await pageResponse.text();
+    assert.match(page, /<script src="\/cover-image\.js" defer><\/script>/);
+  }
+
+  const workerResponse = await fetch(`${harness.origin}/sw.js`);
+  const worker = await workerResponse.text();
+  assert.match(worker, /shell-v45/);
+  assert.match(worker, /"\/cover-image\.js"/);
+});
+
+test("season cards use the shared completion label and only show real update rules", async () => {
+  const appScript = await fs.readFile(
+    path.join(ROOT_DIR, "public", "app.js"),
+    "utf8",
+  );
+  assert.match(
+    appScript,
+    /function seasonProgressLabel\(season\)[\s\S]*?const progressLabel =\s*episodeCount > 0 \? `更新至 \$\{episodeCount\} 集` : "集数未知";/,
+  );
+  assert.match(
+    appScript,
+    /subscription-row__episode-count">\$\{escapeHtml\(\s*seasonProgressLabel\(latestSeason\),\s*\)\}/,
+  );
+  assert.match(
+    appScript,
+    /season-item__meta">\s*\$\{escapeHtml\(seasonProgressMeta\(season\)\)\} · \$\{escapeHtml\(\s*sourceLabel\(season\.source\),\s*\)\}/,
+  );
+  assert.match(
+    appScript,
+    /function seasonUpdateRuleMarkup\(season\)[\s\S]*?const updateRule = seasonUpdateRule\(season\);[\s\S]*?if \(!updateRule\)[\s\S]*?return "";/,
+  );
+  assert.match(
+    appScript,
+    /\$\{seasonUpdateRuleMarkup\(season\)\}[\s\S]*?season-item__error/,
+  );
+  assert.match(
+    appScript,
+    /<div class="latest-season">[\s\S]*?<\/div>\s*\$\{seasonUpdateRuleMarkup\(latestSeason\)\}/,
+  );
+});
+
 test("account QR polling continues after switching to SMS while loading profile", async () => {
   const appScript = await fs.readFile(
     path.join(ROOT_DIR, "public", "app.js"),
@@ -1736,6 +1846,11 @@ test("calendar page is served and linked from every primary page", async (t) => 
     assert.doesNotMatch(page, /calendar-legend__item--season/);
     assert.doesNotMatch(page, /calendar-legend__item--episode/);
     assert.match(page, /calendar-legend__item--today/);
+    assert.match(page, /id="calendar-week-timeline"/);
+    assert.doesNotMatch(page, /calendar-week-timeline__header/);
+    assert.doesNotMatch(page, /id="calendar-week-view-title"/);
+    assert.doesNotMatch(page, /id="calendar-week-previous"/);
+    assert.doesNotMatch(page, /id="calendar-week-next"/);
   }
 
   const scriptResponse = await fetch(`${harness.origin}/calendar.js`);
@@ -1755,13 +1870,43 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(script, /unpublishedSeasons/);
   assert.match(script, /subscriptionPlaceholderSeasons/);
   assert.match(script, /reservationPlaceholderId/);
+  assert.match(script, /buildSeasonUpdateSchedule/);
+  assert.match(script, /estimatedUpdateEntries/);
+  assert.match(script, /calendar-entry--estimated/);
+  assert.match(script, /官方更新规则/);
   assert.match(script, /fetching/);
+  assert.match(script, /calendar-week-timeline__group/);
+  assert.match(script, /renderWeekTimeline/);
+  assert.match(script, /syncWeekTimelineSelection/);
+  assert.match(script, /function updateWeekView/);
+  assert.match(
+    script,
+    /function updateWeekView[\s\S]*?renderWeekStrip[\s\S]*?syncWeekTimelineSelection/,
+  );
+  assert.match(
+    script,
+    /function movePeriod[\s\S]*?state\.view === "week"[\s\S]*?updateWeekView\(\)/,
+  );
+  assert.match(script, /timelineDateKeys/);
+  assert.match(script, /const currentWeekDates = weekDates\(today\)/);
+  assert.match(script, /dateKey > today/);
+  assert.match(script, /data-timeline-date/);
+  assert.match(script, /scrollIntoView/);
+  assert.match(script, /当前周和未来日期暂时都没有短剧更新排期或账号预约/);
+  assert.doesNotMatch(script, /WEEK_SECTION_OFFSETS/);
+  assert.doesNotMatch(script, /data-week-offset/);
 
   const styleResponse = await fetch(`${harness.origin}/calendar.css`);
   assert.equal(styleResponse.status, 200);
   assert.match(styleResponse.headers.get("content-type"), /^text\/css/);
   const style = await styleResponse.text();
   assert.match(style, /\.calendar-week-strip/);
+  assert.match(style, /\.calendar-week-timeline__group/);
+  assert.match(style, /\.calendar-week-timeline__empty/);
+  assert.match(
+    style,
+    /grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/,
+  );
   assert.match(style, /\.calendar-month-day/);
   assert.match(style, /aspect-ratio:\s*3\s*\/\s*4/);
 
@@ -1778,6 +1923,19 @@ test("calendar page is served and linked from every primary page", async (t) => 
     /parseReservationExpectedDate/,
   );
 
+  const scheduleScriptResponse = await fetch(
+    `${harness.origin}/calendar-schedule.js`,
+  );
+  assert.equal(scheduleScriptResponse.status, 200);
+  assert.match(
+    scheduleScriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+  const scheduleScript = await scheduleScriptResponse.text();
+  assert.match(scheduleScript, /buildSeasonUpdateSchedule/);
+  assert.match(scheduleScript, /confirmedTotalEpisodeCount/);
+  assert.match(scheduleScript, /seasonIsCompleted/);
+
   for (const pathname of ["/", "/rankings", "/filters", "/logs"]) {
     const response = await fetch(`${harness.origin}${pathname}`);
     assert.equal(response.status, 200);
@@ -1793,6 +1951,7 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(serviceWorker, /"\/calendar"/);
   assert.match(serviceWorker, /"\/calendar\.js"/);
   assert.match(serviceWorker, /"\/calendar-reservations\.js"/);
+  assert.match(serviceWorker, /"\/calendar-schedule\.js"/);
   assert.match(serviceWorker, /"\/calendar\.css"/);
 });
 

@@ -12,12 +12,14 @@ import {
   fetchAlbumSeriesIds,
   fetchOfficialRanking,
   fetchOfficialRankings,
+  fetchOfficialSeriesMeta,
   fetchSeriesProgressBatch,
   fetchSeriesDetail,
   isAllowedShareHost,
   parseOfficialSearchResults,
   parseOfficialRankingPage,
   parseOfficialRankings,
+  parseOfficialSeriesMeta,
   parseSeriesDetailHtml,
   resolveOfficialRankingPath,
   resolveSharedSeries,
@@ -57,6 +59,29 @@ function detailHtml(overrides = {}) {
   return `<script>window._ROUTER_DATA = ${JSON.stringify(
     routerData,
   )};</script>`;
+}
+
+function seriesMetaPayload(overrides = {}) {
+  const seriesId = "7694653385668037657";
+  return {
+    code: 0,
+    data: {
+      [seriesId]: {
+        video_data: {
+          series_id_str: seriesId,
+          series_status: 0,
+          episode_cnt: 55,
+          episode_total_cnt: 55,
+          episode_right_text: "更新至55集",
+          update_info: {
+            show_update_frequency: "每周二00:10更新10集",
+            update_tag_text: "连载",
+          },
+          ...overrides,
+        },
+      },
+    },
+  };
 }
 
 test("extractSeriesId recognizes share text, IDs and official URLs", () => {
@@ -125,6 +150,93 @@ test("parseSeriesDetailHtml normalizes group, status and episode fields", () => 
   assert.equal(detail.accessibleEpisodeCount, 4);
   assert.equal(detail.status, "updating");
   assert.equal(detail.rightText, "更新至12集");
+});
+
+test("parseOfficialSeriesMeta reads the official update schedule", () => {
+  const meta = parseOfficialSeriesMeta(
+    seriesMetaPayload(),
+    "7694653385668037657",
+  );
+
+  assert.equal(meta.seriesId, "7694653385668037657");
+  assert.equal(meta.status, "updating");
+  assert.equal(meta.episodeCount, 55);
+  assert.equal(meta.totalEpisodeCount, 55);
+  assert.equal(meta.rightText, "更新至55集");
+  assert.equal(meta.updateRule, "每周二00:10更新10集");
+});
+
+test("parseOfficialSeriesMeta reads a single video_data response", () => {
+  const wrapped = seriesMetaPayload();
+  const seriesId = "7694653385668037657";
+  const meta = parseOfficialSeriesMeta(
+    {
+      code: wrapped.code,
+      data: wrapped.data[seriesId].video_data,
+    },
+    seriesId,
+  );
+
+  assert.equal(meta.seriesId, seriesId);
+  assert.equal(meta.status, "updating");
+  assert.equal(meta.episodeCount, 55);
+  assert.equal(meta.rightText, "更新至55集");
+  assert.equal(meta.updateRule, "每周二00:10更新10集");
+});
+
+test("fetchOfficialSeriesMeta signs and parses the App detail request", async () => {
+  const seriesId = "7694653385668037657";
+  let requestedUrl;
+  let requestedOptions;
+  const meta = await fetchOfficialSeriesMeta(seriesId, {
+    fetchImpl: async (url, options) => {
+      requestedUrl = String(url);
+      requestedOptions = options;
+      return new Response(JSON.stringify(seriesMetaPayload()), {
+        status: 200,
+      });
+    },
+  });
+
+  assert.match(
+    requestedUrl,
+    /^https:\/\/api5-normal-sinfonlinec\.fqnovel\.com\/novel\/player\/video_detail\/v1\/\?/,
+  );
+  assert.equal(requestedOptions.method, "POST");
+  assert.equal(requestedOptions.credentials, "omit");
+  assert.equal(requestedOptions.redirect, "error");
+  assert.match(requestedOptions.body, /"series_id":"7694653385668037657"/);
+  assert.match(requestedOptions.headers["x-gorgon"], /^[a-f0-9]+$/i);
+  assert.equal(meta.updateRule, "每周二00:10更新10集");
+});
+
+test("fetchSeriesDetail merges App metadata without treating a full count as completed", async () => {
+  const seriesId = "7694653385668037657";
+  const result = await fetchSeriesDetail(seriesId, {
+    fetchImpl: async (url) => {
+      if (String(url).includes("video_detail/v1")) {
+        return new Response(JSON.stringify(seriesMetaPayload()), {
+          status: 200,
+        });
+      }
+      return new Response(
+        detailHtml({
+          episode_cnt: 55,
+          episode_right_text: "全55集",
+          series_episode_info: {
+            episode_cnt: 55,
+            episode_total_cnt: 55,
+          },
+        }),
+        { status: 200 },
+      );
+    },
+  });
+
+  assert.equal(result.detail.status, "updating");
+  assert.equal(result.detail.rightText, "更新至55集");
+  assert.equal(result.detail.updateRule, "每周二00:10更新10集");
+  assert.equal(result.detail.updateRuleResolved, true);
 });
 
 test("extractRecommendations decodes nested recommendation JSON", () => {

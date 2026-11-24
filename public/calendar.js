@@ -2,6 +2,7 @@ import {
   parseReservationExpectedDate,
   reservationPlaceholderId,
 } from "./calendar-reservations.js";
+import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
 
 (() => {
   "use strict";
@@ -38,8 +39,10 @@ import {
     periodTitle: document.querySelector("#calendar-period-title"),
     weekView: document.querySelector("#calendar-week-view"),
     weekStrip: document.querySelector("#calendar-week-strip"),
+    weekTimeline: document.querySelector("#calendar-week-timeline"),
     monthView: document.querySelector("#calendar-month-view"),
     monthGrid: document.querySelector("#calendar-grid"),
+    dayPanel: document.querySelector(".calendar-day-panel"),
     selectedDate: document.querySelector("#calendar-selected-date"),
     selectedToday: document.querySelector("#calendar-selected-today"),
     entryCount: document.querySelector("#calendar-entry-count"),
@@ -59,7 +62,12 @@ import {
     ],
   };
 
-  if (!elements.workspace || !elements.weekStrip || !elements.monthGrid) {
+  if (
+    !elements.workspace ||
+    !elements.weekStrip ||
+    !elements.weekTimeline ||
+    !elements.monthGrid
+  ) {
     return;
   }
 
@@ -614,12 +622,7 @@ import {
     if (!entry.dateKey) {
       return;
     }
-    const key = [
-      entry.subscriptionId,
-      entry.seasonId,
-      entry.kind,
-      entry.dateKey,
-    ].join(":");
+    const key = updateEntryKey(entry);
     const existing = entries.get(key);
     if (!existing) {
       entries.set(key, entry);
@@ -627,6 +630,15 @@ import {
     }
     const merged = mergeUpdateEntry(existing, entry);
     entries.set(key, merged);
+  }
+
+  function updateEntryKey(entry) {
+    return [
+      entry.subscriptionId,
+      entry.seasonId,
+      entry.kind,
+      entry.dateKey,
+    ].join(":");
   }
 
   function updateEntryFromSeason(subscription, season, kind, occurredAt) {
@@ -683,6 +695,7 @@ import {
         subscription,
       ]),
     );
+    const calendarTodayKey = todayDateKey();
     const seasonLookup = new Map();
     const updateEntries = new Map();
 
@@ -785,6 +798,57 @@ import {
       upsertUpdateEntry(updateEntries, entry);
     }
 
+    const estimatedUpdateEntries = new Map();
+    for (const subscription of subscriptions) {
+      const seriesTitle = subscriptionSeriesTitle(subscription);
+      for (const season of Array.isArray(subscription.seasons)
+        ? subscription.seasons
+        : []) {
+        if (!season?.seriesId) {
+          continue;
+        }
+        const schedule = buildSeasonUpdateSchedule({
+          season,
+          todayDateKey: calendarTodayKey,
+        });
+        for (const occurrence of schedule) {
+          const seasonTitle =
+            season.title || subscription.firstSeasonTitle || seriesTitle;
+          const candidate = {
+            id: `estimated:${subscription.id}:${season.seriesId}:${occurrence.dateKey}`,
+            type: "update",
+            kind: "episode",
+            dateKey: occurrence.dateKey,
+            subscriptionId: String(subscription.id),
+            seasonId: String(season.seriesId),
+            seriesTitle,
+            seasonTitle,
+            seasonLabel: extractSeasonLabel(seasonTitle),
+            episodeCount: occurrence.projectedEpisodeCount,
+            previousEpisodeCount: null,
+            addedEpisodeCount: occurrence.plannedEpisodes,
+            occurredAt: occurrence.occurredAt,
+            coverUrl:
+              safeImageUrl(season.coverUrl) ||
+              safeImageUrl(subscription.coverUrl),
+            detailUrl: safeLinkUrl(season.detailUrl),
+            expectedText: `官方更新规则：${occurrence.ruleText}`,
+            source: "update-rule",
+            estimated: true,
+            scheduleTimeKnown: occurrence.timeKnown,
+            scheduleTimeLabel: occurrence.timeLabel,
+            confirmedTotalEpisodeCount:
+              occurrence.confirmedTotalEpisodeCount,
+          };
+          const key = updateEntryKey(candidate);
+          if (updateEntries.has(key) || estimatedUpdateEntries.has(key)) {
+            continue;
+          }
+          estimatedUpdateEntries.set(key, candidate);
+        }
+      }
+    }
+
     const reservationSource = authenticated
       ? account?.snapshot?.categories?.reservationsUpcoming?.items
       : [];
@@ -792,7 +856,6 @@ import {
       ? reservationSource
       : [];
     const reservationMap = new Map();
-    const calendarTodayKey = todayDateKey();
     for (const item of reservationItems) {
       const title = normalizeWhitespace(item?.title);
       if (!title) {
@@ -949,7 +1012,11 @@ import {
       (entry) => entry.dateKey,
     );
 
-    const entries = [...updateEntries.values(), ...reservationEntries]
+    const entries = [
+      ...updateEntries.values(),
+      ...estimatedUpdateEntries.values(),
+      ...reservationEntries,
+    ]
       .filter((entry) => entry.dateKey)
       .sort(compareDatedEntries);
     pending.sort(comparePendingEntries);
@@ -1010,6 +1077,7 @@ import {
           total: 0,
           seasonUpdates: 0,
           episodeUpdates: 0,
+          estimatedUpdates: 0,
           reservations: 0,
         };
         byDate.set(entry.dateKey, bucket);
@@ -1019,7 +1087,11 @@ import {
       if (entry.type === "update" && entry.kind === "season") {
         bucket.seasonUpdates += 1;
       } else if (entry.type === "update" && entry.kind === "episode") {
-        bucket.episodeUpdates += 1;
+        if (entry.estimated) {
+          bucket.estimatedUpdates += 1;
+        } else {
+          bucket.episodeUpdates += 1;
+        }
       } else if (entry.type === "reservation") {
         bucket.reservations += 1;
       }
@@ -1037,6 +1109,7 @@ import {
         total: 0,
         seasonUpdates: 0,
         episodeUpdates: 0,
+        estimatedUpdates: 0,
         reservations: 0,
       }
     );
@@ -1077,37 +1150,42 @@ import {
     const today = todayDateKey();
     const selected = state.selectedDate;
     const selectedBucket = bucketForDate(entryIndex, selected);
-    const selectedWeekDates = weekDates(selected);
-    const selectedWeekEntries = selectedWeekDates.flatMap(
+    const overviewDates = weekDates(selected);
+    const overviewEntries = overviewDates.flatMap(
       (dateKey) => bucketForDate(entryIndex, dateKey).entries,
     );
-    const selectedWeekSeasonUpdates = selectedWeekEntries.filter(
+    const overviewSeasonUpdates = overviewEntries.filter(
       (entry) => entry.type === "update" && entry.kind === "season",
     ).length;
-    const selectedWeekEpisodeUpdates = selectedWeekEntries.filter(
-      (entry) => entry.type === "update" && entry.kind === "episode",
+    const overviewEpisodeUpdates = overviewEntries.filter(
+      (entry) =>
+        entry.type === "update" &&
+        entry.kind === "episode" &&
+        !entry.estimated,
     ).length;
-    const selectedWeekReservations = selectedWeekEntries.filter(
+    const overviewEstimatedUpdates = overviewEntries.filter(
+      (entry) => entry.estimated === true,
+    ).length;
+    const overviewReservations = overviewEntries.filter(
       (entry) => entry.type === "reservation",
     ).length;
     const todayCount = bucketForDate(entryIndex, today).total;
     const reservationCount = state.data.reservations.length;
     const currentWeek = startOfWeek(today) === startOfWeek(selected);
+    const overviewScope = currentWeek ? "当前 7 天" : "所选周";
 
     elements.heroLabel.textContent = relativeDateLabel(selected);
     elements.heroDate.textContent = formatDotDate(selected);
     elements.heroSummary.textContent =
-      selectedWeekEntries.length > 0
-        ? `${currentWeek ? "当前 7 天" : "所选周"}共 ${
-            selectedWeekEntries.length
-          } 条日历项，今天命中 ${todayCount} 条；含 ${selectedWeekSeasonUpdates} 条季更新、${selectedWeekEpisodeUpdates} 条集更新、${selectedWeekReservations} 条预约。${
+      overviewEntries.length > 0
+        ? `${overviewScope}共 ${
+            overviewEntries.length
+          } 条日历项，今天命中 ${todayCount} 条；含 ${overviewSeasonUpdates} 条季更新、${overviewEpisodeUpdates} 条集更新、${overviewEstimatedUpdates} 条预计更新、${overviewReservations} 条预约。${
             state.typeFilter === "all"
               ? ""
               : `当前筛选：${typeFilterLabel()}。`
           }`
-        : `${
-            currentWeek ? "当前 7 天" : "所选周"
-          }暂时没有${state.typeFilter === "all" ? "追更更新或账号预约" : typeFilterLabel()}。`;
+        : `${overviewScope}暂时没有${state.typeFilter === "all" ? "追更更新或账号预约" : typeFilterLabel()}。`;
 
     if (isInitialLoad) {
       elements.accountSummary.textContent = "正在读取账号预约信息…";
@@ -1133,6 +1211,9 @@ import {
     const selectedEpisodeUpdateText = selectedBucket.episodeUpdates
       ? `${selectedBucket.episodeUpdates} 条集更新`
       : "";
+    const selectedEstimatedUpdateText = selectedBucket.estimatedUpdates
+      ? `${selectedBucket.estimatedUpdates} 条预计更新`
+      : "";
     const selectedReservationText = selectedBucket.reservations
       ? `${selectedBucket.reservations} 条预约`
       : "";
@@ -1145,6 +1226,7 @@ import {
         ? [
             selectedSeasonUpdateText,
             selectedEpisodeUpdateText,
+            selectedEstimatedUpdateText,
             selectedReservationText,
           ]
             .filter(Boolean)
@@ -1165,7 +1247,9 @@ import {
       return;
     }
     const dates = weekDates(state.selectedDate);
-    elements.periodEyebrow.textContent = "当前周";
+    const isCurrentWeek =
+      startOfWeek(state.selectedDate) === startOfWeek(todayDateKey());
+    elements.periodEyebrow.textContent = isCurrentWeek ? "本周" : "所选周";
     elements.periodTitle.textContent = `${formatMonthDay(
       dates[0],
     )} - ${formatMonthDay(dates[6])}`;
@@ -1173,6 +1257,10 @@ import {
     elements.previous.setAttribute("title", "上一周");
     elements.next.setAttribute("aria-label", "查看下一周");
     elements.next.setAttribute("title", "下一周");
+    elements.weekStrip.setAttribute(
+      "aria-label",
+      `${formatMonthDay(dates[0])}至${formatMonthDay(dates[6])}日期`,
+    );
   }
 
   function dateMarkerHtml(bucket) {
@@ -1189,16 +1277,30 @@ import {
     ].join("");
   }
 
-  function renderWeekStrip(entryIndex) {
+  function timelineDateKeys(entryIndex, today) {
+    const currentWeekDates = weekDates(today);
+    const futureDates = [...entryIndex.keys()].filter(
+      (dateKey) => dateKey > today && !currentWeekDates.includes(dateKey),
+    );
+    return [...new Set([...currentWeekDates, ...futureDates])]
+      .filter(
+        (dateKey) => bucketForDate(entryIndex, dateKey).entries.length > 0,
+      )
+      .sort();
+  }
+
+  function renderWeekStrip(entryIndex, visibleTimelineDates) {
     if (state.loading && !state.hasLoaded) {
       elements.weekStrip.innerHTML = Array.from(
         { length: 7 },
-        () => '<span class="calendar-week-skeleton" aria-hidden="true"></span>',
+        () =>
+          '<span class="calendar-week-skeleton" aria-hidden="true"></span>',
       ).join("");
       elements.weekStrip.setAttribute("aria-busy", "true");
       return;
     }
     const today = todayDateKey();
+    const timelineDateSet = new Set(visibleTimelineDates);
     elements.weekStrip.innerHTML = weekDates(state.selectedDate)
       .map((dateKey) => {
         const parts = parseDateKey(dateKey);
@@ -1221,7 +1323,14 @@ import {
             class="${classes.join(" ")}"
             type="button"
             data-date-key="${dateKey}"
+            ${
+              timelineDateSet.has(dateKey)
+                ? `aria-controls="calendar-day-${dateKey}"`
+                : ""
+            }
             aria-label="${formatMonthDay(dateKey)}，${
+              WEEKDAY_NAMES[dayOfWeek(dateKey)]
+            }，${
               bucket.total ? `${bucket.total} 项日历记录` : "暂无记录"
             }"
             aria-pressed="${dateKey === state.selectedDate}"
@@ -1241,6 +1350,96 @@ import {
       })
       .join("");
     elements.weekStrip.setAttribute("aria-busy", "false");
+  }
+
+  function renderWeekTimeline(entryIndex, visibleTimelineDates) {
+    if (state.loading && !state.hasLoaded) {
+      elements.weekTimeline.innerHTML = Array.from(
+        { length: 3 },
+        () => `
+          <div class="calendar-week-timeline-skeleton" aria-hidden="true">
+            <span class="calendar-week-timeline-skeleton__date"></span>
+            <span class="calendar-week-timeline-skeleton__card"></span>
+          </div>
+        `,
+      ).join("");
+      elements.weekTimeline.setAttribute("aria-busy", "true");
+      return;
+    }
+
+    const today = todayDateKey();
+    elements.weekTimeline.setAttribute(
+      "aria-label",
+      "当前周有更新的日期，以及未来全部更新",
+    );
+    elements.weekTimeline.innerHTML = visibleTimelineDates
+      .map((dateKey) => {
+        const bucket = bucketForDate(entryIndex, dateKey);
+        const dateClasses = ["calendar-week-timeline__date"];
+        if (dateKey === today) {
+          dateClasses.push("is-today");
+        }
+        if (dateKey === state.selectedDate) {
+          dateClasses.push("is-selected");
+        }
+        const dateLabel = relativeDateLabel(dateKey);
+        const countLabel = `${bucket.total} 项`;
+        return `
+          <section
+            class="calendar-week-timeline__group"
+            id="calendar-day-${dateKey}"
+            data-timeline-date="${dateKey}"
+            role="listitem"
+            tabindex="-1"
+            aria-labelledby="calendar-timeline-date-${dateKey}"
+          >
+            <div class="${dateClasses.join(" ")}">
+              <strong id="calendar-timeline-date-${dateKey}">${dateLabel}</strong>
+              <time datetime="${dateKey}">${formatMonthDay(dateKey)}</time>
+              <span>${WEEKDAY_NAMES[dayOfWeek(dateKey)]} · ${countLabel}</span>
+            </div>
+            <div class="calendar-week-timeline__entries">
+              ${bucket.entries.map(entryCardHtml).join("")}
+            </div>
+          </section>
+        `;
+      })
+      .join("");
+    if (visibleTimelineDates.length === 0) {
+      elements.weekTimeline.innerHTML =
+        '<p class="calendar-week-timeline__empty" role="status">当前周和未来日期暂时都没有短剧更新排期或账号预约。</p>';
+    }
+    elements.weekTimeline.setAttribute("aria-busy", "false");
+  }
+
+  function scrollWeekTimelineTo(dateKey) {
+    const target = elements.weekTimeline.querySelector(
+      `[data-timeline-date="${dateKey}"]`,
+    );
+    if (!target) {
+      return;
+    }
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    target.scrollIntoView({
+      behavior: reduceMotion ? "auto" : "smooth",
+      block: "start",
+    });
+    target.focus({ preventScroll: true });
+  }
+
+  function syncWeekTimelineSelection() {
+    for (const group of elements.weekTimeline.querySelectorAll(
+      "[data-timeline-date]",
+    )) {
+      group
+        .querySelector(".calendar-week-timeline__date")
+        ?.classList.toggle(
+          "is-selected",
+          group.dataset.timelineDate === state.selectedDate,
+        );
+    }
   }
 
   function renderMonthGrid(entryIndex) {
@@ -1333,6 +1532,12 @@ import {
   }
 
   function updateTypeMeta(entry) {
+    if (entry.estimated) {
+      return {
+        label: "预计更新",
+        icon: "clock",
+      };
+    }
     return entry.kind === "season"
       ? {
           label: "新季上线",
@@ -1360,29 +1565,39 @@ import {
     if (finiteNumber(entry.episodeCount)) {
       parts.push(
         entry.kind === "episode"
-          ? `更新至 ${entry.episodeCount} 集`
+          ? `${entry.estimated ? "预计" : ""}更新至 ${
+              entry.episodeCount
+            } 集`
           : `当前 ${entry.episodeCount} 集`,
       );
     }
     if (finiteNumber(entry.addedEpisodeCount) && entry.addedEpisodeCount > 0) {
-      parts.push(`+${entry.addedEpisodeCount} 集`);
+      parts.push(
+        `${entry.estimated ? "预计 +" : "+"}${
+          entry.addedEpisodeCount
+        } 集`,
+      );
     }
     return parts.join(" · ");
   }
 
   function coverHtml(entry) {
     const coverUrl = safeImageUrl(entry.coverUrl);
+    const coverSrc =
+      window.DramaCover?.url(coverUrl, entry.seasonId) || coverUrl;
+    const coverAttributes =
+      window.DramaCover?.attributes(coverUrl, entry.seasonId) || "";
     return `
-      <div class="calendar-entry__cover ${coverUrl ? "has-image" : ""}">
+      <div class="calendar-entry__cover ${coverSrc ? "has-image" : ""}" data-cover-container>
         ${
-          coverUrl
+          coverSrc
             ? `<img src="${escapeHtml(
-                coverUrl,
-              )}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+                coverSrc,
+              )}" ${coverAttributes} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
             : ""
         }
-        <span class="calendar-entry__cover-fallback" ${
-          coverUrl ? "hidden" : ""
+        <span class="calendar-entry__cover-fallback" data-cover-fallback ${
+          coverSrc ? "hidden" : ""
         }>${icon("image")}</span>
       </div>
     `;
@@ -1399,7 +1614,13 @@ import {
     const metaText = entryMetaText(entry);
     const linkUrl = safeLinkUrl(entry.detailUrl);
     const timeText =
-      entry.type === "reservation" && entry.dateKey
+      entry.estimated && entry.dateKey
+        ? `预计 ${formatMonthDay(entry.dateKey)}${
+            entry.scheduleTimeKnown && entry.scheduleTimeLabel
+              ? ` ${entry.scheduleTimeLabel}`
+              : ""
+          }更新`
+        : entry.type === "reservation" && entry.dateKey
         ? `预计 ${formatMonthDay(entry.dateKey)}上线`
         : entry.type !== "reservation" && entry.occurredAt
           ? formatInstantTime(entry.occurredAt)
@@ -1408,7 +1629,7 @@ import {
       <article
         class="calendar-entry calendar-entry--${escapeHtml(entry.type)} calendar-entry--${escapeHtml(
           entry.kind,
-        )}"
+        )}${entry.estimated ? " calendar-entry--estimated" : ""}"
         aria-label="${escapeHtml(`${type.label}：${entry.seriesTitle}`)}"
       >
         ${coverHtml(entry)}
@@ -1519,7 +1740,7 @@ import {
         : emptyStateHtml({
             title: "这一天还没有日历项",
             description:
-              "追更发现新季、新集，或账号预约出现可靠上线日期后，会自动出现在这里。",
+              "追更发现新季、新集，官方更新规则产生预计排期，或账号预约出现可靠上线日期后，会自动出现在这里。",
           });
     elements.entryList.setAttribute("aria-busy", "false");
   }
@@ -1583,10 +1804,15 @@ import {
   function render() {
     const visibleEntries = filterCalendarEntries(state.data.entries);
     const entryIndex = buildEntryIndex(visibleEntries);
+    const visibleTimelineDates = timelineDateKeys(
+      entryIndex,
+      todayDateKey(),
+    );
     elements.workspace.dataset.view = state.view;
     elements.workspace.dataset.type = state.typeFilter;
     elements.weekView.hidden = state.view !== "week";
     elements.monthView.hidden = state.view !== "month";
+    elements.dayPanel.hidden = state.view === "week";
     for (const button of elements.viewButtons) {
       const active = button.dataset.calendarView === state.view;
       button.classList.toggle("is-active", active);
@@ -1599,11 +1825,34 @@ import {
     }
     renderOverview(entryIndex);
     renderPeriodControls();
-    renderWeekStrip(entryIndex);
+    renderWeekStrip(entryIndex, visibleTimelineDates);
+    renderWeekTimeline(entryIndex, visibleTimelineDates);
+    syncWeekTimelineSelection();
     renderMonthGrid(entryIndex);
     renderSelectedDay(entryIndex);
     renderPending();
     renderStatus();
+  }
+
+  function updateWeekView({ focus = false, scrollTimeline = false } = {}) {
+    const visibleEntries = filterCalendarEntries(state.data.entries);
+    const entryIndex = buildEntryIndex(visibleEntries);
+    const visibleTimelineDates = timelineDateKeys(
+      entryIndex,
+      todayDateKey(),
+    );
+    renderOverview(entryIndex);
+    renderPeriodControls();
+    renderWeekStrip(entryIndex, visibleTimelineDates);
+    syncWeekTimelineSelection();
+    if (scrollTimeline) {
+      scrollWeekTimelineTo(state.selectedDate);
+    }
+    if (focus) {
+      elements.weekStrip
+        .querySelector(`[data-date-key="${state.selectedDate}"]`)
+        ?.focus({ preventScroll: true });
+    }
   }
 
   function selectDate(dateKey, { focus = false } = {}) {
@@ -1611,6 +1860,10 @@ import {
       return;
     }
     state.selectedDate = dateKey;
+    if (state.view === "week") {
+      updateWeekView({ focus });
+      return;
+    }
     render();
     if (focus) {
       const container =
@@ -1665,6 +1918,10 @@ import {
       state.view === "month"
         ? addMonthsClamped(state.selectedDate, direction)
         : addDays(state.selectedDate, direction * 7);
+    if (state.view === "week") {
+      updateWeekView();
+      return;
+    }
     render();
   }
 
@@ -1673,19 +1930,22 @@ import {
     if (!focusedDay) {
       return;
     }
+    const anchorDate = parseDateKey(focusedDay.dataset.dateKey)
+      ? focusedDay.dataset.dateKey
+      : state.selectedDate;
     let nextDate = null;
     if (event.key === "ArrowLeft") {
-      nextDate = addDays(state.selectedDate, -1);
+      nextDate = addDays(anchorDate, -1);
     } else if (event.key === "ArrowRight") {
-      nextDate = addDays(state.selectedDate, 1);
+      nextDate = addDays(anchorDate, 1);
     } else if (event.key === "ArrowUp") {
-      nextDate = addDays(state.selectedDate, -7);
+      nextDate = addDays(anchorDate, -7);
     } else if (event.key === "ArrowDown") {
-      nextDate = addDays(state.selectedDate, 7);
+      nextDate = addDays(anchorDate, 7);
     } else if (event.key === "Home") {
-      nextDate = startOfWeek(state.selectedDate);
+      nextDate = startOfWeek(anchorDate);
     } else if (event.key === "End") {
-      nextDate = addDays(startOfWeek(state.selectedDate), 6);
+      nextDate = addDays(startOfWeek(anchorDate), 6);
     }
     if (!nextDate) {
       return;
@@ -1914,9 +2174,15 @@ import {
 
   elements.previous.addEventListener("click", () => movePeriod(-1));
   elements.next.addEventListener("click", () => movePeriod(1));
-  elements.today.addEventListener("click", () =>
-    selectDate(todayDateKey(), { focus: true }),
-  );
+  elements.today.addEventListener("click", () => {
+    const today = todayDateKey();
+    if (state.view !== "week") {
+      selectDate(today, { focus: true });
+      return;
+    }
+    selectDate(today);
+    scrollWeekTimelineTo(today);
+  });
   elements.refresh.addEventListener("click", () => {
     void refreshCalendar({ manual: true });
   });
@@ -1929,7 +2195,9 @@ import {
   elements.weekStrip.addEventListener("click", (event) => {
     const day = event.target.closest("[data-date-key]");
     if (day) {
-      selectDate(day.dataset.dateKey);
+      const dateKey = day.dataset.dateKey;
+      selectDate(dateKey);
+      scrollWeekTimelineTo(dateKey);
     }
   });
   elements.monthGrid.addEventListener("click", (event) => {

@@ -669,6 +669,17 @@ function safeHttpsUrl(value) {
   }
 }
 
+function coverImageUrl(coverUrl, seriesId = "") {
+  return (
+    window.DramaCover?.url(coverUrl, seriesId) ||
+    safeHttpsUrl(coverUrl)
+  );
+}
+
+function coverImageAttributes(coverUrl, seriesId = "") {
+  return window.DramaCover?.attributes(coverUrl, seriesId) || "";
+}
+
 function formatDate(value) {
   if (!value) {
     return "时间未知";
@@ -1073,11 +1084,18 @@ function renderWatchlistSearchCandidate(subscription, index) {
     ) || subscription.seasons?.[0];
   const latestUpdate = latestSubscriptionUpdate(subscription);
   const coverUrl = safeHttpsUrl(subscription.coverUrl);
-  const cover = coverUrl
+  const coverSrc = coverImageUrl(coverUrl, latestSeason?.seriesId);
+  const cover = coverSrc
     ? `<img class="watchlist-search-result__cover" src="${escapeHtml(
+        coverSrc,
+      )}" ${coverImageAttributes(
         coverUrl,
-      )}" alt="" loading="lazy">`
-    : `<span class="watchlist-search-result__placeholder" aria-hidden="true">${icon(
+        latestSeason?.seriesId,
+      )} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+    : "";
+  const coverFallback = `<span class="watchlist-search-result__placeholder" data-cover-fallback ${
+    coverSrc ? "hidden" : ""
+  } aria-hidden="true">${icon(
         "tv",
       )}</span>`;
   const meta = [
@@ -1097,7 +1115,7 @@ function renderWatchlistSearchCandidate(subscription, index) {
       data-watchlist-search-index="${index}"
       title="只显示《${escapeHtml(displayTitle)}》"
     >
-      ${cover}
+      ${cover}${coverFallback}
       <span class="watchlist-search-result__body">
         <span class="watchlist-search-result__title">${escapeHtml(
           displayTitle,
@@ -1196,6 +1214,53 @@ function sourceLabel(source) {
     return "手动确认";
   }
   return "分享添加";
+}
+
+function seasonProgressLabel(season) {
+  if (season?.status === "completed") {
+    return "已完结";
+  }
+  const episodeCount = Math.max(
+    0,
+    Number(season?.highWaterEpisodeCount ?? season?.episodeCount) || 0,
+  );
+  const progressLabel =
+    episodeCount > 0 ? `更新至 ${episodeCount} 集` : "集数未知";
+  return season?.status === "unknown"
+    ? `${progressLabel} · 状态未知`
+    : progressLabel;
+}
+
+function seasonProgressMeta(season) {
+  const progressLabel = seasonProgressLabel(season);
+  const pageEpisodeCount = Math.max(0, Number(season?.episodeCount) || 0);
+  const highWaterEpisodeCount = Math.max(
+    0,
+    Number(season?.highWaterEpisodeCount) || 0,
+  );
+  return pageEpisodeCount !== highWaterEpisodeCount
+    ? `${progressLabel} · 页面当前 ${pageEpisodeCount} 集`
+    : progressLabel;
+}
+
+function seasonUpdateRule(season) {
+  if (season?.status === "completed") {
+    return "";
+  }
+  return String(season?.updateRule || "").trim();
+}
+
+function seasonUpdateRuleMarkup(season) {
+  const updateRule = seasonUpdateRule(season);
+  if (!updateRule) {
+    return "";
+  }
+  return `
+    <p class="season-update-rule">
+      <span class="season-update-rule__label">备注</span>
+      <span>${escapeHtml(updateRule)}</span>
+    </p>
+  `;
 }
 
 function enabledNotificationLabels(settings) {
@@ -1515,11 +1580,18 @@ function renderSeriesSearchResults(status, results = []) {
   const markup = results
     .map((candidate, index) => {
       const coverUrl = safeHttpsUrl(candidate.coverUrl);
-      const cover = coverUrl
+      const coverSrc = coverImageUrl(coverUrl, candidate.seriesId);
+      const cover = coverSrc
         ? `<img class="series-search-option__cover" src="${escapeHtml(
+            coverSrc,
+          )}" ${coverImageAttributes(
             coverUrl,
-          )}" alt="" loading="lazy">`
-        : `<span class="series-search-option__placeholder" aria-hidden="true">${icon(
+            candidate.seriesId,
+          )} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+        : "";
+      const coverFallback = `<span class="series-search-option__placeholder" data-cover-fallback ${
+        coverSrc ? "hidden" : ""
+      } aria-hidden="true">${icon(
             "play",
           )}</span>`;
       const episodeCount = Number(candidate.episodeCount) || 0;
@@ -1537,7 +1609,7 @@ function renderSeriesSearchResults(status, results = []) {
           data-series-search-index="${index}"
           title="${escapeHtml(candidate.title)}"
         >
-          ${cover}
+          ${cover}${coverFallback}
           <span class="series-search-option__body">
             <span class="series-search-option__title">${escapeHtml(
               candidate.title,
@@ -1729,14 +1801,22 @@ function focusSubscriptionAction(subscriptionId, action) {
   }
 }
 
-function renderCover(coverUrl, title) {
+function renderCover(coverUrl, title, seriesId = "") {
   const safeCover = safeHttpsUrl(coverUrl);
-  if (safeCover) {
+  const coverSrc = coverImageUrl(safeCover, seriesId);
+  if (coverSrc) {
     return `
-      <div class="cover">
-        <img src="${escapeHtml(safeCover)}" alt="${escapeHtml(
+      <div class="cover" data-cover-container>
+        <img src="${escapeHtml(coverSrc)}" ${coverImageAttributes(
+          safeCover,
+          seriesId,
+        )} alt="${escapeHtml(
           title,
-        )}封面" width="78" height="104" loading="lazy">
+        )}封面" width="78" height="104" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+        <div class="cover-placeholder" data-cover-fallback hidden>
+          ${icon("tv")}
+          <span class="sr-only">${escapeHtml(title)}没有封面</span>
+        </div>
       </div>
     `;
   }
@@ -1969,11 +2049,12 @@ function renderSeasonItem(season) {
       ${detailUrl ? icon("external") : ""}
     </span>
     <span class="season-item__meta">
-      ${season.highWaterEpisodeCount} 集 · ${escapeHtml(
+      ${escapeHtml(seasonProgressMeta(season))} · ${escapeHtml(
         sourceLabel(season.source),
       )}
     </span>
     ${renderSeasonTimes(season)}
+    ${seasonUpdateRuleMarkup(season)}
     ${
       season.lastError
         ? `<span class="season-item__error">${escapeHtml(
@@ -2048,7 +2129,11 @@ function renderSubscription(subscription) {
     <article class="subscription-row" data-subscription-id="${escapeHtml(
       subscription.id,
     )}">
-      ${renderCover(subscription.coverUrl, displayTitle)}
+      ${renderCover(
+        subscription.coverUrl,
+        displayTitle,
+        latestSeason?.seriesId,
+      )}
       <div class="subscription-row__summary">
         <div class="subscription-row__header">
           <h3 class="subscription-row__title">
@@ -2072,7 +2157,9 @@ function renderSubscription(subscription) {
                 <span class="subscription-row__season">
                   <span class="subscription-row__season-label">最新季</span>
                   ${latestSeasonTitleMarkup}
-                  <span class="subscription-row__episode-count">${latestSeason.highWaterEpisodeCount} 集</span>
+                  <span class="subscription-row__episode-count">${escapeHtml(
+                    seasonProgressLabel(latestSeason),
+                  )}</span>
                 </span>
               `
               : ""
@@ -2098,14 +2185,12 @@ function renderSubscription(subscription) {
               <div class="latest-season">
                 <span class="latest-season__label">最近季</span>
                 ${latestSeasonTitleMarkup}
-                <span class="latest-season__meta">${latestSeason.highWaterEpisodeCount} 集${
-                  latestSeason.episodeCount !==
-                  latestSeason.highWaterEpisodeCount
-                    ? ` · 页面当前 ${latestSeason.episodeCount} 集`
-                    : ""
-                }</span>
+                <span class="latest-season__meta">${escapeHtml(
+                  seasonProgressMeta(latestSeason),
+                )}</span>
                 ${renderSeasonTimes(latestSeason)}
               </div>
+              ${seasonUpdateRuleMarkup(latestSeason)}
             `
             : ""
         }

@@ -19,6 +19,8 @@ function detail({
   groupId = GROUP_A,
   episodeCount = 12,
   status = "updating",
+  rightText = "",
+  updateRule = "",
   firstVisibleTime = "2026-10-16T16:04:00.000Z",
 } = {}) {
   return {
@@ -32,7 +34,8 @@ function detail({
     totalEpisodeCount: episodeCount,
     accessibleEpisodeCount: episodeCount,
     status,
-    rightText: "",
+    rightText,
+    updateRule,
     firstVisibleTime,
     detailUrl: `https://hongguoduanju.com/detail?series_id=${seriesId}`,
   };
@@ -229,6 +232,25 @@ test("dashboard exposes a safe discovery summary without candidates", async () =
     JSON.stringify(dashboard.subscriptions[0].discovery),
     /private-discovery-token/,
   );
+});
+
+test("dashboard exposes per-season progress and official update rules", async () => {
+  const harness = await createHarness({
+    rootDetail: detail({
+      episodeCount: 55,
+      status: "updating",
+      rightText: "全55集",
+      updateRule: "每周二00:10更新10集",
+    }),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+
+  const dashboard = await harness.service.getDashboard();
+  const dashboardSeason = dashboard.subscriptions[0].seasons[0];
+  assert.equal(dashboardSeason.status, "updating");
+  assert.equal(dashboardSeason.rightText, "全55集");
+  assert.equal(dashboardSeason.progressLabel, "更新至 55 集");
+  assert.equal(dashboardSeason.updateRule, "每周二00:10更新10集");
 });
 
 test("dashboard preserves an unknown official season count", async () => {
@@ -2890,6 +2912,66 @@ test("batch checks use one progress request and skip unchanged detail pages", as
     new Set(progressCalls[0]),
     new Set([ROOT_ID, OTHER_ID]),
   );
+});
+
+test("batch checks recheck latest season details daily for completion markers", async () => {
+  let now = new Date("2026-10-27T08:00:00.000Z");
+  const harness = await createHarness({
+    now: () => now,
+    fetchSeriesProgressBatch: async () =>
+      new Map([
+        [
+          ROOT_ID,
+          {
+            episodeCount: 12,
+            status: "updating",
+            error: null,
+          },
+        ],
+      ]),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+
+  const detailCalls = [];
+  const healthyFetchDetail = harness.service.fetchDetail;
+  harness.service.fetchDetail = async (seriesId) => {
+    detailCalls.push(seriesId);
+    return healthyFetchDetail(seriesId);
+  };
+
+  await harness.service.checkAll({
+    notify: false,
+    discover: false,
+  });
+  assert.deepEqual(detailCalls, []);
+
+  now = new Date("2026-10-28T07:59:59.000Z");
+  await harness.service.checkAll({
+    notify: false,
+    discover: false,
+  });
+  assert.deepEqual(detailCalls, []);
+
+  harness.details.set(
+    ROOT_ID,
+    detail({
+      episodeCount: 12,
+      status: "updating",
+      rightText: "全12集",
+    }),
+  );
+  now = new Date("2026-10-28T08:00:01.000Z");
+  await harness.service.checkAll({
+    notify: false,
+    discover: false,
+  });
+
+  const storedSeason = (await harness.store.read()).subscriptions[0].seasons[0];
+  assert.deepEqual(detailCalls, [ROOT_ID]);
+  assert.equal(storedSeason.episodeCount, 12);
+  assert.equal(storedSeason.status, "updating");
+  assert.equal(storedSeason.rightText, "全12集");
+  assert.equal(storedSeason.lastDetailCheckedAt, now.toISOString());
 });
 
 test("batch checks fetch full details only for series whose progress changed", async () => {

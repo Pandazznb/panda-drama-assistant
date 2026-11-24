@@ -3,7 +3,11 @@ import test from "node:test";
 import {
   deriveSeriesStatus,
   highestSeason,
+  isSeasonCompleted,
   normalizeAlbumMetadata,
+  normalizeOfficialUpdateRule,
+  seasonProgressLabel,
+  seasonUpdateRule,
   seriesCompletionMarker,
 } from "../src/series.js";
 
@@ -18,6 +22,91 @@ function season(seriesId, title, firstVisibleTime) {
     status: "completed",
   };
 }
+
+test("a full episode count does not mark an updating season as completed", () => {
+  const updatingSeason = {
+    status: "updating",
+    rightText: "全55集",
+    episodeCount: 55,
+    highWaterEpisodeCount: 55,
+  };
+
+  assert.equal(isSeasonCompleted(updatingSeason), false);
+  assert.equal(seasonProgressLabel(updatingSeason), "更新至 55 集");
+  assert.equal(seasonUpdateRule(updatingSeason), "");
+});
+
+test("an explicit unfinished label never marks a season as completed", () => {
+  const unfinishedSeason = {
+    status: "updating",
+    rightText: "未完结 · 更新至55集",
+    episodeCount: 55,
+    highWaterEpisodeCount: 55,
+  };
+
+  assert.equal(isSeasonCompleted(unfinishedSeason), false);
+  assert.equal(seasonProgressLabel(unfinishedSeason), "更新至 55 集");
+});
+
+test("an updating season reports its highest observed episode count", () => {
+  const updatingSeason = {
+    status: "updating",
+    rightText: "更新至42集",
+    episodeCount: 42,
+    highWaterEpisodeCount: 43,
+    updateRule: "每周二00:10更新10集",
+  };
+
+  assert.equal(isSeasonCompleted(updatingSeason), false);
+  assert.equal(seasonProgressLabel(updatingSeason), "更新至 43 集");
+  assert.equal(seasonUpdateRule(updatingSeason), "每周二00:10更新10集");
+});
+
+test("only an explicit official completion marker completes a season", () => {
+  const completedSeason = {
+    status: "completed",
+    rightText: "已完结 · 全124集",
+    episodeCount: 124,
+    highWaterEpisodeCount: 124,
+    updateRule: "每周二更新10集",
+  };
+
+  assert.equal(isSeasonCompleted(completedSeason), true);
+  assert.equal(seasonProgressLabel(completedSeason), "已完结");
+  assert.equal(seasonUpdateRule(completedSeason), "");
+});
+
+test("a season with an unknown official status keeps that caveat visible", () => {
+  const unknownSeason = {
+    status: "unknown",
+    rightText: "",
+    episodeCount: 12,
+    highWaterEpisodeCount: 12,
+  };
+
+  assert.equal(
+    seasonProgressLabel(unknownSeason),
+    "更新至 12 集 · 状态未知",
+  );
+  assert.equal(seasonUpdateRule(unknownSeason), "");
+});
+
+test("update rules only accept a concise official schedule", () => {
+  assert.equal(
+    normalizeOfficialUpdateRule("每周二00:10更新10集"),
+    "每周二00:10更新10集",
+  );
+  assert.equal(
+    normalizeOfficialUpdateRule("陈长生横渡天渊，每周都会遇到新的敌人。"),
+    "",
+  );
+  assert.equal(
+    normalizeOfficialUpdateRule(
+      "更新规则：红果当前标注“全55集”；本季已明确完结，系统每天至少复核一次。",
+    ),
+    "",
+  );
+});
 
 test("an unnumbered later finale is the highest season", () => {
   const seasons = [

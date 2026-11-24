@@ -237,13 +237,19 @@
 
   function coverMarkup(item) {
     const coverUrl = safeHttpsUrl(item?.coverUrl);
-    const fallback = `<span class="ranking-item__cover-fallback">${icon("tv")}</span>`;
-    if (!coverUrl) {
+    const coverSrc =
+      window.DramaCover?.url(coverUrl, item?.seriesId) || coverUrl;
+    const coverAttributes =
+      window.DramaCover?.attributes(coverUrl, item?.seriesId) || "";
+    const fallback = `<span class="ranking-item__cover-fallback" data-cover-fallback ${
+      coverSrc ? "hidden" : ""
+    }>${icon("tv")}</span>`;
+    if (!coverSrc) {
       return fallback;
     }
     return `${fallback}<img class="ranking-item__cover-image" src="${escapeHtml(
-      coverUrl,
-    )}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
+      coverSrc,
+    )}" ${coverAttributes} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
   }
 
   function coverLinkMarkup(item, title) {

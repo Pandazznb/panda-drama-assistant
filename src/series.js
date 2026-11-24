@@ -180,6 +180,58 @@ export function hasSeriesFinaleMarker(seasonOrTitle) {
   return Boolean(seriesCompletionMarker(seasonOrTitle));
 }
 
+export function isSeasonCompleted(season) {
+  if (season?.status === SERIES_STATUS.COMPLETED) {
+    return true;
+  }
+  const rightText = normalizeWhitespace(season?.rightText || "").replace(
+    /\s+/gu,
+    "",
+  );
+  const completionText = rightText.replace(/未完结/gu, "");
+  return /已完结|完结篇|全剧终/u.test(completionText);
+}
+
+export function seasonProgressLabel(season) {
+  if (isSeasonCompleted(season)) {
+    return "已完结";
+  }
+  const episodeCount = Math.max(
+    0,
+    toSafeInteger(
+      season?.highWaterEpisodeCount ?? season?.episodeCount,
+      0,
+    ),
+  );
+  const progressLabel =
+    episodeCount > 0 ? `更新至 ${episodeCount} 集` : "集数未知";
+  return season?.status === SERIES_STATUS.UNKNOWN
+    ? `${progressLabel} · 状态未知`
+    : progressLabel;
+}
+
+export function normalizeOfficialUpdateRule(value) {
+  const text = normalizeWhitespace(value || "");
+  if (
+    !text ||
+    text.length > 80 ||
+    !/更新/u.test(text) ||
+    /红果当前标注|本季已明确|系统每天|系统会/u.test(text)
+  ) {
+    return "";
+  }
+  const scheduleMarker =
+    /每(?:周|星期|礼拜|天|日)|周[一二三四五六日天]|星期[一二三四五六日天]|每日|日更/u;
+  return scheduleMarker.test(text.slice(0, 32)) ? text : "";
+}
+
+export function seasonUpdateRule(season) {
+  if (isSeasonCompleted(season)) {
+    return "";
+  }
+  return normalizeOfficialUpdateRule(season?.updateRule);
+}
+
 export function selectFirstSeason(seasons) {
   const normalized = (Array.isArray(seasons) ? seasons : []).filter(
     (season) => season?.seriesId,

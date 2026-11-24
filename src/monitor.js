@@ -48,7 +48,9 @@ import {
   normalizeAlbumMetadata,
   normalizeConfirmedSeriesIds,
   normalizeUnpublishedSeasons,
+  seasonProgressLabel,
   seasonNumber,
+  seasonUpdateRule,
   seriesCompletionMarker,
   seriesVerificationComplete,
   titleWithoutSeason,
@@ -67,6 +69,9 @@ const NETWORK_CONCURRENCY = 3;
 const NOTIFICATION_RETRY_MS = 15 * 60 * 1000;
 const NOTIFICATION_TIME_ZONE = "Asia/Shanghai";
 const MAX_SCHEDULER_DELAY_MS = 2_147_000_000;
+// The batch progress API omits episode_right_text, so refresh the latest
+// season detail once a day to catch completion markers without slowing every check.
+const SEASON_DETAIL_RECHECK_MS = 24 * 60 * 60 * 1000;
 const SUMMARY_EVENT_TYPES = new Set([
   EVENT_TYPE.EPISODE,
   EVENT_TYPE.SEASON,
@@ -469,11 +474,13 @@ function createSeason(detail, source, timestamp) {
     highWaterEpisodeCount: detail.episodeCount,
     lastObservedEpisodeCount: detail.episodeCount,
     rightText: detail.rightText,
+    updateRule: detail.updateRule || "",
     detailUrl: detail.detailUrl,
     source,
     addedAt: timestamp,
     updatedAt: timestamp,
     lastCheckedAt: timestamp,
+    lastDetailCheckedAt: timestamp,
     lastError: null,
   };
 }
@@ -1507,6 +1514,7 @@ export class ReminderService {
     now = () => new Date(),
     discoveryIntervalMs = DISCOVERY_INTERVAL_MS,
     candidateRecheckMs = CANDIDATE_RECHECK_MS,
+    seasonDetailRecheckMs = SEASON_DETAIL_RECHECK_MS,
     timers = { setTimeout, clearTimeout },
     requestScheduler = null,
   }) {
@@ -1564,6 +1572,7 @@ export class ReminderService {
     this.now = now;
     this.discoveryIntervalMs = discoveryIntervalMs;
     this.candidateRecheckMs = candidateRecheckMs;
+    this.seasonDetailRecheckMs = seasonDetailRecheckMs;
     this.timers = timers;
     this.operationQueue = Promise.resolve();
     this.checking = false;
@@ -2657,6 +2666,9 @@ export class ReminderService {
           status: season.status,
           episodeCount: season.episodeCount,
           highWaterEpisodeCount: season.highWaterEpisodeCount,
+          rightText: season.rightText,
+          progressLabel: seasonProgressLabel(season),
+          updateRule: seasonUpdateRule(season),
           totalEpisodeCount: season.totalEpisodeCount,
           accessibleEpisodeCount: season.accessibleEpisodeCount,
           firstVisibleTime: season.firstVisibleTime,
@@ -3274,6 +3286,12 @@ export class ReminderService {
       async (season) => {
         const progress =
           seriesProgressResults?.get?.(season.seriesId);
+        const lastDetailCheckedMs = Date.parse(
+          season.lastDetailCheckedAt || season.lastCheckedAt || "",
+        );
+        const detailRecheckDue =
+          !Number.isFinite(lastDetailCheckedMs) ||
+          nowMs - lastDetailCheckedMs >= this.seasonDetailRecheckMs;
         const canUseProgress =
           latestSeasonOnly &&
           progress &&
@@ -3281,6 +3299,7 @@ export class ReminderService {
           Number(progress.episodeCount) ===
             Number(season.highWaterEpisodeCount) &&
           progress.status === season.status &&
+          !detailRecheckDue &&
           !recoveryDetailRequired;
         if (canUseProgress) {
           return {
@@ -3463,6 +3482,13 @@ export class ReminderService {
         season.totalEpisodeCount = detail.totalEpisodeCount;
         season.accessibleEpisodeCount = detail.accessibleEpisodeCount;
         season.rightText = detail.rightText;
+        if (
+          detail.updateRuleResolved !== false ||
+          detail.status === "completed"
+        ) {
+          season.updateRule = detail.updateRule || "";
+        }
+        season.lastDetailCheckedAt = timestamp;
         season.lastObservedEpisodeCount = detail.episodeCount;
         season.highWaterEpisodeCount = Math.max(
           previousHighWater,

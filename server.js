@@ -11,6 +11,7 @@ import { AccountService } from "./src/account.js";
 import { AccountSyncService } from "./src/account-sync.js";
 import { AppDiscoveryService } from "./src/app-discovery.js";
 import { CatalogService } from "./src/catalog.js";
+import { ImageCache } from "./src/image-cache.js";
 import { ReminderService } from "./src/monitor.js";
 import { RankingsService } from "./src/rankings.js";
 import { UpstreamRequestScheduler } from "./src/request-scheduler.js";
@@ -60,6 +61,10 @@ const STATIC_FILES = new Map([
     { file: "app.js", type: "text/javascript; charset=utf-8" },
   ],
   [
+    "/cover-image.js",
+    { file: "cover-image.js", type: "text/javascript; charset=utf-8" },
+  ],
+  [
     "/logs.js",
     { file: "logs.js", type: "text/javascript; charset=utf-8" },
   ],
@@ -71,6 +76,13 @@ const STATIC_FILES = new Map([
     "/calendar-reservations.js",
     {
       file: "calendar-reservations.js",
+      type: "text/javascript; charset=utf-8",
+    },
+  ],
+  [
+    "/calendar-schedule.js",
+    {
+      file: "calendar-schedule.js",
       type: "text/javascript; charset=utf-8",
     },
   ],
@@ -176,6 +188,46 @@ function sendPng(response, statusCode, content) {
     "content-length": buffer.length,
   });
   response.end(buffer);
+}
+
+function sendCoverImage(response, request, image) {
+  const content = Buffer.isBuffer(image?.image)
+    ? image.image
+    : Buffer.from(image?.image || []);
+  if (!content.length) {
+    const error = new Error("封面图片内容为空。");
+    error.statusCode = 502;
+    error.code = "COVER_EMPTY";
+    throw error;
+  }
+
+  const contentType = String(image?.contentType || "");
+  if (!contentType.startsWith("image/")) {
+    const error = new Error("封面图片格式无效。");
+    error.statusCode = 502;
+    error.code = "COVER_CONTENT_TYPE_INVALID";
+    throw error;
+  }
+
+  const etagSource = String(image?.etag || "").replaceAll('"', "");
+  const etag = etagSource ? `"${etagSource}"` : "";
+  const headers = {
+    ...securityHeaders(contentType),
+    "cache-control": "public, max-age=31536000, immutable",
+    ...(etag ? { etag } : {}),
+  };
+  const ifNoneMatch = String(request.headers["if-none-match"] || "");
+  if (etag && ifNoneMatch.split(",").map((value) => value.trim()).includes(etag)) {
+    response.writeHead(304, headers);
+    response.end();
+    return;
+  }
+
+  response.writeHead(200, {
+    ...headers,
+    "content-length": content.length,
+  });
+  response.end(content);
 }
 
 function sendError(response, error) {
@@ -591,6 +643,7 @@ export function createRequestHandler(
   rankingService,
   catalogService,
   appDiscoveryService,
+  imageCache,
 ) {
   let batchCheckJob = null;
   let batchCheckSequence = 0;
@@ -814,6 +867,16 @@ export function createRequestHandler(
           return;
         }
         sendLogFile(response, 200, file);
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/covers") {
+        const image = await imageCache.get({
+          url: url.searchParams.get("url") || "",
+          seriesId: url.searchParams.get("seriesId") || "",
+          refresh: url.searchParams.get("refresh") === "1",
+        });
+        sendCoverImage(response, request, image);
         return;
       }
 
@@ -1668,6 +1731,7 @@ export async function createApplication({
   rankingService = null,
   catalogService = null,
   appDiscoveryService = null,
+  imageCache = null,
 } = {}) {
   const legacyStateFile = path.resolve(
     stateFile ||
@@ -1698,6 +1762,12 @@ export async function createApplication({
       minIntervalMs: 250,
       maxRetries: 3,
       logger: (entry) => systemLog.append(entry),
+    });
+  const resolvedImageCache =
+    imageCache ||
+    new ImageCache({
+      dataDir: path.dirname(sqliteDatabaseFile),
+      requestScheduler: resolvedRequestScheduler,
     });
   const resolvedScreenshotImport =
     screenshotImport ||
@@ -1751,6 +1821,7 @@ export async function createApplication({
       resolvedRankingService,
       resolvedCatalogService,
       resolvedAppDiscoveryService,
+      resolvedImageCache,
     ),
   );
   return {
@@ -1762,6 +1833,7 @@ export async function createApplication({
     rankingService: resolvedRankingService,
     catalogService: resolvedCatalogService,
     appDiscoveryService: resolvedAppDiscoveryService,
+    imageCache: resolvedImageCache,
     eventLog: store.eventLog,
     systemLog,
     requestScheduler: resolvedRequestScheduler,

@@ -361,14 +361,18 @@
 
   function coverMarkup(item, title) {
     const coverUrl = safeHttpsUrl(item?.coverUrl);
-    const fallback = `<span class="discovery-card__cover-fallback">${icon(
-      "tv",
-    )}</span>`;
+    const coverSrc =
+      window.DramaCover?.url(coverUrl, item?.seriesId) || coverUrl;
+    const coverAttributes =
+      window.DramaCover?.attributes(coverUrl, item?.seriesId) || "";
+    const fallback = `<span class="discovery-card__cover-fallback" data-cover-fallback ${
+      coverSrc ? "hidden" : ""
+    }>${icon("tv")}</span>`;
     const inner = `${fallback}${
-      coverUrl
+      coverSrc
         ? `<img class="discovery-card__cover-image" src="${escapeHtml(
-            coverUrl,
-          )}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+            coverSrc,
+          )}" ${coverAttributes} alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
         : ""
     }`;
     const detailUrl = safeHttpsUrl(item?.detailUrl);

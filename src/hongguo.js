@@ -10,6 +10,13 @@ import {
   toSafeInteger,
 } from "./utils.js";
 import {
+  accountUserAgent,
+  discoveryDeviceIdentity,
+  discoveryDevicePairs,
+  signAppPost,
+} from "./hongguo-sign.js";
+import { normalizeOfficialUpdateRule } from "./series.js";
+import {
   performUpstreamFetch,
   retryAfterMilliseconds,
 } from "./request-scheduler.js";
@@ -18,9 +25,14 @@ const MAX_REDIRECTS = 5;
 const MAX_HTML_BYTES = 3 * 1024 * 1024;
 const MAX_ALBUM_RESPONSE_BYTES = 512 * 1024;
 const MAX_SEARCH_RESPONSE_BYTES = 512 * 1024;
+const MAX_SERIES_META_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 18_000;
 const ALBUM_REQUEST_TIMEOUT_MS = 12_000;
 const SEARCH_REQUEST_TIMEOUT_MS = 12_000;
+const SERIES_META_REQUEST_TIMEOUT_MS = 12_000;
+const OFFICIAL_SERIES_META_ORIGIN =
+  "https://api5-normal-sinfonlinec.fqnovel.com";
+const OFFICIAL_SERIES_META_PATH = "/novel/player/video_detail/v1/";
 const MAX_SEARCH_QUERY_LENGTH = 30;
 const RANKING_GROUP_TYPES = ["human", "comic", "ai"];
 export const RANKING_CATEGORY_TYPES = Object.freeze([
@@ -568,6 +580,191 @@ export function normalizeSeriesDetail(series) {
       : null,
     detailUrl: `${OFFICIAL_DETAIL_URL}${encodeURIComponent(series.series_id)}`,
   };
+}
+
+export function parseOfficialSeriesMeta(payload, seriesId) {
+  const expectedSeriesId = String(seriesId || "");
+  if (!/^\d{8,25}$/.test(expectedSeriesId)) {
+    throw new HongguoError("剧集 ID 格式不正确。", "INVALID_SERIES_ID");
+  }
+
+  const data = payload?.data;
+  let node = data?.[expectedSeriesId];
+  if (!node && data && typeof data === "object" && !Array.isArray(data)) {
+    const candidates = [["", data], ...Object.entries(data)];
+    node =
+      candidates.find(([key, value]) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          return false;
+        }
+        const returnedId = String(
+          value?.video_data?.series_id_str ||
+            value?.video_data?.series_id ||
+            value?.series_id_str ||
+            value?.series_id ||
+            key ||
+            "",
+        );
+        return returnedId === expectedSeriesId;
+      })?.[1] || null;
+  }
+  if (!node || typeof node !== "object") {
+    throw dataError(
+      "红果 App 详情没有返回该剧集的更新信息。",
+      "SERIES_META_NOT_FOUND",
+    );
+  }
+
+  const videoData =
+    node.video_data && typeof node.video_data === "object"
+      ? node.video_data
+      : node;
+  const returnedSeriesId = String(
+    videoData.series_id_str || videoData.series_id || expectedSeriesId,
+  );
+  if (returnedSeriesId !== expectedSeriesId) {
+    throw dataError(
+      "红果 App 详情返回了另一部剧集的数据。",
+      "SERIES_META_ID_MISMATCH",
+    );
+  }
+
+  const episodeCount = toSafeInteger(
+    videoData.episode_cnt ?? videoData.episode_total_cnt,
+    null,
+  );
+  const totalEpisodeCount = toSafeInteger(
+    videoData.episode_total_cnt,
+    null,
+  );
+  return {
+    seriesId: expectedSeriesId,
+    episodeCount,
+    totalEpisodeCount,
+    status: normalizeSeriesStatus(videoData.series_status),
+    rightText: normalizeWhitespace(
+      videoData.episode_right_text || videoData.update_tag_text || "",
+    ),
+    updateRule: normalizeOfficialUpdateRule(
+      videoData.update_info?.show_update_frequency,
+    ),
+  };
+}
+
+export async function fetchOfficialSeriesMeta(
+  seriesId,
+  {
+    fetchImpl = globalThis.fetch,
+    timeoutMs = SERIES_META_REQUEST_TIMEOUT_MS,
+    requestScheduler = null,
+    requestPriority = 0,
+  } = {},
+) {
+  const normalizedSeriesId = String(seriesId || "");
+  if (!/^\d{8,25}$/.test(normalizedSeriesId)) {
+    throw new HongguoError("剧集 ID 格式不正确。", "INVALID_SERIES_ID");
+  }
+
+  const body = JSON.stringify({
+    biz_param: {
+      caller_scene: "single_col",
+      detail_page_version: 1,
+      disable_digg_stat: false,
+      disable_video_relate_book: false,
+      from_video_id: "",
+      need_all_video_definition: false,
+      need_mp4_align: false,
+      screen_width_px: "1078",
+      source: 4,
+      use_os_player: false,
+      use_server_dns: false,
+      video_id_type: 1,
+    },
+    series_id: normalizedSeriesId,
+  });
+  const signer = signAppPost({
+    path: OFFICIAL_SERIES_META_PATH,
+    pairs: discoveryDevicePairs(),
+    body,
+    ...discoveryDeviceIdentity(),
+    origin: OFFICIAL_SERIES_META_ORIGIN,
+    requireBranch: 0,
+  });
+
+  let result;
+  try {
+    result = await performUpstreamFetch(
+      fetchImpl,
+      `${OFFICIAL_SERIES_META_ORIGIN}${OFFICIAL_SERIES_META_PATH}?${signer.query}`,
+      {
+        method: "POST",
+        redirect: "error",
+        credentials: "omit",
+        cache: "no-store",
+        headers: {
+          ...signer.headers,
+          accept: "application/json",
+          "accept-language": "zh-CN,zh;q=0.9",
+          "user-agent": accountUserAgent(),
+        },
+        body,
+      },
+      {
+        scheduler: requestScheduler,
+        timeoutMs,
+        label: "红果 App 剧集详情",
+        priority: requestPriority,
+        readBody: (response) =>
+          readSuccessfulBody(response, MAX_SERIES_META_RESPONSE_BYTES),
+      },
+    );
+  } catch (error) {
+    if (error?.upstreamBodyRead) {
+      throw error;
+    }
+    if (error?.name === "AbortError") {
+      throw new HongguoError(
+        "请求红果 App 剧集详情超时。",
+        "SERIES_META_REQUEST_TIMEOUT",
+        504,
+      );
+    }
+    throw new HongguoError(
+      `无法连接红果 App 剧集详情：${error.message}`,
+      "SERIES_META_REQUEST_FAILED",
+      502,
+    );
+  }
+
+  const response = result.response;
+  if (!response.ok) {
+    const rateLimited = response.status === 429;
+    const retryAfterMs = retryAfterMilliseconds(response);
+    const error = new HongguoError(
+      rateLimited
+        ? "红果 App 详情请求过于频繁，请稍后重试。"
+        : `红果 App 详情返回 HTTP ${response.status}。`,
+      rateLimited
+        ? "SERIES_META_RATE_LIMITED"
+        : "SERIES_META_HTTP_ERROR",
+      rateLimited ? 429 : 502,
+    );
+    if (retryAfterMs !== null) {
+      error.retryAfterMs = retryAfterMs;
+    }
+    throw error;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(result.body || "");
+  } catch {
+    throw dataError(
+      "红果 App 详情无法解析。",
+      "SERIES_META_DATA_INVALID",
+    );
+  }
+  return parseOfficialSeriesMeta(payload, normalizedSeriesId);
 }
 
 function normalizeSeriesStatus(value) {
@@ -1124,6 +1321,15 @@ export async function fetchSeriesDetail(
   }
 
   const url = `${OFFICIAL_DETAIL_URL}${encodeURIComponent(seriesId)}`;
+  const metaPromise = fetchOfficialSeriesMeta(seriesId, {
+    fetchImpl,
+    timeoutMs,
+    requestScheduler,
+    requestPriority,
+  }).then(
+    (meta) => ({ meta, resolved: true }),
+    () => ({ meta: null, resolved: false }),
+  );
   const { html } = await fetchWithSafeRedirects(url, {
     fetchImpl,
     timeoutMs,
@@ -1131,13 +1337,24 @@ export async function fetchSeriesDetail(
     requestPriority,
   });
   const detail = parseSeriesDetailHtml(html);
+  const { meta, resolved: updateRuleResolved } = await metaPromise;
 
   if (detail.seriesId !== String(seriesId)) {
     throw dataError("红果返回了另一部剧集的数据。", "SERIES_ID_MISMATCH");
   }
 
+  const mergedDetail = {
+    ...detail,
+    status:
+      meta?.status && meta.status !== SERIES_STATUS.UNKNOWN
+        ? meta.status
+        : detail.status,
+    rightText: meta?.rightText || detail.rightText,
+    updateRule: meta?.updateRule || "",
+    updateRuleResolved,
+  };
   return {
-    detail,
+    detail: mergedDetail,
     recommendations: extractRecommendations(html),
   };
 }

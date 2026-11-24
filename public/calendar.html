@@ -18,6 +18,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>更新日历 · 短剧助手</title>
     <script src="/theme.js"></script>
+    <script src="/cover-image.js" defer></script>
     <script src="/scroll-controls.js" defer></script>
     <script src="/pwa.js" defer></script>
     <link rel="manifest" href="/manifest.webmanifest">
@@ -312,12 +313,16 @@
                   class="calendar-week-strip"
                   id="calendar-week-strip"
                   role="group"
-                  aria-label="本周日期"
+                  aria-label="当前周日期"
                   aria-busy="true"
                 ></div>
-                <p class="calendar-keyboard-help">
-                  使用左右方向键切换日期。
-                </p>
+                <div
+                  class="calendar-week-timeline"
+                  id="calendar-week-timeline"
+                  role="list"
+                  aria-label="当前周有更新的日期，以及未来全部更新"
+                  aria-busy="true"
+                ></div>
               </div>
 
               <div class="calendar-month-view" id="calendar-month-view" hidden>
@@ -436,7 +441,7 @@
             <use href="#icon-info"></use>
           </svg>
           <p id="calendar-source-note">
-            日历按北京时间整理。只有官方预约文案中的明确上线日期会进入未来日期，模糊档期继续留在待公布。
+            日历按北京时间整理。预计更新依据官方更新规则生成；无法确认总集数时仅展示有限期预测，季完结后会自动移除后续预计项。
           </p>
         </footer>
       </section>

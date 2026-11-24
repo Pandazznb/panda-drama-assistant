@@ -35,6 +35,7 @@ import {
   hasSeriesFinaleMarker,
   highestSeason,
   normalizeConfirmedSeriesIds,
+  normalizeOfficialUpdateRule,
   normalizeUnpublishedSeasons,
   seriesVerificationComplete,
 } from "./series.js";
@@ -577,6 +578,7 @@ function normalizeSeason(season) {
       Number(season.lastObservedEpisodeCount ?? season.episodeCount) || 0,
     ),
     rightText: normalizeWhitespace(season.rightText || ""),
+    updateRule: normalizeOfficialUpdateRule(season.updateRule),
     detailUrl: String(season.detailUrl || ""),
     source: ["share", "album", "recommendation", "manual"].includes(
       season.source,
@@ -588,6 +590,11 @@ function normalizeSeason(season) {
     lastCheckedAt: season.lastCheckedAt
       ? String(season.lastCheckedAt)
       : null,
+    lastDetailCheckedAt: season.lastDetailCheckedAt
+      ? String(season.lastDetailCheckedAt)
+      : season.lastCheckedAt
+        ? String(season.lastCheckedAt)
+        : null,
     lastError: season.lastError
       ? normalizeWhitespace(season.lastError)
       : null,
