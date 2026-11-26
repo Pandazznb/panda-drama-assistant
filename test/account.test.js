@@ -12,6 +12,7 @@ import {
   normalizeSmsLoginNumber,
   parseFavoritesPayload,
   parseHistoryPayload,
+  parsePlaceholderScheduleSearchPayload,
   parseProfilePayload,
   parseReservationsPayload,
 } from "../src/account.js";
@@ -295,6 +296,170 @@ test("upcoming reservations without a series ID remain non-importable", () => {
   assert.equal(upcoming[0].seriesId, null);
   assert.equal(upcoming[0].importable, false);
   assert.match(upcoming[0].note, /暂时不能加入追更/);
+});
+
+test("placeholder schedule search matches exact official IDs, never titles", () => {
+  const matches = parsePlaceholderScheduleSearchPayload(
+    {
+      data: {
+        search_tabs: [
+          {
+            data: [
+              {
+                subscribe_items: [
+                  {
+                    item_id_str: SERIES_ID,
+                    name: "待播短剧第八季",
+                    cover: "https://example.com/shell-cover.jpg",
+                    expected_rec_text: "预计 12 月 8 日上线",
+                    schedule_publish_time: 1_765_209_600,
+                  },
+                  {
+                    item_id_str: "7694653385668037999",
+                    name: "待播短剧第八季",
+                    expected_rec_text: "同名但不应串到目标 ID",
+                    schedule_publish_time: 1_765_296_000,
+                  },
+                  {
+                    item_id_str: SERIES_ID,
+                    name: "重复行应合并",
+                    expected_rec_text: "日期待公布",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    },
+    [SERIES_ID],
+  );
+
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].seriesId, SERIES_ID);
+  assert.equal(matches[0].title, "待播短剧第八季");
+  assert.equal(matches[0].coverUrl, "https://example.com/shell-cover.jpg");
+  assert.equal(matches[0].scheduleDateKey, "2025-12-09");
+  assert.equal(matches[0].scheduleError, null);
+  assert.ok(matches[0].scheduleCheckedAt);
+});
+
+test("placeholder schedule search records every target even when no row matches", async () => {
+  const requests = [];
+  const service = new AccountService({
+    vault: {},
+    now: () => 1_700_000_000_000,
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url: String(url), method: options.method || "GET" });
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          data: { search_tabs: [] },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    },
+  });
+  const results = await service.fetchPlaceholderSchedules(
+    {
+      version: 1,
+      cookieHeader: "sessionid=test",
+      deviceId: "7100000000000011",
+      installId: "7100000000000012",
+      identity: {
+        cdid: "123e4567-e89b-12d3-a456-426614174000",
+        openudid: "openid",
+        clientudid: "clientid",
+        oaid: "",
+        reqId: "request-id",
+      },
+    },
+    [
+      { seriesId: SERIES_ID, title: "待播短剧" },
+      {
+        seriesId: "7694653385668037999",
+        title: "待播短剧",
+      },
+    ],
+  );
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "GET");
+  assert.match(requests[0].url, /\/reading\/bookapi\/search\/tab\/v/);
+  assert.equal(results.size, 2);
+  for (const seriesId of [SERIES_ID, "7694653385668037999"]) {
+    const result = results.get(seriesId);
+    assert.equal(result.scheduleDateKey, null);
+    assert.equal(result.scheduleError, null);
+    assert.ok(result.scheduleCheckedAt);
+  }
+});
+
+test("placeholder schedule lookup keeps errors scoped to the failed title", async () => {
+  const service = new AccountService({
+    vault: {},
+    now: () => 1_700_000_000_000,
+    fetchImpl: async (url) => {
+      if (String(url).includes("query=bad")) {
+        return new Response("upstream unavailable", { status: 503 });
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            search_tabs: [
+              {
+                data: [
+                  {
+                    subscribe_items: [
+                      {
+                        item_id_str: SERIES_ID,
+                        schedule_publish_time: 1_765_209_600,
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    },
+  });
+  const results = await service.fetchPlaceholderSchedules(
+    {
+      version: 1,
+      cookieHeader: "sessionid=test",
+      deviceId: "7100000000000011",
+      installId: "7100000000000012",
+      identity: {
+        cdid: "123e4567-e89b-12d3-a456-426614174000",
+        openudid: "openid",
+        clientudid: "clientid",
+        oaid: "",
+        reqId: "request-id",
+      },
+    },
+    [
+      { seriesId: SERIES_ID, title: "good" },
+      {
+        seriesId: "7694653385668037999",
+        title: "bad",
+      },
+    ],
+  );
+
+  assert.equal(results.get(SERIES_ID).scheduleDateKey, "2025-12-09");
+  const failed = results.get("7694653385668037999");
+  assert.equal(failed.scheduleDateKey, null);
+  assert.match(failed.scheduleError, /HTTP 503|不可用|失败/);
+  assert.ok(failed.scheduleCheckedAt);
 });
 
 test("account session vault encrypts credentials and rejects tampering", async (t) => {

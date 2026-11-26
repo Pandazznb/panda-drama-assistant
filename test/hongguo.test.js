@@ -903,6 +903,10 @@ test("parseOfficialRankingPage normalizes official ranking cards", () => {
               episodeCount: 63,
               openEpisodeCount: 3,
               primaryMetricText: "8752万热度",
+              scoreText: "9.1分",
+              favoriteText: "82.3万收藏",
+              likeText: "231万点赞",
+              description: "  一段\n  用于测试的官方剧情简介。 ",
               tags: ["真人剧", "家庭", "演员甲"],
               statusTags: ["新剧"],
             },
@@ -931,6 +935,10 @@ test("parseOfficialRankingPage normalizes official ranking cards", () => {
   assert.equal(page.items[0].title, "测试 真人剧");
   assert.equal(page.items[0].rightText, "共 63 集");
   assert.equal(page.items[0].metricText, "8752万热度");
+  assert.equal(page.items[0].scoreText, "9.1分");
+  assert.equal(page.items[0].favoriteText, "82.3万收藏");
+  assert.equal(page.items[0].likeText, "231万点赞");
+  assert.equal(page.items[0].description, "一段 用于测试的官方剧情简介。");
   assert.deepEqual(page.items[0].categories, ["家庭", "演员甲", "新剧"]);
   assert.deepEqual(page.items[0].statusTags, ["新剧"]);
   assert.equal(

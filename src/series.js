@@ -375,6 +375,33 @@ export function normalizeConfirmedSeriesIds(values) {
   ].sort();
 }
 
+export function calendarDateKeyFromInstant(value, timeZone = "Asia/Shanghai") {
+  const parsed =
+    value instanceof Date ? value.getTime() : Date.parse(value || "");
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(parsed));
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return values.year && values.month && values.day
+    ? `${values.year}-${values.month}-${values.day}`
+    : null;
+}
+
+function normalizeIsoInstant(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
 export function normalizeUnpublishedSeasons(values) {
   const seasons = new Map();
   for (const value of Array.isArray(values) ? values : []) {
@@ -392,7 +419,20 @@ export function normalizeUnpublishedSeasons(values) {
       source.seasonIndex ?? source.season_index,
       null,
     );
-    seasons.set(seriesId, {
+    const schedulePublishAt = normalizeIsoInstant(
+      source.schedulePublishAt,
+    );
+    const storedScheduleDateKey = normalizeWhitespace(
+      source.scheduleDateKey || "",
+    );
+    const scheduleDateKey = /^\d{4}-\d{2}-\d{2}$/.test(
+      storedScheduleDateKey,
+    )
+      ? storedScheduleDateKey
+      : schedulePublishAt
+        ? calendarDateKeyFromInstant(schedulePublishAt)
+        : null;
+    const season = {
       seriesId,
       seasonIndex:
         Number.isInteger(seasonIndex) && seasonIndex > 0
@@ -401,7 +441,28 @@ export function normalizeUnpublishedSeasons(values) {
       coverUrl: normalizeWhitespace(
         source.coverUrl || source.series_cover || "",
       ),
-    });
+    };
+    if (schedulePublishAt) {
+      season.schedulePublishAt = schedulePublishAt;
+    }
+    if (scheduleDateKey) {
+      season.scheduleDateKey = scheduleDateKey;
+    }
+    const scheduleText = normalizeWhitespace(source.scheduleText || "");
+    if (scheduleText) {
+      season.scheduleText = scheduleText;
+    }
+    const scheduleCheckedAt = normalizeIsoInstant(
+      source.scheduleCheckedAt,
+    );
+    if (scheduleCheckedAt) {
+      season.scheduleCheckedAt = scheduleCheckedAt;
+    }
+    const scheduleError = normalizeWhitespace(source.scheduleError || "");
+    if (scheduleError) {
+      season.scheduleError = scheduleError;
+    }
+    seasons.set(seriesId, season);
   }
   return [...seasons.values()].sort(
     (left, right) =>

@@ -2,6 +2,11 @@ import {
   parseReservationExpectedDate,
   reservationPlaceholderId,
 } from "./calendar-reservations.js";
+import {
+  calendarEventSeasonKey,
+  latestEpisodeEventIdBySeason,
+  resolveUpdateEventOccurredAt,
+} from "./calendar-events.js";
 import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
 
 (() => {
@@ -35,7 +40,6 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     next: document.querySelector("#calendar-next"),
     today: document.querySelector("#calendar-today"),
     status: document.querySelector("#calendar-status"),
-    periodEyebrow: document.querySelector(".calendar-periodbar__eyebrow"),
     periodTitle: document.querySelector("#calendar-period-title"),
     weekView: document.querySelector("#calendar-week-view"),
     weekStrip: document.querySelector("#calendar-week-strip"),
@@ -429,6 +433,15 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
         coverUrl: safeImageUrl(
           source.coverUrl || source.series_cover,
         ),
+        schedulePublishAt: validIso(source.schedulePublishAt),
+        scheduleDateKey: /^\d{4}-\d{2}-\d{2}$/.test(
+          String(source.scheduleDateKey || ""),
+        )
+          ? String(source.scheduleDateKey)
+          : null,
+        scheduleText: normalizeWhitespace(source.scheduleText),
+        scheduleCheckedAt: validIso(source.scheduleCheckedAt),
+        scheduleError: normalizeWhitespace(source.scheduleError),
       });
     }
 
@@ -444,6 +457,11 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
         seriesId,
         seasonIndex: null,
         coverUrl: "",
+        schedulePublishAt: null,
+        scheduleDateKey: null,
+        scheduleText: "",
+        scheduleCheckedAt: null,
+        scheduleError: "",
       });
     }
 
@@ -457,6 +475,11 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
         seriesId: null,
         seasonIndex: null,
         coverUrl: "",
+        schedulePublishAt: null,
+        scheduleDateKey: null,
+        scheduleText: "",
+        scheduleCheckedAt: null,
+        scheduleError: "",
       });
     }
 
@@ -698,6 +721,7 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     const calendarTodayKey = todayDateKey();
     const seasonLookup = new Map();
     const updateEntries = new Map();
+    const latestEpisodeEventIds = latestEpisodeEventIdBySeason(events);
 
     for (const subscription of subscriptions) {
       for (const season of Array.isArray(subscription.seasons)
@@ -753,11 +777,13 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
       if (!fallbackTime) {
         continue;
       }
-      const seasonTime =
-        event.type === "season"
-          ? validIso(lookup.season.firstVisibleTime)
-          : validIso(lookup.season.lastEpisodeChangedAt);
-      const occurredAt = seasonTime || fallbackTime;
+      const eventSeasonKey = calendarEventSeasonKey(event);
+      const occurredAt =
+        resolveUpdateEventOccurredAt(
+          event,
+          lookup.season,
+          latestEpisodeEventIds.get(eventSeasonKey),
+        ) || fallbackTime;
       const seasonTitle =
         lookup.season.title || event.seasonTitle || subscription.displayTitle;
       const entry = {
@@ -950,16 +976,27 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     }
 
     const pending = [];
+    const scheduledPlaceholderEntries = [];
+    const seenPlaceholderSeriesIds = new Set();
     for (const subscription of subscriptions) {
       const placeholderInfo = subscriptionPlaceholderSeasons(subscription);
       for (const [index, placeholder] of placeholderInfo.seasons.entries()) {
+        if (placeholder.seriesId) {
+          if (seenPlaceholderSeriesIds.has(placeholder.seriesId)) {
+            continue;
+          }
+          seenPlaceholderSeriesIds.add(placeholder.seriesId);
+        }
         const matchedReservation = placeholder.seriesId
           ? reservationByPlaceholderId.get(placeholder.seriesId) ||
             reservationBySeriesId.get(placeholder.seriesId)
           : null;
-        const seasonLabel = seasonLabelFromIndex(
-          placeholder.seasonIndex,
-        );
+        const seasonLabel = seasonLabelFromIndex(placeholder.seasonIndex);
+        const scheduleDateKey = placeholder.scheduleDateKey
+          ? placeholder.scheduleDateKey
+          : placeholder.schedulePublishAt
+            ? dateKeyFromValue(placeholder.schedulePublishAt)
+            : null;
         if (matchedReservation) {
           matchedReservation.subscriptionId = String(subscription.id);
           matchedReservation.seriesTitle = placeholderInfo.seriesTitle;
@@ -970,15 +1007,29 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
             matchedReservation.coverUrl ||
             placeholder.coverUrl ||
             placeholderInfo.coverUrl;
+          if (!matchedReservation.dateKey && scheduleDateKey) {
+            matchedReservation.dateKey = scheduleDateKey;
+            matchedReservation.datePrecision = "day";
+            matchedReservation.dateSource = "schedule";
+            matchedReservation.occurredAt =
+              placeholder.schedulePublishAt ||
+              `${scheduleDateKey}T00:00:00+08:00`;
+            matchedReservation.expectedText =
+              placeholder.scheduleText ||
+              matchedReservation.expectedText ||
+              "官方预约档期";
+          }
           continue;
         }
-        pending.push({
-          id: `placeholder:${subscription.id}:${
+        const entry = {
+          id: `placeholder-schedule:${subscription.id}:${
             placeholder.seriesId || `slot-${index + 1}`
           }`,
-          type: "placeholder",
+          type: scheduleDateKey ? "placeholder-schedule" : "placeholder",
           kind: "placeholder",
-          dateKey: null,
+          dateKey: scheduleDateKey,
+          datePrecision: scheduleDateKey ? "day" : null,
+          dateSource: scheduleDateKey ? "schedule" : null,
           subscriptionId: String(subscription.id),
           seasonId: placeholder.seriesId || null,
           seriesTitle: placeholderInfo.seriesTitle,
@@ -988,15 +1039,28 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
           episodeCount: null,
           previousEpisodeCount: null,
           addedEpisodeCount: null,
-          occurredAt: null,
-          coverUrl:
-            placeholder.coverUrl || placeholderInfo.coverUrl,
+          occurredAt: scheduleDateKey
+            ? placeholder.schedulePublishAt ||
+              `${scheduleDateKey}T00:00:00+08:00`
+            : null,
+          coverUrl: placeholder.coverUrl || placeholderInfo.coverUrl,
           detailUrl: "",
-          expectedText: placeholder.seriesId
-            ? "官方已建立占位季，等待上线日期"
-            : "等待官方公布上线日期",
+          expectedText:
+            placeholder.scheduleText ||
+            (scheduleDateKey
+              ? "收藏中的占位季已公布上线日期"
+              : placeholder.scheduleError
+                ? "档期暂未读取到，稍后自动重试"
+                : placeholder.seriesId
+                  ? "官方已建立占位季，等待上线日期"
+                  : "等待官方公布上线日期"),
           source: "dashboard",
-        });
+        };
+        if (scheduleDateKey) {
+          scheduledPlaceholderEntries.push(entry);
+        } else {
+          pending.push(entry);
+        }
       }
     }
     pending.push(
@@ -1016,6 +1080,7 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
       ...updateEntries.values(),
       ...estimatedUpdateEntries.values(),
       ...reservationEntries,
+      ...scheduledPlaceholderEntries,
     ]
       .filter((entry) => entry.dateKey)
       .sort(compareDatedEntries);
@@ -1045,6 +1110,7 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     }
     const typeOrder = {
       reservation: 0,
+      "placeholder-schedule": 0,
       episode: 1,
       season: 2,
     };
@@ -1079,6 +1145,7 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
           episodeUpdates: 0,
           estimatedUpdates: 0,
           reservations: 0,
+          placeholderSchedules: 0,
         };
         byDate.set(entry.dateKey, bucket);
       }
@@ -1094,6 +1161,8 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
         }
       } else if (entry.type === "reservation") {
         bucket.reservations += 1;
+      } else if (entry.type === "placeholder-schedule") {
+        bucket.placeholderSchedules += 1;
       }
     }
     for (const bucket of byDate.values()) {
@@ -1167,7 +1236,9 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
       (entry) => entry.estimated === true,
     ).length;
     const overviewReservations = overviewEntries.filter(
-      (entry) => entry.type === "reservation",
+      (entry) =>
+        entry.type === "reservation" ||
+        entry.type === "placeholder-schedule",
     ).length;
     const todayCount = bucketForDate(entryIndex, today).total;
     const reservationCount = state.data.reservations.length;
@@ -1214,8 +1285,10 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     const selectedEstimatedUpdateText = selectedBucket.estimatedUpdates
       ? `${selectedBucket.estimatedUpdates} 条预计更新`
       : "";
-    const selectedReservationText = selectedBucket.reservations
-      ? `${selectedBucket.reservations} 条预约`
+    const selectedReservationCount =
+      selectedBucket.reservations + selectedBucket.placeholderSchedules;
+    const selectedReservationText = selectedReservationCount
+      ? `${selectedReservationCount} 条预约档期`
       : "";
     elements.selectedDate.textContent = `${formatMonthDay(selected)} · ${WEEKDAY_NAMES[dayOfWeek(selected)]}`;
     elements.selectedToday.hidden = selected !== today;
@@ -1231,12 +1304,11 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
           ]
             .filter(Boolean)
             .join(" · ")
-        : "这一天没有短剧更新或账号预约。";
+        : "这一天没有短剧更新或预约档期。";
   }
 
   function renderPeriodControls() {
     if (state.view === "month") {
-      elements.periodEyebrow.textContent = "当前月份";
       elements.periodTitle.textContent = formatMonthTitle(
         state.selectedDate,
       );
@@ -1249,7 +1321,6 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     const dates = weekDates(state.selectedDate);
     const isCurrentWeek =
       startOfWeek(state.selectedDate) === startOfWeek(todayDateKey());
-    elements.periodEyebrow.textContent = isCurrentWeek ? "本周" : "所选周";
     elements.periodTitle.textContent = `${formatMonthDay(
       dates[0],
     )} - ${formatMonthDay(dates[6])}`;
@@ -1271,7 +1342,10 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
       bucket.episodeUpdates
         ? '<span class="calendar-date-dot calendar-date-dot--episode" aria-hidden="true"></span>'
         : "",
-      bucket.reservations
+      bucket.estimatedUpdates
+        ? '<span class="calendar-date-dot calendar-date-dot--estimated" aria-hidden="true"></span>'
+        : "",
+      bucket.reservations || bucket.placeholderSchedules
         ? '<span class="calendar-date-dot calendar-date-dot--reservation" aria-hidden="true"></span>'
         : "",
     ].join("");
@@ -1312,10 +1386,14 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
         if (dateKey === state.selectedDate) {
           classes.push("is-selected");
         }
-        if (bucket.seasonUpdates || bucket.episodeUpdates) {
+        if (
+          bucket.seasonUpdates ||
+          bucket.episodeUpdates ||
+          bucket.estimatedUpdates
+        ) {
           classes.push("has-updates");
         }
-        if (bucket.reservations) {
+        if (bucket.reservations || bucket.placeholderSchedules) {
           classes.push("has-reservations");
         }
         return `
@@ -1407,7 +1485,7 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
       .join("");
     if (visibleTimelineDates.length === 0) {
       elements.weekTimeline.innerHTML =
-        '<p class="calendar-week-timeline__empty" role="status">当前周和未来日期暂时都没有短剧更新排期或账号预约。</p>';
+        '<p class="calendar-week-timeline__empty" role="status">当前周和未来日期暂时都没有短剧更新排期或预约档期。</p>';
     }
     elements.weekTimeline.setAttribute("aria-busy", "false");
   }
@@ -1476,10 +1554,14 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
         if (dateKey === state.selectedDate) {
           classes.push("is-selected");
         }
-        if (bucket.seasonUpdates || bucket.episodeUpdates) {
+        if (
+          bucket.seasonUpdates ||
+          bucket.episodeUpdates ||
+          bucket.estimatedUpdates
+        ) {
           classes.push("has-updates");
         }
-        if (bucket.reservations) {
+        if (bucket.reservations || bucket.placeholderSchedules) {
           classes.push("has-reservations");
         }
         days.push(`
@@ -1520,6 +1602,10 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
           label: "账号预约",
           icon: "bookmark",
         },
+        "placeholder-schedule": {
+          label: "预约档期",
+          icon: "calendar",
+        },
         placeholder: {
           label: "待公布",
           icon: "hourglass",
@@ -1557,6 +1643,9 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
           : `等待上线日期 · 全 ${entry.episodeCount} 集`;
       }
       return entry.dateKey ? "官方预约档期" : "等待官方上线日期";
+    }
+    if (entry.type === "placeholder-schedule") {
+      return "收藏占位季档期";
     }
     if (entry.type === "placeholder") {
       return "官方占位季";
@@ -1620,9 +1709,11 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
               ? ` ${entry.scheduleTimeLabel}`
               : ""
           }更新`
-        : entry.type === "reservation" && entry.dateKey
-        ? `预计 ${formatMonthDay(entry.dateKey)}上线`
-        : entry.type !== "reservation" && entry.occurredAt
+        : ["reservation", "placeholder-schedule"].includes(entry.type) &&
+            entry.dateKey
+          ? `预计 ${formatMonthDay(entry.dateKey)}上线`
+          : !["reservation", "placeholder-schedule"].includes(entry.type) &&
+              entry.occurredAt
           ? formatInstantTime(entry.occurredAt)
           : "";
     return `

@@ -11,11 +11,19 @@
       content="按北京时间查看正在追更短剧的新季、集数更新和账号预约档期。"
     >
     <meta name="theme-color" content="#f3f5f7">
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#0f1216"
+    >
     <meta name="application-name" content="短剧助手">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="短剧助手">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    >
     <title>更新日历 · 短剧助手</title>
     <script src="/theme.js"></script>
     <script src="/cover-image.js" defer></script>
@@ -184,7 +192,6 @@
       >
         <header class="calendar-viewbar">
           <div class="calendar-viewbar__group">
-            <p class="calendar-viewbar__label">视图</p>
             <div
               class="calendar-view-switch"
               role="group"
@@ -209,7 +216,6 @@
             </div>
           </div>
           <div class="calendar-viewbar__group">
-            <p class="calendar-viewbar__label">类型</p>
             <div
               class="calendar-type-filter"
               role="group"
@@ -249,17 +255,6 @@
               </button>
             </div>
           </div>
-          <div class="calendar-legend-group">
-            <div class="calendar-legend" aria-label="日历图例">
-              <span class="calendar-legend__item calendar-legend__item--today">
-                <span
-                  class="calendar-legend__dot calendar-legend__dot--today"
-                  aria-hidden="true"
-                ></span>
-                今天
-              </span>
-            </div>
-          </div>
         </header>
 
         <p
@@ -274,7 +269,6 @@
           <div class="calendar-period-shell">
             <div class="calendar-periodbar__title">
               <div class="calendar-periodbar__heading">
-                <p class="calendar-periodbar__eyebrow">当前范围</p>
                 <h2 id="calendar-period-title" aria-live="polite">本周</h2>
               </div>
               <div
@@ -342,9 +336,6 @@
                   aria-label="月历"
                   aria-busy="true"
                 ></div>
-                <p class="calendar-keyboard-help">
-                  使用方向键切换日期，Home 和 End 可跳到本周首尾。
-                </p>
               </div>
             </div>
           </div>
@@ -356,7 +347,6 @@
         >
           <div class="calendar-day-panel__header">
             <div class="calendar-day-panel__heading">
-              <p class="calendar-day-panel__eyebrow">当天日历项</p>
               <div class="calendar-day-panel__title-row">
                 <h2 id="calendar-selected-date">今天</h2>
                 <span
@@ -367,6 +357,10 @@
                   今天
                 </span>
               </div>
+              <p
+                class="calendar-day-panel__summary"
+                id="calendar-selected-summary"
+              ></p>
             </div>
             <span
               class="calendar-entry-count"
@@ -374,10 +368,6 @@
               hidden
             ></span>
           </div>
-          <p
-            class="calendar-day-panel__summary"
-            id="calendar-selected-summary"
-          ></p>
           <div
             class="calendar-entry-list"
             id="calendar-entry-list"

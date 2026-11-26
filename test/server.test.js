@@ -423,8 +423,59 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   );
   assert.match(page, /name="application-name" content="短剧助手"/);
   assert.match(page, /name="mobile-web-app-capable" content="yes"/);
+  assert.match(page, /name="theme-color" content="#f3f5f7"/);
+  assert.match(
+    page,
+    /name="theme-color"\s+media="\(prefers-color-scheme: dark\)"\s+content="#0f1216"/,
+  );
+  assert.match(
+    page,
+    /name="viewport"\s+content="width=device-width, initial-scale=1, viewport-fit=cover"/,
+  );
+  assert.match(
+    page,
+    /name="apple-mobile-web-app-status-bar-style"\s+content="black-translucent"/,
+  );
   assert.match(page, /src="\/pwa\.js" defer/);
   assert.match(page, /data-pwa-install/);
+  assert.doesNotMatch(page, /class="app-status-surface"/);
+  assert.doesNotMatch(page, /class="app-status-bar"/);
+
+  const standaloneStylesResponse = await fetch(
+    `${harness.origin}/styles.css`,
+  );
+  assert.equal(standaloneStylesResponse.status, 200);
+  const standaloneStyles = await standaloneStylesResponse.text();
+  assert.match(
+    standaloneStyles,
+    /\.app-header\s*\{[\s\S]*?padding-top: var\(--safe-area-inset-top\);[\s\S]*?\}\s*\.app-header::before\s*\{[\s\S]*?background-color: var\(--color-header-bg\);[\s\S]*?background-image: var\(--header-background-image\);[\s\S]*?-webkit-backdrop-filter: blur\(28px\) saturate\(1\.55\);[\s\S]*?backdrop-filter: blur\(28px\) saturate\(1\.55\);/,
+  );
+  assert.match(
+    standaloneStyles,
+    /\.app-header__inner\s*\{[\s\S]*?position: relative;[\s\S]*?z-index: 1;/,
+  );
+  assert.doesNotMatch(standaloneStyles, /\.app-status-bar\s*\{/);
+  assert.doesNotMatch(standaloneStyles, /--color-standalone-header-bg/);
+  assert.doesNotMatch(
+    standaloneStyles,
+    /@media \(display-mode: standalone\)[\s\S]*?\.app-header/,
+  );
+
+  for (const pathname of ["/calendar", "/rankings", "/filters", "/logs"]) {
+    const response = await fetch(`${harness.origin}${pathname}`);
+    assert.equal(response.status, 200);
+    const childPage = await response.text();
+    assert.match(
+      childPage,
+      /name="viewport"\s+content="width=device-width, initial-scale=1, viewport-fit=cover"/,
+    );
+    assert.match(
+      childPage,
+      /name="apple-mobile-web-app-status-bar-style"\s+content="black-translucent"/,
+    );
+    assert.doesNotMatch(childPage, /class="app-status-surface"/);
+    assert.doesNotMatch(childPage, /class="app-status-bar"/);
+  }
 
   const iconResponse = await fetch(
     `${harness.origin}/assets/panda-drama-assistant-icon.svg`,
@@ -531,6 +582,8 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   const themeScript = await themeResponse.text();
   assert.match(themeScript, /prefers-color-scheme: dark/);
   assert.match(themeScript, /\["auto", "light", "dark"\]/);
+  assert.match(themeScript, /light: "#f3f5f7"/);
+  assert.match(themeScript, /dark: "#0f1216"/);
 
   const stateResponse = await fetch(`${harness.origin}/api/state`);
   assert.equal(stateResponse.status, 200);
@@ -650,7 +703,7 @@ test("cover cache endpoint serves immutable images and retries without caching e
 
   const workerResponse = await fetch(`${harness.origin}/sw.js`);
   const worker = await workerResponse.text();
-  assert.match(worker, /shell-v45/);
+  assert.match(worker, /shell-v62/);
   assert.match(worker, /"\/cover-image\.js"/);
 });
 
@@ -669,11 +722,19 @@ test("season cards use the shared completion label and only show real update rul
   );
   assert.match(
     appScript,
-    /season-item__meta">\s*\$\{escapeHtml\(seasonProgressMeta\(season\)\)\} · \$\{escapeHtml\(\s*sourceLabel\(season\.source\),\s*\)\}/,
+    /season-item__progress">\$\{escapeHtml\(\s*seasonProgressLabel\(season\),\s*\)\}/,
+  );
+  assert.match(
+    appScript,
+    /season-item__meta">\s*\$\{escapeHtml\(seasonSourceMeta\(season\)\)\}/,
   );
   assert.match(
     appScript,
     /function seasonUpdateRuleMarkup\(season\)[\s\S]*?const updateRule = seasonUpdateRule\(season\);[\s\S]*?if \(!updateRule\)[\s\S]*?return "";/,
+  );
+  assert.match(
+    appScript,
+    /<span class="season-update-rule__label">更新规则<\/span>/,
   );
   assert.match(
     appScript,
@@ -682,6 +743,157 @@ test("season cards use the shared completion label and only show real update rul
   assert.match(
     appScript,
     /<div class="latest-season">[\s\S]*?<\/div>\s*\$\{seasonUpdateRuleMarkup\(latestSeason\)\}/,
+  );
+});
+
+test("watchlist shows the latest unpublished season schedule", async () => {
+  const [appScript, styles] = await Promise.all([
+    fs.readFile(path.join(ROOT_DIR, "public", "app.js"), "utf8"),
+    fs.readFile(path.join(ROOT_DIR, "public", "styles.css"), "utf8"),
+  ]);
+  const helperSource = appScript.match(
+    /(function upcomingSeasonInfo\(subscription\) \{[\s\S]*?\n\})\n\nfunction renderSubscription/,
+  )?.[1];
+  assert.ok(helperSource);
+  const upcomingSeasonInfo = new Function(
+    "APP_TIME_ZONE",
+    `${helperSource}\nreturn upcomingSeasonInfo;`,
+  )("Asia/Shanghai");
+
+  assert.equal(upcomingSeasonInfo({}), null);
+  assert.deepEqual(
+    upcomingSeasonInfo({
+      discovery: {
+        unpublishedSeasonCount: 1,
+        unpublishedSeasons: [
+          {
+            seasonIndex: 8,
+            schedulePublishAt: "2026-11-27T16:00:00.000Z",
+            scheduleText: "预计11月28日上线",
+          },
+        ],
+      },
+    }),
+    {
+      seasonLabel: "第8季",
+      scheduleLabel: "预计11月28日上线",
+    },
+  );
+  assert.deepEqual(
+    upcomingSeasonInfo({
+      discovery: {
+        unpublishedSeasonCount: 1,
+        unpublishedSeasons: [{ seasonIndex: 6 }],
+      },
+    }),
+    {
+      seasonLabel: "第6季",
+      scheduleLabel: "已确认，等待上线日期",
+    },
+  );
+  assert.deepEqual(
+    upcomingSeasonInfo({
+      discovery: {
+        unpublishedSeasonCount: 2,
+        unpublishedSeasons: [
+          {
+            seasonIndex: 4,
+            scheduleText: "预计11月28日上线",
+          },
+          {
+            seasonIndex: 5,
+            schedulePublishAt: "2026-12-30T16:00:00.000Z",
+          },
+        ],
+      },
+    }),
+    {
+      seasonLabel: "第5季",
+      scheduleLabel: "预计12月31日上线",
+    },
+  );
+  assert.deepEqual(
+    upcomingSeasonInfo({
+      discovery: {
+        unpublishedSeasonCount: 1,
+        unpublishedSeriesIds: ["7709434632843824152"],
+      },
+    }),
+    {
+      seasonLabel: "最新季",
+      scheduleLabel: "已确认，等待上线日期",
+    },
+  );
+  assert.match(
+    appScript,
+    /function subscriptionSeasonContext\(subscription, latestSeason\)[\s\S]*?const upcomingSeason = upcomingSeasonInfo\(subscription\);[\s\S]*?const updateRule = seasonUpdateRule\(latestSeason\);[\s\S]*?text: `更新规则 · \$\{updateRule\}`/,
+  );
+  assert.match(
+    appScript,
+    /class="subscription-row__context subscription-row__context--\$\{escapeHtml\(\s*seasonContext\.kind,\s*\)\}"/,
+  );
+  assert.match(
+    styles,
+    /\.subscription-row__context--rule \.icon\s*\{[\s\S]*?color: var\(--color-muted\);/,
+  );
+});
+
+test("watchlist season context falls back to the latest update rule", async () => {
+  const appScript = await fs.readFile(
+    path.join(ROOT_DIR, "public", "app.js"),
+    "utf8",
+  );
+  const updateRuleSource = appScript.match(
+    /(function seasonUpdateRule\(season\) \{[\s\S]*?\n\})/,
+  )?.[1];
+  const contextSource = appScript.match(
+    /(function subscriptionSeasonContext\(subscription, latestSeason\) \{[\s\S]*?\n\})/,
+  )?.[1];
+  assert.ok(updateRuleSource);
+  assert.ok(contextSource);
+
+  const seasonUpdateRule = new Function(
+    `${updateRuleSource}\nreturn seasonUpdateRule;`,
+  )();
+  const createContext = (upcomingSeasonInfo) =>
+    new Function(
+      "upcomingSeasonInfo",
+      "seasonUpdateRule",
+      `${contextSource}\nreturn subscriptionSeasonContext;`,
+    )(upcomingSeasonInfo, seasonUpdateRule);
+
+  const noUpcomingSeason = createContext(() => null);
+  assert.deepEqual(
+    noUpcomingSeason(
+      {},
+      { status: "updating", updateRule: " 每日10:00更新15集 " },
+    ),
+    {
+      kind: "rule",
+      iconName: "update-list",
+      text: "更新规则 · 每日10:00更新15集",
+    },
+  );
+  assert.equal(
+    noUpcomingSeason({}, { status: "completed", updateRule: "每日更新" }),
+    null,
+  );
+  assert.equal(
+    noUpcomingSeason({}, { status: "updating", updateRule: " " }),
+    null,
+  );
+
+  const withUpcomingSeason = createContext(() => ({
+    seasonLabel: "第8季",
+    scheduleLabel: "预计12月1日上线",
+  }));
+  assert.deepEqual(
+    withUpcomingSeason({}, { status: "updating", updateRule: "每周更新" }),
+    {
+      kind: "upcoming",
+      iconName: "calendar-clock",
+      text: "第8季 · 预计12月1日上线",
+    },
   );
 });
 
@@ -1845,7 +2057,7 @@ test("calendar page is served and linked from every primary page", async (t) => 
     assert.doesNotMatch(page, /data-calendar-type="pending"/);
     assert.doesNotMatch(page, /calendar-legend__item--season/);
     assert.doesNotMatch(page, /calendar-legend__item--episode/);
-    assert.match(page, /calendar-legend__item--today/);
+    assert.doesNotMatch(page, /calendar-legend__item--today/);
     assert.match(page, /id="calendar-week-timeline"/);
     assert.doesNotMatch(page, /calendar-week-timeline__header/);
     assert.doesNotMatch(page, /id="calendar-week-view-title"/);
@@ -1865,6 +2077,8 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(script, /\/api\/logs\?offset=\$\{offset\}/);
   assert.match(script, /reservationsUpcoming/);
   assert.match(script, /parseReservationExpectedDate/);
+  assert.match(script, /latestEpisodeEventIdBySeason/);
+  assert.match(script, /resolveUpdateEventOccurredAt/);
   assert.match(script, /\/api\/account\/refresh/);
   assert.match(script, /unpublishedSeasonCount/);
   assert.match(script, /unpublishedSeasons/);
@@ -1872,6 +2086,8 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(script, /reservationPlaceholderId/);
   assert.match(script, /buildSeasonUpdateSchedule/);
   assert.match(script, /estimatedUpdateEntries/);
+  assert.match(script, /bucket\.estimatedUpdates/);
+  assert.match(script, /calendar-date-dot--estimated/);
   assert.match(script, /calendar-entry--estimated/);
   assert.match(script, /官方更新规则/);
   assert.match(script, /fetching/);
@@ -1892,7 +2108,7 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(script, /dateKey > today/);
   assert.match(script, /data-timeline-date/);
   assert.match(script, /scrollIntoView/);
-  assert.match(script, /当前周和未来日期暂时都没有短剧更新排期或账号预约/);
+  assert.match(script, /当前周和未来日期暂时都没有短剧更新排期或预约档期/);
   assert.doesNotMatch(script, /WEEK_SECTION_OFFSETS/);
   assert.doesNotMatch(script, /data-week-offset/);
 
@@ -1908,6 +2124,7 @@ test("calendar page is served and linked from every primary page", async (t) => 
     /grid-template-columns:\s*repeat\(7,\s*minmax\(0,\s*1fr\)\)/,
   );
   assert.match(style, /\.calendar-month-day/);
+  assert.match(style, /\.calendar-date-dot--estimated/);
   assert.match(style, /aspect-ratio:\s*3\s*\/\s*4/);
 
   const reservationScriptResponse = await fetch(
@@ -1922,6 +2139,18 @@ test("calendar page is served and linked from every primary page", async (t) => 
     await reservationScriptResponse.text(),
     /parseReservationExpectedDate/,
   );
+
+  const eventScriptResponse = await fetch(
+    `${harness.origin}/calendar-events.js`,
+  );
+  assert.equal(eventScriptResponse.status, 200);
+  assert.match(
+    eventScriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+  const eventScript = await eventScriptResponse.text();
+  assert.match(eventScript, /latestEpisodeEventIdBySeason/);
+  assert.match(eventScript, /resolveUpdateEventOccurredAt/);
 
   const scheduleScriptResponse = await fetch(
     `${harness.origin}/calendar-schedule.js`,
@@ -1950,6 +2179,7 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(serviceWorker, /shell-v\d+/);
   assert.match(serviceWorker, /"\/calendar"/);
   assert.match(serviceWorker, /"\/calendar\.js"/);
+  assert.match(serviceWorker, /"\/calendar-events\.js"/);
   assert.match(serviceWorker, /"\/calendar-reservations\.js"/);
   assert.match(serviceWorker, /"\/calendar-schedule\.js"/);
   assert.match(serviceWorker, /"\/calendar\.css"/);

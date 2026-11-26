@@ -237,7 +237,7 @@ async function limitedRequest(
   return {
     response: result.response,
     body: result.body,
-    text: result.body.toString("utf8"),
+    text: result.body ? result.body.toString("utf8") : "",
     url,
   };
 }
@@ -1272,6 +1272,95 @@ export function parseReservationsPayload(payload, { online } = {}) {
       (Date.parse(right.updatedAt || "") || 0) -
       (Date.parse(left.updatedAt || "") || 0),
   );
+}
+
+function scheduleDateKeyFromTimestamp(value) {
+  const timestamp = timestampValue(value);
+  if (!timestamp) {
+    return null;
+  }
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return values.year && values.month && values.day
+    ? `${values.year}-${values.month}-${values.day}`
+    : null;
+}
+
+/**
+ * Reads only `subscribe_items[]` rows from the official search tab response.
+ * Matching is by `item_id_str` / `item_id` only: titles are never used here,
+ * because placeholder seasons have near-identical names across seasons.
+ */
+export function parsePlaceholderScheduleSearchPayload(payload, wantedIds) {
+  const wanted = new Set(
+    (Array.isArray(wantedIds) ? wantedIds : [wantedIds])
+      .map((value) => stringValue(value))
+      .filter((value) => /^\d{8,25}$/.test(value)),
+  );
+  const matches = [];
+  if (!wanted.size) {
+    return matches;
+  }
+  const tabs = Array.isArray(payload?.search_tabs)
+    ? payload.search_tabs
+    : Array.isArray(payload?.data?.search_tabs)
+      ? payload.data.search_tabs
+      : [];
+  for (const tab of tabs) {
+    const cells = Array.isArray(tab?.data) ? tab.data : [];
+    for (const cell of cells) {
+      const rows = Array.isArray(cell?.subscribe_items)
+        ? cell.subscribe_items
+        : [];
+      for (const row of rows) {
+        if (!row || typeof row !== "object") {
+          continue;
+        }
+        const itemId = stringValue(row.item_id_str || row.item_id);
+        if (!wanted.has(itemId)) {
+          continue;
+        }
+        const publishText = stringValue(
+          row.sub_info ||
+            row.expected_rec_text ||
+            row.schedule_publish_time_text,
+        );
+        const schedulePublishAt = timestampValue(row.schedule_publish_time);
+        matches.push({
+          seriesId: itemId,
+          title:
+            stringValue(row.name) ||
+            stringValue(row.title) ||
+            stringValue(row.item_name),
+          coverUrl: stringValue(row.cover),
+          schedulePublishAt,
+          scheduleDateKey: scheduleDateKeyFromTimestamp(
+            row.schedule_publish_time,
+          ),
+          scheduleText: normalizeWhitespace(publishText),
+          scheduleCheckedAt: new Date().toISOString(),
+          scheduleError: null,
+        });
+      }
+    }
+  }
+  const unique = new Map();
+  for (const match of matches) {
+    const existing = unique.get(match.seriesId);
+    if (!existing || (!existing.scheduleDateKey && match.scheduleDateKey)) {
+      unique.set(match.seriesId, match);
+    }
+  }
+  return [...unique.values()];
 }
 
 function validateStoredCredentials(value) {
@@ -2631,6 +2720,102 @@ export class AccountService {
       "/reading/bookapi/bookshelf/video/info/v1/",
     );
     return parseFavoritesPayload(payload);
+  }
+
+  /**
+   * Read-only placeholder-schedule lookup. It never favorites or reserves
+   * anything; the search tab is used purely to read the public launch date.
+   */
+  async fetchPlaceholderSchedules(credentials, seasonQueries) {
+    const queries = (Array.isArray(seasonQueries) ? seasonQueries : [])
+      .map((value) => ({
+        seriesId: stringValue(value?.seriesId || value),
+        title: normalizeWhitespace(value?.title || ""),
+      }))
+      .filter(
+        (query) =>
+          /^\d{8,25}$/.test(query.seriesId) && query.title.length > 0,
+      );
+    if (!queries.length) {
+      return new Map();
+    }
+    const groups = new Map();
+    for (const query of queries) {
+      const list = groups.get(query.title) || [];
+      list.push(query.seriesId);
+      groups.set(query.title, list);
+    }
+    const results = new Map();
+    const titles = [...groups.keys()];
+    const batchSize = 3;
+    for (let index = 0; index < titles.length; index += batchSize) {
+      const batch = titles.slice(index, index + batchSize);
+      const settled = await Promise.allSettled(
+        batch.map(async (title) => {
+          const payload = await this.accountRequest(
+            credentials,
+            "/reading/bookapi/search/tab/v",
+            {
+              query: title,
+              count: "20",
+              offset: "0",
+              bookshelf_search_plan: "4",
+              use_correct: "true",
+              user_is_login: "1",
+            },
+          );
+          return parsePlaceholderScheduleSearchPayload(
+            payload,
+            groups.get(title),
+          );
+        }),
+      );
+      for (const [batchIndex, outcome] of settled.entries()) {
+        const title = batch[batchIndex];
+        if (outcome.status === "fulfilled") {
+          const matchedIds = new Set();
+          for (const match of outcome.value) {
+            results.set(match.seriesId, match);
+            matchedIds.add(match.seriesId);
+          }
+          // A successful search with no exact ID match is still a completed
+          // daily lookup. Record it so the same placeholder is not queried
+          // repeatedly until tomorrow.
+          for (const seriesId of groups.get(title)) {
+            if (matchedIds.has(seriesId)) {
+              continue;
+            }
+            results.set(seriesId, {
+              seriesId,
+              title,
+              coverUrl: "",
+              schedulePublishAt: null,
+              scheduleDateKey: null,
+              scheduleText: "",
+              scheduleCheckedAt: new Date().toISOString(),
+              scheduleError: null,
+            });
+          }
+          continue;
+        }
+        const message =
+          normalizeWhitespace(outcome.reason?.message) ||
+          "占位季档期读取失败。";
+        for (const seriesId of groups.get(title)) {
+          results.set(seriesId, {
+            seriesId,
+            title,
+            coverUrl: "",
+            schedulePublishAt: null,
+            scheduleDateKey: null,
+            scheduleText: "",
+            scheduleCheckedAt: new Date().toISOString(),
+            scheduleError: message,
+          });
+        }
+      }
+    }
+    return results;
   }
 
   async fetchHistory(credentials) {

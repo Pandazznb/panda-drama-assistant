@@ -1143,6 +1143,10 @@ export function parseOfficialRankingPage(routerData) {
             ? "待上线"
             : "",
       metricText: normalizeWhitespace(item?.primaryMetricText || ""),
+      description: normalizeWhitespace(item?.description || ""),
+      scoreText: normalizeWhitespace(item?.scoreText || ""),
+      favoriteText: normalizeWhitespace(item?.favoriteText || ""),
+      likeText: normalizeWhitespace(item?.likeText || ""),
       categories: [...new Set(categories)].slice(0, 3),
       statusTags: [
         ...new Set(

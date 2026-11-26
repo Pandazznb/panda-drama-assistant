@@ -19,31 +19,24 @@
   const TYPE_CONFIG = Object.freeze({
     hot: {
       label: "热播榜",
-      description: "按红果官方观看和互动综合热度排序。",
     },
     prestige: {
       label: "臻果榜",
-      description: "按红果官方已开分真人剧评分排序。",
     },
     subscribe: {
       label: "预约榜",
-      description: "按红果官方预约和播放期待值排序。",
     },
     new: {
       label: "新剧榜",
-      description: "按红果官方近期上架剧集热度排序。",
     },
     "hot-search": {
       label: "热搜榜",
-      description: "按红果官方搜索和互动热度排序。",
     },
     "must-watch": {
       label: "必看榜",
-      description: "按红果官方回溯最高热度排序。",
     },
     followed: {
       label: "收藏榜",
-      description: "按红果官方累计收藏人数排序。",
     },
   });
   const AVAILABILITY = Object.freeze({
@@ -67,7 +60,6 @@
     list: document.querySelector("#rankings-list"),
     listTitle: document.querySelector("#rankings-list-title"),
     resultCount: document.querySelector("#rankings-result-count"),
-    description: document.querySelector("#rankings-description"),
     officialUpdated: document.querySelector("#rankings-official-updated"),
     sourceLink: document.querySelector("#rankings-source-link"),
     toast: document.querySelector("#rankings-toast"),
@@ -361,7 +353,52 @@
       .join("");
     const metricText = String(item?.metricText || "").trim();
     const metricMarkup = metricText
-      ? `<span class="ranking-item__metric">${escapeHtml(metricText)}</span>`
+      ? `<span class="ranking-item__metric">${icon(
+          "flame",
+        )}<span>${escapeHtml(metricText)}</span></span>`
+      : "";
+    const description = String(item?.description || "").trim();
+    const descriptionMarkup = description
+      ? `<p class="ranking-item__description">${escapeHtml(description)}</p>`
+      : "";
+    const metricPills = [
+      {
+        className: "is-score",
+        iconName: "star",
+        label: "评分",
+        value: String(item?.scoreText || "").trim(),
+      },
+      {
+        className: "is-favorite",
+        iconName: "bookmark",
+        label: "收藏",
+        value: String(item?.favoriteText || "").trim(),
+      },
+      {
+        className: "is-like",
+        iconName: "thumbs-up",
+        label: "点赞",
+        value: String(item?.likeText || "").trim(),
+      },
+    ].filter((metric) => metric.value);
+    const metricPillsMarkup = metricPills.length
+      ? `
+        <div class="ranking-item__metrics">
+          ${metricPills
+            .map(
+              (metric) => `
+                <span
+                  class="ranking-item__metric-pill ${metric.className}"
+                  aria-label="${escapeHtml(`${metric.label} ${metric.value}`)}"
+                >
+                  ${icon(metric.iconName)}
+                  <span>${escapeHtml(metric.value)}</span>
+                </span>
+              `,
+            )
+            .join("")}
+        </div>
+      `
       : "";
     const statusMarkup = status
       ? `<span class="ranking-item__status ${status.className}">
@@ -374,7 +411,6 @@
         <span class="ranking-item__episodes">${escapeHtml(
           episodeLabel(item),
         )}</span>
-        ${metricMarkup}
       </div>
     `;
     const tagsMarkup = `
@@ -396,22 +432,31 @@
       <article class="ranking-item ranking-row" data-series-id="${escapeHtml(
         item?.seriesId || "",
       )}">
-        <div class="ranking-item__rank${rank <= 3 ? " is-top" : ""}" aria-label="第 ${rank} 名">
+        <div class="ranking-item__rank${rank <= 3 ? " is-top" : ""}" data-rank="${rank}" aria-label="第 ${rank} 名">
           <span>${rank}</span>
           <small>名</small>
         </div>
         ${cover}
         <div class="ranking-item__body">
           <div class="ranking-item__heading">
-            ${titleMarkup}
-            ${detailLinkMarkup(item, title)}
+            <div class="ranking-item__heading-main">
+              <div class="ranking-item__title-line">
+                ${titleMarkup}
+                ${metricMarkup}
+              </div>
+            </div>
           </div>
+          ${metricPillsMarkup}
           <div class="ranking-item__meta">
             ${factsMarkup}
             ${tagsMarkup}
           </div>
+          ${descriptionMarkup}
+          <div class="ranking-item__actions">
+            ${addButtonMarkup(item, title)}
+            ${detailLinkMarkup(item, title)}
+          </div>
         </div>
-        ${addButtonMarkup(item, title)}
       </article>
     `;
   }
@@ -423,11 +468,12 @@
         <div class="ranking-skeleton"${index ? ' aria-hidden="true"' : ' aria-label="正在加载榜单"'}>
           <span class="skeleton ranking-skeleton__rank"></span>
           <span class="skeleton ranking-skeleton__cover"></span>
-          <span class="ranking-skeleton__body">
+          <div class="ranking-skeleton__body">
             <span class="skeleton ranking-skeleton__title"></span>
             <span class="skeleton ranking-skeleton__line"></span>
-          </span>
-          <span class="skeleton ranking-skeleton__button"></span>
+            <span class="skeleton ranking-skeleton__line"></span>
+            <span class="skeleton ranking-skeleton__button"></span>
+          </div>
         </div>
       `,
     ).join("");
@@ -597,8 +643,6 @@
 
   function render() {
     elements.listTitle.textContent = currentTitle();
-    elements.description.textContent =
-      TYPE_CONFIG[state.activeType].description;
     elements.officialUpdated.textContent =
       state.updatedText || "正在读取官方更新时间…";
     elements.resultCount.textContent = state.loaded

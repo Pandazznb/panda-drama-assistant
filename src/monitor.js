@@ -211,6 +211,89 @@ function inactiveCheckedToday(subscription, now) {
   );
 }
 
+function accountFavoriteSeriesIds(accountService) {
+  const status = accountService?.status?.();
+  if (!status?.authenticated || !status?.snapshot) {
+    return null;
+  }
+  const category = status.snapshot.categories?.favorites;
+  if (!category || category.status !== "ok" || !Array.isArray(category.items)) {
+    return null;
+  }
+  return new Set(
+    category.items
+      .map((item) => String(item?.seriesId || ""))
+      .filter((seriesId) => /^\d{8,25}$/.test(seriesId)),
+  );
+}
+
+function accountPlaceholderScheduleScope(accountService) {
+  const status = accountService?.status?.();
+  if (!status?.authenticated) {
+    return { allowed: false, favoriteSeriesIds: null };
+  }
+  const favoriteSeriesIds = accountFavoriteSeriesIds(accountService);
+  if (favoriteSeriesIds) {
+    return { allowed: true, favoriteSeriesIds };
+  }
+  // The vault restores credentials on startup, but the account snapshot is
+  // loaded only after a refresh. A read-only lookup can still run safely with
+  // exact official IDs while that snapshot is unavailable.
+  if (status.snapshot == null) {
+    return { allowed: true, favoriteSeriesIds: null };
+  }
+  return { allowed: false, favoriteSeriesIds: null };
+}
+
+function subscriptionIsInAccountFavorites(subscription, favoriteSeriesIds) {
+  if (!favoriteSeriesIds) {
+    return false;
+  }
+  return [
+    subscription?.primarySeriesId,
+    subscription?.firstSeasonId,
+    ...(subscription?.seasons || []).map((season) => season.seriesId),
+  ]
+    .map((seriesId) => String(seriesId || ""))
+    .some((seriesId) => favoriteSeriesIds.has(seriesId));
+}
+
+function mergeUnpublishedSeasonSchedules(nextSeasons, previousSeasons) {
+  const previousById = new Map(
+    normalizeUnpublishedSeasons(previousSeasons).map((season) => [
+      season.seriesId,
+      season,
+    ]),
+  );
+  return normalizeUnpublishedSeasons(nextSeasons).map((season) => {
+    const previous = previousById.get(season.seriesId);
+    if (!previous) {
+      return season;
+    }
+    const merged = { ...season };
+    for (const key of [
+      "schedulePublishAt",
+      "scheduleDateKey",
+      "scheduleText",
+      "scheduleCheckedAt",
+      "scheduleError",
+    ]) {
+      if (merged[key] === undefined && previous[key] !== undefined) {
+        merged[key] = previous[key];
+      }
+    }
+    return merged;
+  });
+}
+
+function placeholderScheduleCheckedToday(season, now) {
+  return Boolean(
+    season?.scheduleCheckedAt &&
+      calendarDateKey(season.scheduleCheckedAt) ===
+        calendarDateKey(now?.toISOString?.() || ""),
+  );
+}
+
 function batchNeedsDiscoveryAlignment(
   subscriptions,
   discoveryIntervalMs,
@@ -1511,6 +1594,7 @@ export class ReminderService {
     resolveShared = resolveSharedSeries,
     sendNotifications = sendNotificationChannels,
     systemLog = null,
+    accountService = null,
     now = () => new Date(),
     discoveryIntervalMs = DISCOVERY_INTERVAL_MS,
     candidateRecheckMs = CANDIDATE_RECHECK_MS,
@@ -1569,6 +1653,7 @@ export class ReminderService {
       : resolveShared;
     this.sendNotifications = sendNotifications;
     this.systemLog = systemLog;
+    this.accountService = accountService;
     this.now = now;
     this.discoveryIntervalMs = discoveryIntervalMs;
     this.candidateRecheckMs = candidateRecheckMs;
@@ -3275,6 +3360,58 @@ export class ReminderService {
       albumDiscoveryError ? null : albumDiscovery.album,
     );
     const albumSeriesIds = albumMetadata.publishedSeriesIds;
+    const placeholderScheduleScope =
+      accountPlaceholderScheduleScope(this.accountService);
+    const previousUnpublishedSeasons = normalizeUnpublishedSeasons(
+      subscription.discovery?.unpublishedSeasons,
+    );
+    const pendingMergedUnpublishedSeasons = mergeUnpublishedSeasonSchedules(
+      albumMetadata.unpublishedSeasons,
+      previousUnpublishedSeasons,
+    );
+    const subscriptionIsFavorite = subscriptionIsInAccountFavorites(
+      subscription,
+      placeholderScheduleScope.favoriteSeriesIds,
+    );
+    let placeholderSchedules = new Map();
+    if (
+      placeholderScheduleScope.allowed &&
+      (placeholderScheduleScope.favoriteSeriesIds == null ||
+        subscriptionIsFavorite) &&
+      shouldDiscover &&
+      !albumDiscoveryError &&
+      this.accountService?.fetchPlaceholderSchedules
+    ) {
+      const currentSeriesTitle = titleWithoutSeason(
+        subscription.displayTitle ||
+          subscription.firstSeasonTitle ||
+          subscription.title,
+      );
+      const scheduleCandidates = pendingMergedUnpublishedSeasons
+        .filter(
+          (season) =>
+            currentSeriesTitle &&
+            !placeholderScheduleCheckedToday(season, checkedAt),
+        )
+        .map((season) => ({
+          seriesId: season.seriesId,
+          title: currentSeriesTitle,
+        }));
+      if (scheduleCandidates.length) {
+        try {
+          const credentials = this.accountService.requireCredentials?.();
+          if (credentials) {
+            placeholderSchedules =
+              (await this.accountService.fetchPlaceholderSchedules(
+                credentials,
+                scheduleCandidates,
+              )) || new Map();
+          }
+        } catch {
+          // Best-effort only: launch-date lookup never fails a series check.
+        }
+      }
+    }
     const albumVerificationIncomplete =
       shouldDiscover && Boolean(albumMetadataIssue(albumMetadata));
     const discoveryFallbackRequired = albumVerificationIncomplete;
@@ -3605,6 +3742,8 @@ export class ReminderService {
         clearSeriesCompletionState(current);
       }
 
+      const mergedUnpublishedSeasons = pendingMergedUnpublishedSeasons;
+
       let discoveryIssue = null;
       if (albumDiscoveryError) {
         discoveryIssue =
@@ -3648,7 +3787,36 @@ export class ReminderService {
         current.discovery.unpublishedSeriesIds =
           albumMetadata.unpublishedSeriesIds;
         current.discovery.unpublishedSeasons =
-          albumMetadata.unpublishedSeasons;
+          mergedUnpublishedSeasons.map((season) => {
+            const result = placeholderSchedules.get(season.seriesId);
+            if (!result) {
+              return season;
+            }
+            return {
+              ...season,
+              ...(result.schedulePublishAt
+                ? { schedulePublishAt: result.schedulePublishAt }
+                : season.schedulePublishAt
+                  ? { schedulePublishAt: season.schedulePublishAt }
+                  : {}),
+              ...(result.scheduleDateKey
+                ? { scheduleDateKey: result.scheduleDateKey }
+                : season.scheduleDateKey
+                  ? { scheduleDateKey: season.scheduleDateKey }
+                  : {}),
+              ...(result.scheduleText
+                ? { scheduleText: result.scheduleText }
+                : season.scheduleText
+                  ? { scheduleText: season.scheduleText }
+                  : {}),
+              ...(result.scheduleCheckedAt
+                ? { scheduleCheckedAt: result.scheduleCheckedAt }
+                : {}),
+              ...(result.scheduleError
+                ? { scheduleError: result.scheduleError }
+                : { scheduleError: null }),
+            };
+          });
         current.discovery.unpublishedSeasonCount =
           albumMetadata.unpublishedSeasonCount;
         current.discovery.albumSeasonCount =

@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "panda-drama-assistant-";
-const CACHE_NAME = `${CACHE_PREFIX}shell-v45`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-v62`;
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -18,6 +18,7 @@ const APP_SHELL = [
   "/pwa.js",
   "/app.js",
   "/logs.js",
+  "/calendar-events.js",
   "/calendar-reservations.js",
   "/calendar-schedule.js",
   "/calendar.js",

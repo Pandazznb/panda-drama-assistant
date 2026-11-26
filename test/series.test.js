@@ -6,6 +6,7 @@ import {
   isSeasonCompleted,
   normalizeAlbumMetadata,
   normalizeOfficialUpdateRule,
+  normalizeUnpublishedSeasons,
   seasonProgressLabel,
   seasonUpdateRule,
   seriesCompletionMarker,
@@ -215,4 +216,67 @@ test("album metadata preserves official placeholder seasons", () => {
       coverUrl: "https://example.com/cover.jpg",
     },
   ]);
+});
+
+test("placeholder seasons preserve known schedules and lookup status", () => {
+  const shellId = "7706751373240437784";
+  const seasons = normalizeUnpublishedSeasons([
+    {
+      seriesId: shellId,
+      seasonIndex: 8,
+      coverUrl: "https://example.com/cover.jpg",
+      schedulePublishAt: "2026-12-08T00:00:00.000Z",
+      scheduleDateKey: "2026-12-08",
+      scheduleText: "预计 12 月 8 日上线",
+      scheduleCheckedAt: "2026-11-27T01:30:00.000Z",
+      scheduleError: "上次查询暂时失败",
+    },
+  ]);
+
+  assert.deepEqual(seasons, [
+    {
+      seriesId: shellId,
+      seasonIndex: 8,
+      coverUrl: "https://example.com/cover.jpg",
+      schedulePublishAt: "2026-12-08T00:00:00.000Z",
+      scheduleDateKey: "2026-12-08",
+      scheduleText: "预计 12 月 8 日上线",
+      scheduleCheckedAt: "2026-11-27T01:30:00.000Z",
+      scheduleError: "上次查询暂时失败",
+    },
+  ]);
+});
+
+test("placeholder schedule derives a date key from a valid publish time", () => {
+  const shellId = "7706751373240437784";
+  const [season] = normalizeUnpublishedSeasons([
+    {
+      seriesId: shellId,
+      seasonIndex: 2,
+      schedulePublishAt: "2026-12-08T00:00:00.000Z",
+      scheduleDateKey: "12/08/2026",
+    },
+  ]);
+
+  assert.equal(season.scheduleDateKey, "2026-12-08");
+});
+
+test("legacy placeholder seasons normalize without adding empty schedule fields", () => {
+  const shellId = "7706751373240437784";
+  assert.deepEqual(
+    normalizeUnpublishedSeasons([
+      {
+        seriesId: shellId,
+        seasonIndex: 2,
+        coverUrl: "",
+      },
+    ]),
+    [
+      {
+        seriesId: shellId,
+        seasonIndex: 2,
+        coverUrl: "",
+      },
+    ],
+  );
 });

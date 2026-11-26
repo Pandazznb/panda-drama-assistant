@@ -1243,6 +1243,18 @@ function seasonProgressMeta(season) {
     : progressLabel;
 }
 
+function seasonSourceMeta(season) {
+  const source = sourceLabel(season.source);
+  const pageEpisodeCount = Math.max(0, Number(season?.episodeCount) || 0);
+  const highWaterEpisodeCount = Math.max(
+    0,
+    Number(season?.highWaterEpisodeCount) || 0,
+  );
+  return pageEpisodeCount !== highWaterEpisodeCount
+    ? `${source} · 页面当前 ${pageEpisodeCount} 集`
+    : source;
+}
+
 function seasonUpdateRule(season) {
   if (season?.status === "completed") {
     return "";
@@ -1257,7 +1269,7 @@ function seasonUpdateRuleMarkup(season) {
   }
   return `
     <p class="season-update-rule">
-      <span class="season-update-rule__label">备注</span>
+      <span class="season-update-rule__label">更新规则</span>
       <span>${escapeHtml(updateRule)}</span>
     </p>
   `;
@@ -2043,15 +2055,23 @@ function seasonDetailUrl(season) {
 
 function renderSeasonItem(season) {
   const detailUrl = seasonDetailUrl(season);
+  const progressTone = ["completed", "inactive", "unknown"].includes(
+    season?.status,
+  )
+    ? season.status
+    : "updating";
   const content = `
     <span class="season-item__title">
-      <span>${escapeHtml(season.title)}</span>
+      <span class="season-item__name">${escapeHtml(season.title)}</span>
       ${detailUrl ? icon("external") : ""}
+      <span class="status status--${escapeHtml(
+        progressTone,
+      )} season-item__progress">${escapeHtml(
+        seasonProgressLabel(season),
+      )}</span>
     </span>
     <span class="season-item__meta">
-      ${escapeHtml(seasonProgressMeta(season))} · ${escapeHtml(
-        sourceLabel(season.source),
-      )}
+      ${escapeHtml(seasonSourceMeta(season))}
     </span>
     ${renderSeasonTimes(season)}
     ${seasonUpdateRuleMarkup(season)}
@@ -2099,12 +2119,115 @@ function renderSeasonDetails(seasons, latestSeason) {
   `;
 }
 
+function upcomingSeasonInfo(subscription) {
+  const discovery =
+    subscription?.discovery && typeof subscription.discovery === "object"
+      ? subscription.discovery
+      : {};
+  const seasons = Array.isArray(discovery.unpublishedSeasons)
+    ? discovery.unpublishedSeasons
+    : [];
+  let latest = null;
+  for (const season of seasons) {
+    if (!season || typeof season !== "object") {
+      continue;
+    }
+    const seasonIndex = Number(season.seasonIndex);
+    const latestIndex = Number(latest?.seasonIndex);
+    const hasSeasonIndex =
+      Number.isInteger(seasonIndex) && seasonIndex > 0;
+    const latestHasSeasonIndex =
+      Number.isInteger(latestIndex) && latestIndex > 0;
+    if (
+      !latest ||
+      (hasSeasonIndex &&
+        (!latestHasSeasonIndex || seasonIndex > latestIndex))
+    ) {
+      latest = season;
+    }
+  }
+
+  const unpublishedSeasonCount = Math.max(
+    Number(discovery.unpublishedSeasonCount) || 0,
+    Array.isArray(discovery.unpublishedSeriesIds)
+      ? discovery.unpublishedSeriesIds.length
+      : 0,
+    seasons.length,
+  );
+  if (!latest && unpublishedSeasonCount === 0) {
+    return null;
+  }
+
+  const seasonIndex = Number(latest?.seasonIndex);
+  const seasonLabel =
+    Number.isInteger(seasonIndex) && seasonIndex > 0
+      ? `第${seasonIndex}季`
+      : "最新季";
+  let scheduleLabel = String(latest?.scheduleText || "").trim();
+
+  if (!scheduleLabel && latest?.schedulePublishAt) {
+    const date = new Date(latest.schedulePublishAt);
+    if (!Number.isNaN(date.getTime())) {
+      const parts = Object.fromEntries(
+        new Intl.DateTimeFormat("zh-CN", {
+          timeZone: APP_TIME_ZONE,
+          month: "numeric",
+          day: "numeric",
+        })
+          .formatToParts(date)
+          .filter((part) => part.type !== "literal")
+          .map((part) => [part.type, part.value]),
+      );
+      scheduleLabel = `预计${Number(parts.month)}月${Number(parts.day)}日上线`;
+    }
+  }
+
+  const scheduleDateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(
+    String(latest?.scheduleDateKey || ""),
+  );
+  if (!scheduleLabel && scheduleDateMatch) {
+    scheduleLabel = `预计${Number(scheduleDateMatch[2])}月${Number(
+      scheduleDateMatch[3],
+    )}日上线`;
+  }
+
+  return {
+    seasonLabel,
+    scheduleLabel: scheduleLabel || "已确认，等待上线日期",
+  };
+}
+
+function subscriptionSeasonContext(subscription, latestSeason) {
+  const upcomingSeason = upcomingSeasonInfo(subscription);
+  if (upcomingSeason) {
+    return {
+      kind: "upcoming",
+      iconName: "calendar-clock",
+      text: `${upcomingSeason.seasonLabel} · ${upcomingSeason.scheduleLabel}`,
+    };
+  }
+
+  const updateRule = seasonUpdateRule(latestSeason);
+  if (!updateRule) {
+    return null;
+  }
+  return {
+    kind: "rule",
+    iconName: "update-list",
+    text: `更新规则 · ${updateRule}`,
+  };
+}
+
 function renderSubscription(subscription) {
   const displayTitle = subscriptionDisplayTitle(subscription);
   const latestSeason =
     subscription.seasons.find(
       (season) => season.seriesId === subscription.latestSeasonId,
     ) || subscription.seasons[0];
+  const seasonContext = subscriptionSeasonContext(
+    subscription,
+    latestSeason,
+  );
   const latestSeasonUrl = safeHttpsUrl(latestSeason?.detailUrl);
   const latestSeasonTitleMarkup = latestSeason
     ? latestSeasonUrl
@@ -2151,6 +2274,18 @@ function renderSubscription(subscription) {
             </button>
           </h3>
           ${renderLatestSubscriptionUpdate(subscription)}
+          ${
+            seasonContext
+              ? `
+                <span class="subscription-row__context subscription-row__context--${escapeHtml(
+                  seasonContext.kind,
+                )}">
+                  ${icon(seasonContext.iconName)}
+                  <span>${escapeHtml(seasonContext.text)}</span>
+                </span>
+              `
+              : ""
+          }
           ${
             latestSeason
               ? `

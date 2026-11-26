@@ -73,6 +73,13 @@ const STATIC_FILES = new Map([
     { file: "calendar.js", type: "text/javascript; charset=utf-8" },
   ],
   [
+    "/calendar-events.js",
+    {
+      file: "calendar-events.js",
+      type: "text/javascript; charset=utf-8",
+    },
+  ],
+  [
     "/calendar-reservations.js",
     {
       file: "calendar-reservations.js",
@@ -1784,6 +1791,7 @@ export async function createApplication({
   const service = new ReminderService({
     store,
     systemLog,
+    accountService: resolvedAccountService,
     requestScheduler: resolvedRequestScheduler,
   });
   const resolvedRankingService =

@@ -2,17 +2,28 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    >
     <meta
       name="description"
       content="按红果官方内容类型、题材、主题、设定、受众、时间和状态找剧，并直接加入追更。"
     >
     <meta name="theme-color" content="#f3f5f7">
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#0f1216"
+    >
     <meta name="application-name" content="短剧助手">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="短剧助手">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    >
     <title>找剧 · 短剧助手</title>
     <script src="/theme.js"></script>
     <script src="/cover-image.js" defer></script>
@@ -214,7 +225,6 @@
             id="filters-primary"
             aria-live="polite"
           >
-            <span class="discovery-filter-row__label">内容类型</span>
             <div
               class="discovery-option-strip"
               id="filters-genre-options"
@@ -240,9 +250,6 @@
             </div>
             <p id="filters-results-description">
               正在读取红果官方找剧条件…
-            </p>
-            <p class="rankings-official-updated" id="filters-active-summary">
-              当前条件：全部类型 · 全部条件
             </p>
           </div>
           <a

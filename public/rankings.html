@@ -2,17 +2,28 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    >
     <meta
       name="description"
       content="查看红果官方热播、臻果、预约、新剧、热搜、必看和收藏榜单，并将短剧直接加入追更。"
     >
     <meta name="theme-color" content="#f3f5f7">
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#0f1216"
+    >
     <meta name="application-name" content="短剧助手">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="短剧助手">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    >
     <title>红果榜单 · 短剧助手</title>
     <script src="/theme.js"></script>
     <script src="/cover-image.js" defer></script>
@@ -157,13 +168,10 @@
       <section class="rankings-surface" aria-labelledby="rankings-list-title">
         <div class="rankings-filter">
           <div class="rankings-filter__row">
-            <span class="rankings-filter__label" id="rankings-category-label">
-              内容分类
-            </span>
             <div
               class="rankings-categories"
               role="group"
-              aria-labelledby="rankings-category-label"
+              aria-label="内容分类"
             >
               <button
                 class="rankings-category"
@@ -200,14 +208,11 @@
             </div>
           </div>
           <div class="rankings-filter__row rankings-filter__row--types">
-            <span class="rankings-filter__label" id="rankings-type-label">
-              榜单类型
-            </span>
             <div
               class="rankings-tabs"
               id="rankings-tabs"
               role="tablist"
-              aria-labelledby="rankings-type-label"
+              aria-label="榜单类型"
             >
               <button
                 class="rankings-tab"
@@ -305,9 +310,6 @@
                 50 部
               </span>
             </div>
-            <p id="rankings-description">
-              按红果官方综合热度排序，加入追更后会自动核验同系列最新季。
-            </p>
             <p class="rankings-official-updated" id="rankings-official-updated">
               正在读取官方更新时间…
             </p>
@@ -455,6 +457,19 @@
         <path d="m12 3-1.3 3.7L7 8l3.7 1.3L12 13l1.3-3.7L17 8l-3.7-1.3Z"></path>
         <path d="m5 14-.8 2.2L2 17l2.2.8L5 20l.8-2.2L8 17l-2.2-.8Z"></path>
         <path d="m19 13-.8 2.2L16 16l2.2.8L19 19l.8-2.2L22 16l-2.2-.8Z"></path>
+      </symbol>
+      <symbol id="icon-flame" viewBox="0 0 24 24">
+        <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5Z"></path>
+      </symbol>
+      <symbol id="icon-star" viewBox="0 0 24 24">
+        <path d="m12 2.8 2.75 5.57 6.15.9-4.45 4.33 1.05 6.12L12 16.83l-5.5 2.89 1.05-6.12L3.1 9.27l6.15-.9Z"></path>
+      </symbol>
+      <symbol id="icon-bookmark" viewBox="0 0 24 24">
+        <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1Z"></path>
+      </symbol>
+      <symbol id="icon-thumbs-up" viewBox="0 0 24 24">
+        <path d="M7 10v12"></path>
+        <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"></path>
       </symbol>
       <symbol id="icon-external" viewBox="0 0 24 24">
         <path d="M15 3h6v6M10 14 21 3"></path>

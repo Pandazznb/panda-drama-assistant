@@ -56,6 +56,7 @@ async function createHarness({
   candidateRecheckMs = 60_000,
   timers = null,
   requestScheduler = null,
+  accountService = null,
 } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hongguo-monitor-"));
   const statePath = path.join(directory, "state.json");
@@ -136,6 +137,7 @@ async function createHarness({
       };
     },
     sendNotifications: notificationSender,
+    accountService,
     now,
     discoveryIntervalMs,
     candidateRecheckMs,
@@ -153,6 +155,7 @@ async function createHarness({
     albumSeriesIds,
     detailCalls,
     resolveSharedCalls,
+    accountService,
   };
 }
 
@@ -3550,6 +3553,381 @@ test("an unpublished season shell marks the series as incomplete", async () => {
     state.events.filter((event) => event.type === "completed").length,
     0,
   );
+});
+
+test("placeholder schedule lookup fills a favorite shell and marks it checked", async () => {
+  const scheduleCalls = [];
+  const accountService = {
+    status: () => ({
+      authenticated: true,
+      snapshot: {
+        categories: {
+          favorites: {
+            status: "ok",
+            items: [{ seriesId: ROOT_ID }],
+          },
+        },
+      },
+    }),
+    requireCredentials: () => ({ cookieHeader: "sessionid=test" }),
+    fetchPlaceholderSchedules: async (_credentials, candidates) => {
+      scheduleCalls.push(candidates);
+      return new Map([
+        [
+          SHELL_ID,
+          {
+            seriesId: SHELL_ID,
+            schedulePublishAt: "2026-12-08T00:00:00.000Z",
+            scheduleDateKey: "2026-12-08",
+            scheduleText: "预计 12 月 8 日上线",
+            scheduleCheckedAt: "2026-11-27T08:00:00.000Z",
+            scheduleError: null,
+          },
+        ],
+      ]);
+    },
+  };
+  const harness = await createHarness({
+    accountService,
+    fetchAlbumSeries: async () => ({
+      publishedSeriesIds: [ROOT_ID],
+      unpublishedSeasons: [
+        {
+          seriesId: SHELL_ID,
+          seasonIndex: 2,
+          coverUrl: "https://example.com/shell.jpg",
+        },
+      ],
+      unpublishedSeasonCount: 1,
+      declaredSeasonCount: 2,
+      itemCount: 2,
+    }),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  const result = await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+
+  assert.equal(result.errors, 0);
+  assert.equal(scheduleCalls.length, 1);
+  assert.deepEqual(scheduleCalls[0], [
+    { seriesId: SHELL_ID, title: "测试短剧" },
+  ]);
+  const state = await harness.store.read();
+  assert.deepEqual(
+    state.subscriptions[0].discovery.unpublishedSeasons[0],
+    {
+      seriesId: SHELL_ID,
+      seasonIndex: 2,
+      coverUrl: "https://example.com/shell.jpg",
+      schedulePublishAt: "2026-12-08T00:00:00.000Z",
+      scheduleDateKey: "2026-12-08",
+      scheduleText: "预计 12 月 8 日上线",
+      scheduleCheckedAt: "2026-11-27T08:00:00.000Z",
+    },
+  );
+});
+
+test("placeholder schedule lookup works before the account snapshot is loaded", async () => {
+  const scheduleCalls = [];
+  const accountService = {
+    status: () => ({
+      authenticated: true,
+      snapshot: null,
+    }),
+    requireCredentials: () => ({ cookieHeader: "sessionid=test" }),
+    fetchPlaceholderSchedules: async (_credentials, candidates) => {
+      scheduleCalls.push(candidates);
+      return new Map([
+        [
+          SHELL_ID,
+          {
+            seriesId: SHELL_ID,
+            schedulePublishAt: "2026-12-08T00:00:00.000Z",
+            scheduleDateKey: "2026-12-08",
+            scheduleText: "预计 12 月 8 日上线",
+            scheduleCheckedAt: "2026-11-27T08:00:00.000Z",
+            scheduleError: null,
+          },
+        ],
+      ]);
+    },
+  };
+  const harness = await createHarness({
+    accountService,
+    fetchAlbumSeries: async () => ({
+      publishedSeriesIds: [ROOT_ID],
+      unpublishedSeasons: [{ seriesId: SHELL_ID, seasonIndex: 2 }],
+      unpublishedSeasonCount: 1,
+      declaredSeasonCount: 2,
+      itemCount: 2,
+    }),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  const result = await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+
+  assert.equal(result.errors, 0);
+  assert.deepEqual(scheduleCalls, [
+    [{ seriesId: SHELL_ID, title: "测试短剧" }],
+  ]);
+  const season = (await harness.store.read()).subscriptions[0].discovery
+    .unpublishedSeasons[0];
+  assert.equal(season.scheduleDateKey, "2026-12-08");
+  assert.equal(season.scheduleText, "预计 12 月 8 日上线");
+});
+
+test("placeholder schedule lookup skips a loaded snapshot without the tracked series", async () => {
+  const scheduleCalls = [];
+  const accountService = {
+    status: () => ({
+      authenticated: true,
+      snapshot: {
+        categories: {
+          favorites: {
+            status: "ok",
+            items: [{ seriesId: OTHER_ID }],
+          },
+        },
+      },
+    }),
+    requireCredentials: () => ({ cookieHeader: "sessionid=test" }),
+    fetchPlaceholderSchedules: async (_credentials, candidates) => {
+      scheduleCalls.push(candidates);
+      return new Map();
+    },
+  };
+  const harness = await createHarness({
+    accountService,
+    fetchAlbumSeries: async () => ({
+      publishedSeriesIds: [ROOT_ID],
+      unpublishedSeasons: [{ seriesId: SHELL_ID, seasonIndex: 2 }],
+      unpublishedSeasonCount: 1,
+      declaredSeasonCount: 2,
+      itemCount: 2,
+    }),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+
+  await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+
+  assert.deepEqual(scheduleCalls, []);
+});
+
+test("placeholder schedules are looked up at most once per calendar day", async () => {
+  const scheduleCalls = [];
+  let now = new Date("2026-11-27T08:00:00.000Z");
+  const accountService = {
+    status: () => ({
+      authenticated: true,
+      snapshot: {
+        categories: {
+          favorites: {
+            status: "ok",
+            items: [{ seriesId: ROOT_ID }],
+          },
+        },
+      },
+    }),
+    requireCredentials: () => ({ cookieHeader: "sessionid=test" }),
+    fetchPlaceholderSchedules: async () => {
+      scheduleCalls.push(now.toISOString());
+      return new Map();
+    },
+  };
+  const harness = await createHarness({
+    accountService,
+    now: () => now,
+    fetchAlbumSeries: async () => ({
+      publishedSeriesIds: [ROOT_ID],
+      unpublishedSeasons: [{ seriesId: SHELL_ID, seasonIndex: 2 }],
+      unpublishedSeasonCount: 1,
+      declaredSeasonCount: 2,
+      itemCount: 2,
+    }),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.store.mutate((state) => {
+    state.subscriptions[0].discovery.unpublishedSeasons = [
+      {
+        seriesId: SHELL_ID,
+        seasonIndex: 2,
+        scheduleCheckedAt: "2026-11-27T01:00:00.000Z",
+      },
+    ];
+  });
+
+  await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+  assert.equal(scheduleCalls.length, 0);
+
+  now = new Date("2026-11-28T00:30:00.000Z");
+  await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+  assert.equal(scheduleCalls.length, 1);
+});
+
+test("a placeholder schedule lookup failure keeps the last known launch date", async () => {
+  const accountService = {
+    status: () => ({
+      authenticated: true,
+      snapshot: {
+        categories: {
+          favorites: {
+            status: "ok",
+            items: [{ seriesId: ROOT_ID }],
+          },
+        },
+      },
+    }),
+    requireCredentials: () => ({ cookieHeader: "sessionid=test" }),
+    fetchPlaceholderSchedules: async () =>
+      new Map([
+        [
+          SHELL_ID,
+          {
+            seriesId: SHELL_ID,
+            schedulePublishAt: null,
+            scheduleDateKey: null,
+            scheduleText: "",
+            scheduleCheckedAt: "2026-11-27T08:00:00.000Z",
+            scheduleError: "档期接口暂时不可用",
+          },
+        ],
+      ]),
+  };
+  const harness = await createHarness({
+    accountService,
+    fetchAlbumSeries: async () => ({
+      publishedSeriesIds: [ROOT_ID],
+      unpublishedSeasons: [{ seriesId: SHELL_ID, seasonIndex: 2 }],
+      unpublishedSeasonCount: 1,
+      declaredSeasonCount: 2,
+      itemCount: 2,
+    }),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.store.mutate((state) => {
+    state.subscriptions[0].discovery.unpublishedSeasons = [
+      {
+        seriesId: SHELL_ID,
+        seasonIndex: 2,
+        schedulePublishAt: "2026-12-08T00:00:00.000Z",
+        scheduleDateKey: "2026-12-08",
+        scheduleText: "预计 12 月 8 日上线",
+      },
+    ];
+  });
+
+  const result = await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+
+  assert.equal(result.errors, 0);
+  const season = (await harness.store.read()).subscriptions[0].discovery
+    .unpublishedSeasons[0];
+  assert.equal(season.scheduleDateKey, "2026-12-08");
+  assert.equal(season.schedulePublishAt, "2026-12-08T00:00:00.000Z");
+  assert.equal(season.scheduleText, "预计 12 月 8 日上线");
+  assert.equal(season.scheduleError, "档期接口暂时不可用");
+});
+
+test("album refresh keeps known placeholder schedules until a new lookup succeeds", async () => {
+  const accountService = {
+    status: () => ({
+      authenticated: true,
+      snapshot: {
+        categories: {
+          favorites: {
+            status: "ok",
+            items: [{ seriesId: ROOT_ID }],
+          },
+        },
+      },
+    }),
+    requireCredentials: () => ({ cookieHeader: "sessionid=test" }),
+    fetchPlaceholderSchedules: async () =>
+      new Map([
+        [
+          SHELL_ID,
+          {
+            seriesId: SHELL_ID,
+            schedulePublishAt: "2026-12-08T00:00:00.000Z",
+            scheduleDateKey: "2026-12-08",
+            scheduleText: "预计 12 月 8 日上线",
+            scheduleCheckedAt: "2026-11-27T08:00:00.000Z",
+            scheduleError: null,
+          },
+        ],
+      ]),
+  };
+  const harness = await createHarness({
+    accountService,
+    fetchAlbumSeries: async () => ({
+      publishedSeriesIds: [ROOT_ID],
+      unpublishedSeasons: [
+        {
+          seriesId: SHELL_ID,
+          seasonIndex: 2,
+          coverUrl: "https://example.com/new-cover.jpg",
+        },
+      ],
+      unpublishedSeasonCount: 1,
+      declaredSeasonCount: 2,
+      itemCount: 2,
+    }),
+  });
+  await harness.service.addSubscription(ROOT_ID);
+  const subscriptionId = (await harness.store.read()).subscriptions[0].id;
+  await harness.store.mutate((state) => {
+    state.subscriptions[0].discovery.unpublishedSeasons = [
+      {
+        seriesId: SHELL_ID,
+        seasonIndex: 2,
+        coverUrl: "https://example.com/old-cover.jpg",
+        schedulePublishAt: "2026-12-01T00:00:00.000Z",
+        scheduleDateKey: "2026-12-01",
+        scheduleText: "预计 12 月 1 日上线",
+        scheduleCheckedAt: "2026-11-27T01:00:00.000Z",
+      },
+    ];
+  });
+
+  await harness.service.checkSubscription(subscriptionId, {
+    notify: false,
+    discover: true,
+    forceDiscovery: true,
+  });
+
+  const season = (await harness.store.read()).subscriptions[0].discovery
+    .unpublishedSeasons[0];
+  assert.equal(season.coverUrl, "https://example.com/new-cover.jpg");
+  assert.equal(season.scheduleDateKey, "2026-12-08");
+  assert.equal(season.scheduleError, undefined);
 });
 
 test("missing official seasons prevent series completion", async () => {

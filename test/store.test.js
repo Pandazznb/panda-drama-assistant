@@ -698,6 +698,62 @@ test("normalizeState preserves the official album discovery source", () => {
   assert.equal(normalized.subscriptions[0].seasons[0].source, "album");
 });
 
+test("normalizeState preserves placeholder season schedules", () => {
+  const seriesId = "7621200213801176126";
+  const shellId = "7706751373240437784";
+  const normalized = normalizeState({
+    subscriptions: [
+      {
+        id: "sub_shell_schedule",
+        primarySeriesId: seriesId,
+        seriesGroupId: "7624475539960499262",
+        title: "测试短剧第一季",
+        seasons: [
+          {
+            seriesId,
+            seriesGroupId: "7624475539960499262",
+            title: "测试短剧第一季",
+            status: "updating",
+            episodeCount: 18,
+          },
+        ],
+        discovery: {
+          unpublishedSeasons: [
+            {
+              seriesId: shellId,
+              seasonIndex: 2,
+              coverUrl: "https://example.com/shell.jpg",
+              schedulePublishAt: "2026-12-08T00:00:00.000Z",
+              scheduleDateKey: "2026-12-08",
+              scheduleText: "预计 12 月 8 日上线",
+              scheduleCheckedAt: "2026-11-27T01:30:00.000Z",
+              scheduleError: "上次查询暂时失败",
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    normalized.subscriptions[0].discovery.unpublishedSeasons[0],
+    {
+      seriesId: shellId,
+      seasonIndex: 2,
+      coverUrl: "https://example.com/shell.jpg",
+      schedulePublishAt: "2026-12-08T00:00:00.000Z",
+      scheduleDateKey: "2026-12-08",
+      scheduleText: "预计 12 月 8 日上线",
+      scheduleCheckedAt: "2026-11-27T01:30:00.000Z",
+      scheduleError: "上次查询暂时失败",
+    },
+  );
+  assert.deepEqual(normalized.subscriptions[0].discovery.unpublishedSeriesIds, [
+    shellId,
+  ]);
+  assert.equal(normalized.subscriptions[0].discovery.unpublishedSeasonCount, 1);
+});
+
 test("normalizeState derives a base series title without changing season titles", () => {
   const seriesId = "7621200213801176126";
   const normalized = normalizeState({

@@ -23,7 +23,7 @@
     },
   };
   const THEME_COLORS = {
-    light: "#f7f8fa",
+    light: "#f3f5f7",
     dark: "#0f1216",
   };
   const root = document.documentElement;
@@ -48,8 +48,11 @@
   }
 
   function updateThemeColor(theme) {
-    const themeColor = document.querySelector('meta[name="theme-color"]');
-    themeColor?.setAttribute("content", THEME_COLORS[theme]);
+    for (const themeColor of document.querySelectorAll(
+      'meta[name="theme-color"]',
+    )) {
+      themeColor.setAttribute("content", THEME_COLORS[theme]);
+    }
   }
 
   function updateControls() {

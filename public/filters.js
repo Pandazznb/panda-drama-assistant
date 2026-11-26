@@ -28,7 +28,6 @@
     resultTitle: document.querySelector("#filters-results-title"),
     resultCount: document.querySelector("#filters-result-count"),
     resultsDescription: document.querySelector("#filters-results-description"),
-    activeSummary: document.querySelector("#filters-active-summary"),
     sourceLink: document.querySelector("#filters-source-link"),
     notice: document.querySelector("#filters-notice"),
     status: document.querySelector("#filters-status"),
@@ -188,7 +187,6 @@
     const summary = currentSelectionSummary();
     elements.activeCount.textContent = count ? `已选 ${count} 项` : "未选择";
     elements.selectionSummary.textContent = summary;
-    elements.activeSummary.textContent = `当前条件：${summary}`;
     elements.sourceLink.href = officialCategoryUrl();
     elements.reset.disabled = count === 0;
   }
@@ -235,7 +233,6 @@
     const label = groupLabel(group);
     return `
       <div class="discovery-filter-row" data-group-row="${escapeHtml(group.type)}">
-        <span class="discovery-filter-row__label">${escapeHtml(label)}</span>
         <div
           class="discovery-option-strip"
           role="group"
@@ -614,7 +611,6 @@
       ? `已选 ${selectionEntries().length} 项`
       : "未选择";
     elements.selectionSummary.textContent = currentSelectionSummary();
-    elements.activeSummary.textContent = `当前条件：${currentSelectionSummary()}`;
     elements.reset.disabled = selectionEntries().length === 0;
     setNotice(state.notice);
   }
