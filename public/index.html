@@ -1119,6 +1119,7 @@
         <div
           class="settings-tabs"
           role="tablist"
+          aria-orientation="horizontal"
           aria-label="设置分类"
         >
           <button
@@ -1180,6 +1181,36 @@
               <use href="#icon-layers"></use>
             </svg>
             <span>消息模板</span>
+          </button>
+          <button
+            class="settings-tab"
+            id="settings-tab-security"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="settings-panel-security"
+            tabindex="-1"
+            data-settings-tab="security"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-shield-check"></use>
+            </svg>
+            <span>安全设置</span>
+          </button>
+          <button
+            class="settings-tab"
+            id="settings-tab-system"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="settings-panel-system"
+            tabindex="-1"
+            data-settings-tab="system"
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <use href="#icon-settings"></use>
+            </svg>
+            <span>系统设置</span>
           </button>
         </div>
 
@@ -3068,6 +3099,349 @@
                 </div>
               </div>
             </details>
+          </section>
+
+          <section
+            class="settings-panel settings-security"
+            id="settings-panel-security"
+            role="tabpanel"
+            aria-labelledby="settings-tab-security"
+            tabindex="0"
+            data-settings-panel="security"
+            hidden
+          >
+            <div class="settings-feature-heading">
+              <span class="settings-feature-heading__icon" aria-hidden="true">
+                <svg class="icon" viewBox="0 0 24 24">
+                  <use href="#icon-shield-check"></use>
+                </svg>
+              </span>
+              <div class="settings-feature-heading__copy">
+                <h3>应用登录保护</h3>
+                <p>
+                  设置独立的账号和密码，防止他人打开短剧助手或访问接口。
+                </p>
+              </div>
+              <span
+                class="settings-security__status"
+                id="access-security-status"
+                role="status"
+                aria-live="polite"
+              >正在读取</span>
+            </div>
+
+            <div
+              class="account-profile settings-access-account"
+              id="access-current-account"
+              data-state="loading"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span class="account-profile__avatar" aria-hidden="true">
+                <svg class="icon" viewBox="0 0 24 24">
+                  <use href="#icon-user-round"></use>
+                </svg>
+              </span>
+              <div class="account-profile__identity">
+                <p>当前账号</p>
+                <strong id="access-current-account-name">正在读取账号</strong>
+                <span id="access-current-account-meta">
+                  正在读取登录保护状态…
+                </span>
+              </div>
+            </div>
+
+            <p class="settings-security__summary" id="access-security-summary">
+              正在读取登录保护状态…
+            </p>
+
+            <div class="settings-security__fields">
+              <div class="field">
+                <label for="access-username">用户名</label>
+                <input
+                  id="access-username"
+                  name="accessUsername"
+                  type="text"
+                  minlength="3"
+                  maxlength="64"
+                  autocomplete="username"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="3-64 个字符，不能包含空格"
+                  aria-describedby="access-username-help access-username-error"
+                >
+                <p class="field__help" id="access-username-help">
+                  用于登录，也会在首页显示为“用户名的追更”。修改后旧用户名立即失效。
+                </p>
+                <p
+                  class="field__feedback"
+                  id="access-username-error"
+                  data-field-error
+                  aria-live="polite"
+                ></p>
+              </div>
+
+              <div class="field" id="access-current-password-field" hidden>
+                <label for="access-current-password">当前密码</label>
+                <div class="input-with-action">
+                  <input
+                    id="access-current-password"
+                    name="accessCurrentPassword"
+                    type="password"
+                    autocomplete="current-password"
+                    spellcheck="false"
+                    placeholder="修改账号或密码前验证当前密码"
+                    aria-describedby="access-current-password-help access-current-password-error"
+                  >
+                  <button
+                    class="input-action"
+                    type="button"
+                    data-toggle-secret="access-current-password"
+                    data-label="显示当前密码"
+                    aria-label="显示当前密码"
+                    aria-pressed="false"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-eye"></use>
+                    </svg>
+                  </button>
+                </div>
+                <p class="field__help" id="access-current-password-help">
+                  登录保护启用后，保存账号或密码前需要验证当前密码。
+                </p>
+                <p
+                  class="field__feedback"
+                  id="access-current-password-error"
+                  data-field-error
+                  aria-live="polite"
+                ></p>
+              </div>
+
+              <div class="field">
+                <label for="access-new-password" id="access-new-password-label">
+                  设置密码
+                </label>
+                <div class="input-with-action">
+                  <input
+                    id="access-new-password"
+                    name="accessNewPassword"
+                    type="password"
+                    minlength="8"
+                    maxlength="128"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                    placeholder="至少 8 个字符"
+                    aria-describedby="access-new-password-help access-new-password-error"
+                  >
+                  <button
+                    class="input-action"
+                    type="button"
+                    data-toggle-secret="access-new-password"
+                    data-label="显示新密码"
+                    aria-label="显示新密码"
+                    aria-pressed="false"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-eye"></use>
+                    </svg>
+                  </button>
+                </div>
+                <p class="field__help" id="access-new-password-help">
+                  密码长度为 8-128 个字符。启用后留空表示保持当前密码。
+                </p>
+                <p
+                  class="field__feedback"
+                  id="access-new-password-error"
+                  data-field-error
+                  aria-live="polite"
+                ></p>
+              </div>
+
+              <div class="field">
+                <label for="access-confirm-password">确认新密码</label>
+                <div class="input-with-action">
+                  <input
+                    id="access-confirm-password"
+                    name="accessConfirmPassword"
+                    type="password"
+                    minlength="8"
+                    maxlength="128"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                    placeholder="再次输入新密码"
+                    aria-describedby="access-confirm-password-error"
+                  >
+                  <button
+                    class="input-action"
+                    type="button"
+                    data-toggle-secret="access-confirm-password"
+                    data-label="显示确认密码"
+                    aria-label="显示确认密码"
+                    aria-pressed="false"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-eye"></use>
+                    </svg>
+                  </button>
+                </div>
+                <p
+                  class="field__feedback"
+                  id="access-confirm-password-error"
+                  data-field-error
+                  aria-live="polite"
+                ></p>
+              </div>
+            </div>
+
+            <div class="settings-form-actions">
+              <button
+                class="button button--primary"
+                type="button"
+                id="save-access-credentials"
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-shield-check"></use>
+                </svg>
+                <span data-button-label>启用登录保护</span>
+              </button>
+              <button
+                class="button button--quiet settings-security__logout"
+                type="button"
+                id="logout-access"
+                hidden
+              >
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <use href="#icon-log-out"></use>
+                </svg>
+                <span data-button-label>退出应用登录</span>
+              </button>
+            </div>
+
+            <p
+              class="settings-feedback"
+              id="access-security-feedback"
+              role="status"
+              aria-live="polite"
+            ></p>
+
+            <div class="settings-security__note">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-shield-check"></use>
+              </svg>
+              <p>
+                密码只以加密摘要保存在本机数据库中。修改密码后，其他设备上的登录会话会立即失效。
+              </p>
+            </div>
+          </section>
+
+          <section
+            class="settings-panel settings-system"
+            id="settings-panel-system"
+            role="tabpanel"
+            aria-labelledby="settings-tab-system"
+            tabindex="0"
+            data-settings-panel="system"
+            hidden
+          >
+            <div class="settings-feature-heading">
+              <span class="settings-feature-heading__icon" aria-hidden="true">
+                <svg class="icon" viewBox="0 0 24 24">
+                  <use href="#icon-settings"></use>
+                </svg>
+              </span>
+              <div class="settings-feature-heading__copy">
+                <h3>系统设置</h3>
+                <p>查看当前版本、检查更新并了解短剧助手。</p>
+              </div>
+              <span class="settings-system__version" id="system-version">
+                正在读取
+              </span>
+            </div>
+
+            <div class="settings-system__grid">
+              <section class="settings-system__section" aria-labelledby="system-update-title">
+                <div class="settings-system__section-heading">
+                  <div>
+                    <h4 id="system-update-title">版本更新</h4>
+                    <p>从 GitHub 获取最新正式版本信息。</p>
+                  </div>
+                  <button
+                    class="button button--secondary"
+                    type="button"
+                    id="check-system-update"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-refresh"></use>
+                    </svg>
+                    <span data-button-label>检查更新</span>
+                  </button>
+                </div>
+                <div
+                  class="settings-system__update-state"
+                  id="system-update-status"
+                  role="status"
+                  aria-live="polite"
+                >
+                  尚未检查更新。
+                </div>
+                <a
+                  class="button button--quiet settings-system__release-link"
+                  id="system-update-link"
+                  href="https://github.com/Pandazznb/panda-drama-assistant/releases"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  hidden
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-external"></use>
+                  </svg>
+                  <span>查看新版本</span>
+                </a>
+              </section>
+
+              <section class="settings-system__section" aria-labelledby="system-about-title">
+                <div class="settings-system__section-heading">
+                  <div>
+                    <h4 id="system-about-title">关于</h4>
+                    <p>追更、日历、榜单与找剧的一体化短剧助手。</p>
+                  </div>
+                </div>
+                <dl class="settings-system__details">
+                  <div>
+                    <dt>当前版本</dt>
+                    <dd id="system-version-detail">—</dd>
+                  </div>
+                  <div>
+                    <dt>应用名称</dt>
+                    <dd>短剧助手</dd>
+                  </div>
+                </dl>
+                <div class="settings-system__links">
+                  <a
+                    id="system-repository-link"
+                    href="https://github.com/Pandazznb/panda-drama-assistant"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-external"></use>
+                    </svg>
+                    <span>GitHub 仓库</span>
+                  </a>
+                  <a
+                    id="system-releases-link"
+                    href="https://github.com/Pandazznb/panda-drama-assistant/releases"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <use href="#icon-download"></use>
+                    </svg>
+                    <span>版本发布</span>
+                  </a>
+                </div>
+              </section>
+            </div>
           </section>
         </div>
 

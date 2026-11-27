@@ -9,6 +9,7 @@ import {
 } from "./src/constants.js";
 import { AccountService } from "./src/account.js";
 import { AccountSyncService } from "./src/account-sync.js";
+import { AccessAuthService } from "./src/access-auth.js";
 import { AppDiscoveryService } from "./src/app-discovery.js";
 import { CatalogService } from "./src/catalog.js";
 import { ImageCache } from "./src/image-cache.js";
@@ -21,12 +22,30 @@ import {
   SqliteStateStore,
   databaseFileForStateFile,
 } from "./src/store.js";
+import { UpdateChecker } from "./src/update-checker.js";
 
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 const MAX_ACCOUNT_IMPORT_SERIES = 20;
+const PUBLIC_API_PATHS = new Set([
+  "/api/access/status",
+  "/api/access/login",
+  "/api/access/logout",
+]);
+const PROTECTED_PAGE_PATHS = new Set([
+  "/",
+  "/index.html",
+  "/logs",
+  "/logs.html",
+  "/calendar",
+  "/calendar.html",
+  "/rankings",
+  "/rankings.html",
+  "/filters",
+  "/filters.html",
+]);
 const STATIC_FILES = new Map([
   ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
   ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
@@ -46,6 +65,12 @@ const STATIC_FILES = new Map([
   [
     "/filters.html",
     { file: "filters.html", type: "text/html; charset=utf-8" },
+  ],
+  ["/login", { file: "login.html", type: "text/html; charset=utf-8" }],
+  ["/login.html", { file: "login.html", type: "text/html; charset=utf-8" }],
+  [
+    "/login.js",
+    { file: "login.js", type: "text/javascript; charset=utf-8" },
   ],
   ["/styles.css", { file: "styles.css", type: "text/css; charset=utf-8" }],
   [
@@ -164,12 +189,43 @@ function securityHeaders(contentType) {
   };
 }
 
-function sendJson(response, statusCode, body) {
+function sendJson(response, statusCode, body, extraHeaders = {}) {
   response.writeHead(statusCode, {
     ...securityHeaders("application/json; charset=utf-8"),
     "cache-control": "no-store",
+    ...extraHeaders,
   });
   response.end(JSON.stringify(body));
+}
+
+function sendRedirect(response, location) {
+  response.writeHead(302, {
+    ...securityHeaders("text/plain; charset=utf-8"),
+    "cache-control": "no-store",
+    location,
+  });
+  response.end("正在跳转。");
+}
+
+function safeNextPath(value, fallback = "/") {
+  const next = String(value || "").trim();
+  if (
+    !next.startsWith("/") ||
+    next.startsWith("//") ||
+    next.includes("\\") ||
+    /[\u0000-\u001f\u007f]/.test(next)
+  ) {
+    return fallback;
+  }
+  try {
+    const url = new URL(next, "http://localhost");
+    if (url.origin !== "http://localhost") {
+      return fallback;
+    }
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return fallback;
+  }
 }
 
 function sendLogFile(response, statusCode, file) {
@@ -651,6 +707,8 @@ export function createRequestHandler(
   catalogService,
   appDiscoveryService,
   imageCache,
+  accessAuth,
+  updateChecker,
 ) {
   let batchCheckJob = null;
   let batchCheckSequence = 0;
@@ -782,6 +840,196 @@ export function createRequestHandler(
     try {
       const url = new URL(request.url || "/", "http://localhost");
       const pathname = url.pathname;
+      const access = await accessAuth.authorization(request);
+
+      if (
+        request.method === "GET" &&
+        pathname === "/api/access/status"
+      ) {
+        sendJson(response, 200, {
+          ok: true,
+          ...(await accessAuth.status(request)),
+        });
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        pathname === "/api/access/login"
+      ) {
+        try {
+          const body = (await readJsonBody(request)) || {};
+          const result = await accessAuth.login({
+            request,
+            username: body.username,
+            password: body.password,
+          });
+          await recordSystemLog(systemLog, {
+            category: "security",
+            action: "access.login.succeeded",
+            level: "success",
+            message: `应用账号 ${result.username} 登录成功。`,
+          });
+          sendJson(
+            response,
+            200,
+            {
+              ok: true,
+              username: result.username,
+            },
+            { "set-cookie": result.cookie },
+          );
+        } catch (error) {
+          await recordSystemLog(systemLog, {
+            category: "security",
+            action: "access.login.failed",
+            level: error?.statusCode === 429 ? "warning" : "error",
+            message:
+              error?.statusCode === 429
+                ? "应用登录触发频率限制。"
+                : "应用登录失败：账号或密码不正确。",
+            metadata: {
+              code: error?.code || "ACCESS_LOGIN_FAILED",
+            },
+          });
+          throw error;
+        }
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        pathname === "/api/access/logout"
+      ) {
+        const cookie = accessAuth.logout(request);
+        if (access.authenticated) {
+          await recordSystemLog(systemLog, {
+            category: "security",
+            action: "access.logout",
+            level: "info",
+            message: "已退出应用账号登录。",
+          });
+        }
+        sendJson(
+          response,
+          200,
+          { ok: true },
+          { "set-cookie": cookie },
+        );
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
+        (pathname === "/login" || pathname === "/login.html") &&
+        access.configured &&
+        access.authenticated
+      ) {
+        sendRedirect(
+          response,
+          safeNextPath(url.searchParams.get("next"), "/"),
+        );
+        return;
+      }
+
+      const protectedApi =
+        pathname.startsWith("/api/") &&
+        !PUBLIC_API_PATHS.has(pathname);
+      const protectedPage = PROTECTED_PAGE_PATHS.has(pathname);
+      if (
+        access.configured &&
+        !access.authenticated &&
+        (protectedApi || protectedPage)
+      ) {
+        if (protectedApi) {
+          const error = new Error("请先登录短剧助手。");
+          error.statusCode = 401;
+          error.code = "ACCESS_AUTH_REQUIRED";
+          throw error;
+        }
+        const nextPath = safeNextPath(request.url || "/", "/");
+        sendRedirect(
+          response,
+          `/login?next=${encodeURIComponent(nextPath)}`,
+        );
+        return;
+      }
+
+      if (
+        request.method === "PATCH" &&
+        pathname === "/api/access/credentials"
+      ) {
+        const body = (await readJsonBody(request)) || {};
+        const result = await accessAuth.updateCredentials({
+          request,
+          username: body.username,
+          currentPassword: body.currentPassword,
+          newPassword: body.newPassword,
+        });
+        await recordSystemLog(systemLog, {
+          category: "security",
+          action: "access.credentials.updated",
+          level: "success",
+          message: result.passwordChanged
+            ? `应用登录账号已更新为 ${result.credentials.username}，密码已修改。`
+            : `应用登录账号已更新为 ${result.credentials.username}。`,
+        });
+        sendJson(
+          response,
+          200,
+          {
+            ok: true,
+            credentials: result.credentials,
+            passwordChanged: result.passwordChanged,
+          },
+          { "set-cookie": result.cookie },
+        );
+        return;
+      }
+
+      if (
+        request.method === "GET" &&
+        pathname === "/api/system/update"
+      ) {
+        sendJson(response, 200, {
+          ok: true,
+          ...updateChecker.info(),
+        });
+        return;
+      }
+
+      if (
+        request.method === "POST" &&
+        pathname === "/api/system/update"
+      ) {
+        try {
+          const result = await updateChecker.check();
+          await recordSystemLog(systemLog, {
+            category: "system",
+            action: "system.update.checked",
+            level: "success",
+            message: result.message,
+            metadata: {
+              currentVersion: result.currentVersion,
+              latestVersion: result.latestVersion,
+              available: result.available,
+            },
+          });
+          sendJson(response, 200, {
+            ok: true,
+            ...result,
+          });
+        } catch (error) {
+          await recordSystemLog(systemLog, {
+            category: "system",
+            action: "system.update.check_failed",
+            level: "error",
+            message: `检查更新失败：${error?.message || "未知错误"}`,
+          });
+          throw error;
+        }
+        return;
+      }
 
       if (request.method === "GET" && pathname === "/api/logs") {
         const offset = Math.max(
@@ -1739,6 +1987,8 @@ export async function createApplication({
   catalogService = null,
   appDiscoveryService = null,
   imageCache = null,
+  accessAuth = null,
+  updateChecker = null,
 } = {}) {
   const legacyStateFile = path.resolve(
     stateFile ||
@@ -1762,6 +2012,12 @@ export async function createApplication({
     path.join(path.dirname(sqliteDatabaseFile), "system-logs"),
   );
   await systemLog.init();
+  const resolvedAccessAuth =
+    accessAuth ||
+    new AccessAuthService({
+      store,
+    });
+  const resolvedUpdateChecker = updateChecker || new UpdateChecker();
   const resolvedRequestScheduler =
     requestScheduler ||
     new UpstreamRequestScheduler({
@@ -1830,6 +2086,8 @@ export async function createApplication({
       resolvedCatalogService,
       resolvedAppDiscoveryService,
       resolvedImageCache,
+      resolvedAccessAuth,
+      resolvedUpdateChecker,
     ),
   );
   return {
@@ -1842,6 +2100,8 @@ export async function createApplication({
     catalogService: resolvedCatalogService,
     appDiscoveryService: resolvedAppDiscoveryService,
     imageCache: resolvedImageCache,
+    accessAuth: resolvedAccessAuth,
+    updateChecker: resolvedUpdateChecker,
     eventLog: store.eventLog,
     systemLog,
     requestScheduler: resolvedRequestScheduler,

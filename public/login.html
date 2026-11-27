@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    >
+    <meta
+      name="description"
+      content="登录短剧助手，访问追更、更新日历、榜单与找剧功能。"
+    >
+    <meta name="theme-color" content="#f3f5f7">
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#0f1216"
+    >
+    <meta name="application-name" content="短剧助手">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="短剧助手">
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    >
+    <title>登录 · 短剧助手</title>
+    <script src="/theme.js"></script>
+    <script src="/pwa.js" defer></script>
+    <script src="/login.js" defer></script>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+    <link
+      rel="icon"
+      href="/assets/panda-drama-assistant-icon.svg"
+      type="image/svg+xml"
+    >
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="login-page">
+    <a class="skip-link" href="#main-content">跳到登录表单</a>
+
+    <div class="login-shell">
+      <header class="login-topbar">
+        <a class="brand" href="/" aria-label="返回短剧助手">
+          <span class="brand__mark" aria-hidden="true">
+            <img
+              class="brand__logo"
+              src="/assets/panda-drama-assistant-icon.svg"
+              alt=""
+              width="38"
+              height="38"
+            >
+          </span>
+          <span class="brand__text">短剧助手</span>
+        </a>
+        <button
+          class="theme-switcher"
+          type="button"
+          data-theme-toggle
+          data-theme-preference="auto"
+          aria-label="当前主题：自动，跟随系统。点击切换为白天主题"
+          title="当前：自动（跟随系统），点击切换为白天"
+        >
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 3v2M12 19v2M3 12h2M19 12h2M5.64 5.64l1.42 1.42M16.94 16.94l1.42 1.42M18.36 5.64l-1.42 1.42M7.06 16.94l-1.42 1.42"
+            ></path>
+            <circle cx="12" cy="12" r="4"></circle>
+          </svg>
+          <span class="theme-switcher__label" data-theme-label aria-live="polite">
+            自动
+          </span>
+        </button>
+      </header>
+
+      <main id="main-content" class="login-main">
+        <section class="login-panel" aria-labelledby="login-title">
+          <div class="login-panel__header">
+            <span class="login-panel__mark" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path
+                  d="M12 3 4.5 6v5.3c0 4.7 3.1 8.1 7.5 9.7 4.4-1.6 7.5-5 7.5-9.7V6L12 3Z"
+                ></path>
+                <path d="m8.8 12 2.1 2.1 4.4-4.5"></path>
+              </svg>
+            </span>
+            <div class="login-panel__copy">
+              <p class="eyebrow">应用访问保护</p>
+              <h1 id="login-title">登录短剧助手</h1>
+              <p>
+                输入在“设置 · 安全设置”中配置的账号和密码。
+              </p>
+            </div>
+          </div>
+
+          <p
+            class="login-status"
+            id="login-page-status"
+            role="status"
+            aria-live="polite"
+          >
+            正在确认登录保护状态…
+          </p>
+
+          <form class="login-form" id="login-form" novalidate hidden>
+            <div class="field login-field">
+              <label for="login-username">登录账号</label>
+              <input
+                id="login-username"
+                name="username"
+                type="text"
+                autocomplete="username"
+                autocapitalize="off"
+                autocorrect="off"
+                spellcheck="false"
+                enterkeyhint="next"
+                placeholder="输入应用登录账号"
+                aria-describedby="login-username-help login-username-error"
+              >
+              <p class="field__help" id="login-username-help">
+                使用短剧助手中设置的应用账号，不是红果账号。
+              </p>
+              <p
+                class="field__feedback login-field__error"
+                id="login-username-error"
+                aria-live="polite"
+                hidden
+              ></p>
+            </div>
+
+            <div class="field login-field">
+              <label for="login-password">登录密码</label>
+              <div class="input-with-action">
+                <input
+                  id="login-password"
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                  spellcheck="false"
+                  enterkeyhint="go"
+                  placeholder="输入应用登录密码"
+                  aria-describedby="login-password-help login-password-error"
+                >
+                <button
+                  class="input-action login-password-toggle"
+                  type="button"
+                  id="login-password-toggle"
+                  aria-label="显示登录密码"
+                  aria-pressed="false"
+                >
+                  <svg
+                    class="icon"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    data-password-icon="show"
+                  >
+                    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                    <circle cx="12" cy="12" r="2.6"></circle>
+                  </svg>
+                  <svg
+                    class="icon"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    data-password-icon="hide"
+                    hidden
+                  >
+                    <path d="m3 3 18 18"></path>
+                    <path d="M10.6 6.1A9.8 9.8 0 0 1 12 6c6 0 9.5 6 9.5 6a17 17 0 0 1-3.2 3.7"></path>
+                    <path d="M6.2 6.2C3.9 8 2.5 12 2.5 12s3.5 6 9.5 6c1.5 0 2.8-.4 4-1"></path>
+                    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path>
+                  </svg>
+                </button>
+              </div>
+              <p class="field__help" id="login-password-help">
+                连续多次输入错误后，系统会暂时限制登录尝试。
+              </p>
+              <p
+                class="field__feedback login-field__error"
+                id="login-password-error"
+                aria-live="polite"
+                hidden
+              ></p>
+            </div>
+
+            <p
+              class="login-form__alert"
+              id="login-form-alert"
+              role="alert"
+              aria-live="assertive"
+              tabindex="-1"
+              hidden
+            ></p>
+
+            <button
+              class="button button--primary login-submit"
+              type="submit"
+              id="login-submit"
+            >
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M14 8V5.5A1.5 1.5 0 0 0 12.5 4h-7A1.5 1.5 0 0 0 4 5.5v13A1.5 1.5 0 0 0 5.5 20h7a1.5 1.5 0 0 0 1.5-1.5V16"></path>
+                <path d="M9 12h11"></path>
+                <path d="m17 9 3 3-3 3"></path>
+              </svg>
+              <span data-login-submit-label>登录</span>
+            </button>
+          </form>
+
+          <div
+            class="login-unavailable"
+            id="login-unavailable"
+            role="status"
+            hidden
+          >
+            <p class="login-unavailable__title">登录保护尚未启用</p>
+            <p>
+              可以直接进入短剧助手，并在“设置 · 安全设置”中添加应用账号和密码。
+            </p>
+            <a class="button button--secondary" href="/">
+              进入短剧助手
+            </a>
+          </div>
+
+          <button
+            class="button button--quiet login-retry"
+            type="button"
+            id="login-retry"
+            hidden
+          >
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 7v5h-5"></path>
+              <path d="M18.2 16a8 8 0 1 1 .6-7.2L20 12"></path>
+            </svg>
+            <span>重新加载</span>
+          </button>
+        </section>
+
+        <p class="login-footer">
+          登录凭据仅保存在你部署短剧助手的本机。
+        </p>
+      </main>
+    </div>
+
+    <noscript>
+      <p class="login-noscript">
+        登录短剧助手需要启用 JavaScript。
+      </p>
+    </noscript>
+  </body>
+</html>

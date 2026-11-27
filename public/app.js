@@ -1,5 +1,6 @@
 const elements = {
   mainContent: document.querySelector("#main-content"),
+  pageTitle: document.querySelector("#page-title"),
   openAddDialog: document.querySelector("#open-add-dialog"),
   addDialog: document.querySelector("#add-dialog"),
   addForm: document.querySelector("#add-form"),
@@ -267,6 +268,41 @@ const elements = {
   settingsFeedback: document.querySelector("#settings-feedback"),
   testNotifications: document.querySelector("#test-notifications"),
   saveSettings: document.querySelector("#save-settings"),
+  accessSecurityStatus: document.querySelector("#access-security-status"),
+  accessSecuritySummary: document.querySelector("#access-security-summary"),
+  accessCurrentAccount: document.querySelector("#access-current-account"),
+  accessCurrentAccountName: document.querySelector(
+    "#access-current-account-name",
+  ),
+  accessCurrentAccountMeta: document.querySelector(
+    "#access-current-account-meta",
+  ),
+  accessUsername: document.querySelector("#access-username"),
+  accessCurrentPasswordField: document.querySelector(
+    "#access-current-password-field",
+  ),
+  accessCurrentPassword: document.querySelector("#access-current-password"),
+  accessNewPasswordLabel: document.querySelector(
+    "#access-new-password-label",
+  ),
+  accessNewPassword: document.querySelector("#access-new-password"),
+  accessConfirmPassword: document.querySelector(
+    "#access-confirm-password",
+  ),
+  accessSecurityFeedback: document.querySelector(
+    "#access-security-feedback",
+  ),
+  saveAccessCredentials: document.querySelector(
+    "#save-access-credentials",
+  ),
+  logoutAccess: document.querySelector("#logout-access"),
+  systemVersion: document.querySelector("#system-version"),
+  systemVersionDetail: document.querySelector("#system-version-detail"),
+  systemUpdateStatus: document.querySelector("#system-update-status"),
+  systemUpdateLink: document.querySelector("#system-update-link"),
+  systemRepositoryLink: document.querySelector("#system-repository-link"),
+  systemReleasesLink: document.querySelector("#system-releases-link"),
+  checkSystemUpdate: document.querySelector("#check-system-update"),
   seasonDialog: document.querySelector("#season-dialog"),
   seasonForm: document.querySelector("#season-form"),
   seasonShareInput: document.querySelector("#season-share-input"),
@@ -354,6 +390,20 @@ const appState = {
   settingsTab: "account",
   templateFocusedField: null,
   templateSelection: { start: 0, end: 0 },
+  accessSecurity: {
+    configured: false,
+    authenticated: false,
+    username: "",
+    updatedAt: null,
+    loaded: false,
+    loading: false,
+  },
+  systemSettings: {
+    loaded: false,
+    loading: false,
+    info: null,
+  },
+  authRedirecting: false,
   watchlistUpdateFilter: false,
   watchlistSearch: {
     activeIndex: -1,
@@ -646,6 +696,8 @@ const SETTINGS_TABS = Object.freeze([
   "general",
   "notification",
   "templates",
+  "security",
+  "system",
 ]);
 
 const icon = (name, className = "icon") =>
@@ -1348,6 +1400,16 @@ async function requestJson(path, options = {}) {
         payload?.error?.retryAfterSeconds ??
         Number(response.headers.get("retry-after")) ??
         null;
+      if (
+        error.code === "ACCESS_AUTH_REQUIRED" &&
+        !appState.authRedirecting
+      ) {
+        appState.authRedirecting = true;
+        const next = `${
+          window.location.pathname
+        }${window.location.search}${window.location.hash}`;
+        window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+      }
       throw error;
     }
     return payload;
@@ -1385,7 +1447,9 @@ function setFieldError(input, hasError, message = "") {
   const field = input.closest(".field");
   field?.classList.toggle("has-error", hasError);
   input.setAttribute("aria-invalid", hasError ? "true" : "false");
-  const feedback = field?.querySelector("[data-template-field-error]");
+  const feedback = field?.querySelector(
+    "[data-template-field-error], [data-field-error]",
+  );
   if (feedback) {
     feedback.textContent = hasError ? message : "";
     feedback.classList.toggle("is-visible", Boolean(hasError && message));
@@ -6748,6 +6812,360 @@ function resetSecretInput(input) {
   setSecretInputVisibility(input, false);
 }
 
+function setAccessCredentialsButtonLabel(label) {
+  const labelElement = elements.saveAccessCredentials.querySelector(
+    "[data-button-label]",
+  );
+  if (labelElement) {
+    labelElement.textContent = label;
+  }
+}
+
+function accessHomeTitle(username) {
+  const displayName = String(username || "").trim();
+  return displayName ? `${displayName}的追更` : "我的追更";
+}
+
+function renderAccessIdentity() {
+  const access = appState.accessSecurity;
+  const username =
+    access.configured && access.authenticated
+      ? String(access.username || "").trim()
+      : "";
+  const title = accessHomeTitle(username);
+  elements.pageTitle.textContent = title;
+  document.title = username ? `${title} · 短剧助手` : "短剧助手";
+}
+
+function renderAccessSecurityStatus(status) {
+  const configured = Boolean(status?.configured);
+  const authenticated = configured
+    ? Boolean(status?.authenticated)
+    : true;
+  appState.accessSecurity = {
+    configured,
+    authenticated,
+    username:
+      configured && authenticated ? String(status?.username || "") : "",
+    updatedAt:
+      configured && authenticated ? status?.updatedAt || null : null,
+    loaded: true,
+    loading: false,
+  };
+  renderAccessIdentity();
+
+  elements.accessSecurityStatus.textContent = configured
+    ? "已启用"
+    : "未启用";
+  elements.accessSecurityStatus.classList.toggle(
+    "is-enabled",
+    configured,
+  );
+  elements.accessCurrentPasswordField.hidden = !configured;
+  elements.accessNewPasswordLabel.textContent = configured
+    ? "修改密码（可选）"
+    : "设置密码";
+  elements.saveAccessCredentials.hidden = false;
+  setAccessCredentialsButtonLabel(
+    configured ? "保存登录设置" : "启用登录保护",
+  );
+  elements.logoutAccess.hidden = !configured;
+  elements.accessCurrentAccount.dataset.state = configured
+    ? "configured"
+    : "empty";
+
+  if (configured) {
+    const username = appState.accessSecurity.username || "未登录";
+    const loggedIn = appState.accessSecurity.authenticated;
+    elements.accessCurrentAccountName.textContent = username;
+    elements.accessCurrentAccountMeta.textContent = loggedIn
+      ? `已登录${
+          appState.accessSecurity.updatedAt
+            ? ` · 最近修改 ${formatDateTime(
+                appState.accessSecurity.updatedAt,
+              )}`
+            : ""
+        }`
+      : "当前会话未登录";
+    if (loggedIn) {
+      elements.accessUsername.value = username;
+      elements.accessSecuritySummary.textContent = `登录保护已启用。首页当前显示为“${username}的追更”。`;
+    } else {
+      elements.accessSecuritySummary.textContent =
+        "登录保护已启用，请重新登录后修改用户名或密码。";
+    }
+  } else {
+    elements.accessCurrentAccountName.textContent = "尚未设置用户名";
+    elements.accessCurrentAccountMeta.textContent =
+      "启用登录保护后，首页会显示“用户名的追更”";
+    elements.accessSecuritySummary.textContent =
+      "登录保护尚未启用。设置用户名和密码后，访问短剧助手及接口都需要先登录。";
+  }
+}
+
+async function loadAccessSecurityStatus({ force = false } = {}) {
+  if (
+    appState.accessSecurity.loading ||
+    (appState.accessSecurity.loaded && !force)
+  ) {
+    return;
+  }
+
+  appState.accessSecurity.loading = true;
+  elements.accessSecurityStatus.textContent = "正在读取";
+  elements.accessSecurityStatus.classList.remove("is-enabled");
+  elements.accessCurrentAccount.dataset.state = "loading";
+  elements.accessCurrentAccountName.textContent = "正在读取账号";
+  elements.accessCurrentAccountMeta.textContent =
+    "正在读取登录保护状态…";
+  elements.accessSecuritySummary.textContent = "正在读取登录保护状态…";
+  try {
+    const status = await requestJson("/api/access/status", {
+      timeoutMs: SETTINGS_REQUEST_TIMEOUT_MS,
+    });
+    renderAccessSecurityStatus(status);
+  } catch (error) {
+    appState.accessSecurity.loaded = false;
+    elements.accessSecurityStatus.textContent = "读取失败";
+    elements.accessCurrentAccount.dataset.state = "error";
+    elements.accessCurrentAccountName.textContent = "账号信息读取失败";
+    elements.accessCurrentAccountMeta.textContent =
+      "请稍后重新进入安全设置再试";
+    elements.accessSecuritySummary.textContent =
+      "暂时无法读取登录保护状态，请重新进入安全设置后再试。";
+    setFormFeedback(elements.accessSecurityFeedback, error.message);
+  } finally {
+    appState.accessSecurity.loading = false;
+  }
+}
+
+function clearAccessSecurityErrors() {
+  for (const input of [
+    elements.accessUsername,
+    elements.accessCurrentPassword,
+    elements.accessNewPassword,
+    elements.accessConfirmPassword,
+  ]) {
+    setFieldError(input, false);
+  }
+}
+
+function focusAccessSecurityField(input) {
+  input.focus();
+  input.scrollIntoView({
+    block: "center",
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth",
+  });
+}
+
+async function saveAccessCredentials() {
+  clearAccessSecurityErrors();
+  setFormFeedback(elements.accessSecurityFeedback);
+
+  if (!appState.accessSecurity.loaded) {
+    setFormFeedback(
+      elements.accessSecurityFeedback,
+      "登录保护状态尚未读取完成，请稍后重试。",
+    );
+    return;
+  }
+
+  const configured = appState.accessSecurity.configured;
+  const username = elements.accessUsername.value.trim();
+  const currentPassword = elements.accessCurrentPassword.value;
+  const newPassword = elements.accessNewPassword.value;
+  const confirmPassword = elements.accessConfirmPassword.value;
+  const errors = [];
+
+  if (
+    username.length < 3 ||
+    username.length > 64 ||
+    /\s/.test(username)
+  ) {
+    errors.push([
+      elements.accessUsername,
+      "用户名需为 3-64 个字符，且不能包含空格。",
+    ]);
+  }
+  if (configured && !currentPassword) {
+    errors.push([
+      elements.accessCurrentPassword,
+      "请输入当前密码后再保存登录设置。",
+    ]);
+  }
+  if (!configured && !newPassword) {
+    errors.push([elements.accessNewPassword, "请设置登录密码。"]);
+  } else if (
+    newPassword &&
+    (newPassword.length < 8 || newPassword.length > 128)
+  ) {
+    errors.push([
+      elements.accessNewPassword,
+      "密码需为 8-128 个字符。",
+    ]);
+  }
+  if (confirmPassword !== newPassword && (newPassword || confirmPassword)) {
+    errors.push([
+      elements.accessConfirmPassword,
+      "两次输入的新密码不一致。",
+    ]);
+  }
+
+  if (errors.length) {
+    for (const [input, message] of errors) {
+      setFieldError(input, true, message);
+    }
+    focusAccessSecurityField(errors[0][0]);
+    return;
+  }
+
+  setButtonBusy(
+    elements.saveAccessCredentials,
+    true,
+    configured ? "保存中…" : "启用中…",
+  );
+  try {
+    const result = await requestJson("/api/access/credentials", {
+      method: "PATCH",
+      body: JSON.stringify({
+        username,
+        currentPassword,
+        newPassword,
+      }),
+      timeoutMs: SETTINGS_REQUEST_TIMEOUT_MS,
+    });
+    resetSecretInput(elements.accessCurrentPassword);
+    resetSecretInput(elements.accessNewPassword);
+    resetSecretInput(elements.accessConfirmPassword);
+    renderAccessSecurityStatus({
+      ...result.credentials,
+      authenticated: true,
+    });
+    const message =
+      result.message ||
+      (result.passwordChanged
+        ? "账号和密码已更新。"
+        : configured
+          ? "用户名已更新。"
+          : "登录保护已启用。");
+    setFormFeedback(
+      elements.accessSecurityFeedback,
+      message,
+      "success",
+    );
+    showToast(message);
+  } catch (error) {
+    resetSecretInput(elements.accessCurrentPassword);
+    resetSecretInput(elements.accessNewPassword);
+    resetSecretInput(elements.accessConfirmPassword);
+    const fieldByCode = {
+      INVALID_ACCESS_USERNAME: elements.accessUsername,
+      INVALID_ACCESS_PASSWORD: elements.accessNewPassword,
+      ACCESS_CURRENT_PASSWORD_REQUIRED:
+        elements.accessCurrentPassword,
+      ACCESS_CURRENT_PASSWORD_INVALID:
+        elements.accessCurrentPassword,
+    };
+    const field = fieldByCode[error.code];
+    if (field) {
+      setFieldError(field, true, error.message);
+      focusAccessSecurityField(field);
+    }
+    setFormFeedback(elements.accessSecurityFeedback, error.message);
+  } finally {
+    setButtonBusy(elements.saveAccessCredentials, false);
+    setAccessCredentialsButtonLabel(
+      appState.accessSecurity.configured
+        ? "保存登录设置"
+        : "启用登录保护",
+    );
+  }
+}
+
+function renderSystemSettingsInfo(info) {
+  const version = String(info?.version || "").trim();
+  const repositoryUrl = safeHttpsUrl(info?.repositoryUrl);
+  const releasesUrl = safeHttpsUrl(info?.releasesUrl);
+  appState.systemSettings.info = {
+    ...(appState.systemSettings.info || {}),
+    ...info,
+  };
+  elements.systemVersion.textContent = version ? `v${version}` : "版本未知";
+  elements.systemVersionDetail.textContent = version || "—";
+  if (repositoryUrl) {
+    elements.systemRepositoryLink.href = repositoryUrl;
+  }
+  if (releasesUrl) {
+    elements.systemReleasesLink.href = releasesUrl;
+  }
+}
+
+async function loadSystemSettings({ force = false } = {}) {
+  if (
+    appState.systemSettings.loading ||
+    (appState.systemSettings.loaded && !force)
+  ) {
+    return;
+  }
+
+  appState.systemSettings.loading = true;
+  elements.systemVersion.textContent = "正在读取";
+  elements.systemUpdateStatus.textContent = "正在读取版本信息…";
+  elements.systemUpdateStatus.classList.remove("is-error");
+  elements.systemUpdateLink.hidden = true;
+  try {
+    const info = await requestJson("/api/system/update", {
+      timeoutMs: SETTINGS_REQUEST_TIMEOUT_MS,
+    });
+    renderSystemSettingsInfo(info);
+    appState.systemSettings.loaded = true;
+    elements.systemUpdateStatus.textContent = "尚未检查更新。";
+  } catch (error) {
+    elements.systemVersion.textContent = "读取失败";
+    elements.systemUpdateStatus.textContent = error.message;
+    elements.systemUpdateStatus.classList.add("is-error");
+  } finally {
+    appState.systemSettings.loading = false;
+  }
+}
+
+async function checkSystemUpdate() {
+  setButtonBusy(elements.checkSystemUpdate, true, "检查中…");
+  elements.systemUpdateStatus.textContent = "正在连接 GitHub 检查更新…";
+  elements.systemUpdateStatus.classList.remove("is-error");
+  elements.systemUpdateLink.hidden = true;
+  elements.systemUpdateLink.removeAttribute("href");
+  try {
+    const result = await requestJson("/api/system/update", {
+      method: "POST",
+      body: "{}",
+      timeoutMs: 20_000,
+    });
+    renderSystemSettingsInfo({
+      ...(appState.systemSettings.info || {}),
+      version: result.currentVersion,
+    });
+    appState.systemSettings.loaded = true;
+    elements.systemUpdateStatus.textContent = result.message;
+    if (result.available) {
+      const releaseUrl = safeHttpsUrl(result.releaseUrl);
+      if (releaseUrl) {
+        elements.systemUpdateLink.href = releaseUrl;
+        elements.systemUpdateLink.querySelector("span").textContent =
+          `查看 v${result.latestVersion}`;
+        elements.systemUpdateLink.hidden = false;
+      }
+    }
+  } catch (error) {
+    elements.systemUpdateStatus.textContent = error.message;
+    elements.systemUpdateStatus.classList.add("is-error");
+  } finally {
+    setButtonBusy(elements.checkSystemUpdate, false);
+  }
+}
+
 function discoveryReminderDurationMinutes() {
   const value = Number(elements.discoveryReminderDuration.value);
   const multiplier =
@@ -6974,14 +7392,25 @@ function setSettingsTab(
   const nextTab = SETTINGS_TABS.includes(tab) ? tab : "general";
   appState.settingsTab = nextTab;
 
+  let selectedButton = null;
   for (const button of elements.settingsTabs) {
     const selected = button.dataset.settingsTab === nextTab;
     button.setAttribute("aria-selected", String(selected));
     button.tabIndex = selected ? 0 : -1;
-    if (selected && focusTab) {
-      button.focus();
+    if (selected) {
+      selectedButton = button;
+      if (focusTab) {
+        button.focus();
+      }
     }
   }
+  selectedButton?.scrollIntoView({
+    block: "nearest",
+    inline: "nearest",
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth",
+  });
   for (const panel of elements.settingsPanels) {
     panel.hidden = panel.dataset.settingsPanel !== nextTab;
   }
@@ -6992,8 +7421,18 @@ function setSettingsTab(
     account: "保存账号同步",
     templates: "保存消息模板",
   };
-  elements.saveSettingsLabel.textContent = saveLabels[nextTab];
+  if (saveLabels[nextTab]) {
+    elements.saveSettingsLabel.textContent = saveLabels[nextTab];
+  }
+  elements.saveSettings.hidden =
+    nextTab === "security" || nextTab === "system";
   elements.testNotifications.hidden = nextTab !== "notification";
+
+  if (nextTab === "security") {
+    void loadAccessSecurityStatus();
+  } else if (nextTab === "system") {
+    void loadSystemSettings();
+  }
 
   if (focusFirstField) {
     const firstFields = {
@@ -7003,6 +7442,8 @@ function setSettingsTab(
         ? elements.accountSyncCron
         : elements.settingsAccountLogin,
       templates: notificationTemplateField("detailed", "title"),
+      security: elements.accessUsername,
+      system: elements.checkSystemUpdate,
     };
     if (nextTab === "templates") {
       const editor = elements.settingsForm.querySelector(
@@ -7518,6 +7959,41 @@ elements.settingsForm.addEventListener("click", (event) => {
   }
   setSecretInputVisibility(input, input.type === "password");
 });
+
+elements.saveAccessCredentials.addEventListener("click", () => {
+  void saveAccessCredentials();
+});
+
+elements.logoutAccess.addEventListener("click", async () => {
+  setFormFeedback(elements.accessSecurityFeedback);
+  setButtonBusy(elements.logoutAccess, true, "退出中…");
+  try {
+    await requestJson("/api/access/logout", {
+      method: "POST",
+      body: "{}",
+    });
+    window.location.assign("/login");
+  } catch (error) {
+    setFormFeedback(elements.accessSecurityFeedback, error.message);
+    setButtonBusy(elements.logoutAccess, false);
+  }
+});
+
+elements.checkSystemUpdate.addEventListener("click", () => {
+  void checkSystemUpdate();
+});
+
+for (const input of [
+  elements.accessUsername,
+  elements.accessCurrentPassword,
+  elements.accessNewPassword,
+  elements.accessConfirmPassword,
+]) {
+  input.addEventListener("input", () => {
+    setFieldError(input, false);
+    setFormFeedback(elements.accessSecurityFeedback);
+  });
+}
 
 elements.checkCron.addEventListener("input", () => {
   setFieldError(elements.checkCron, false);
@@ -8095,6 +8571,13 @@ async function saveSettings({ closeAfter = true } = {}) {
 
 elements.settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (appState.settingsTab === "security") {
+    await saveAccessCredentials();
+    return;
+  }
+  if (appState.settingsTab === "system") {
+    return;
+  }
   await saveSettings();
 });
 
@@ -8276,6 +8759,8 @@ window.addEventListener("pagehide", () => {
 });
 
 resetSeriesSearch();
+renderAccessIdentity();
+void loadAccessSecurityStatus();
 void loadDashboard().then(() => {
   scheduleDashboardRefresh();
   watchBatchCheck();

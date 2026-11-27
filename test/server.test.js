@@ -273,6 +273,11 @@ async function startHarness(t, options = {}) {
   };
 }
 
+function sessionCookie(response) {
+  const cookie = response.headers.get("set-cookie") || "";
+  return cookie.split(";")[0];
+}
+
 async function waitForBatchCheckJob(harness) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -338,6 +343,15 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /aria-label="正在追更的短剧搜索结果"/);
   assert.match(page, /搜索剧名、全拼或首字母/);
   assert.match(page, /id="open-add-dialog"/);
+  assert.match(page, /id="access-current-account-name"/);
+  assert.match(page, /id="access-current-account-meta"/);
+  assert.match(page, /<label for="access-username">用户名<\/label>/);
+  assert.equal((page.match(/data-settings-tab=/g) || []).length, 6);
+  assert.match(page, /data-settings-tab="account"/);
+  assert.match(page, /data-settings-tab="security"/);
+  assert.match(page, /data-settings-tab="system"/);
+  assert.match(page, /data-settings-panel="security"/);
+  assert.match(page, /data-settings-panel="system"/);
   assert.match(page, /id="add-dialog"/);
   assert.match(page, /id="share-input-clear"/);
   assert.match(page, /id="watchlist-search-clear"/);
@@ -703,8 +717,30 @@ test("cover cache endpoint serves immutable images and retries without caching e
 
   const workerResponse = await fetch(`${harness.origin}/sw.js`);
   const worker = await workerResponse.text();
-  assert.match(worker, /shell-v62/);
+  assert.match(worker, /shell-v64/);
   assert.match(worker, /"\/cover-image\.js"/);
+});
+
+test("home title follows the authenticated access username", async () => {
+  const appScript = await fs.readFile(
+    path.join(ROOT_DIR, "public", "app.js"),
+    "utf8",
+  );
+  const titleSource = appScript.match(
+    /(function accessHomeTitle\(username\) \{[\s\S]*?\n\})/,
+  )?.[1];
+  assert.ok(titleSource);
+  const accessHomeTitle = new Function(
+    `${titleSource}\nreturn accessHomeTitle;`,
+  )();
+
+  assert.equal(accessHomeTitle(""), "我的追更");
+  assert.equal(accessHomeTitle("   "), "我的追更");
+  assert.equal(accessHomeTitle("小满"), "小满的追更");
+  assert.match(
+    appScript,
+    /void loadAccessSecurityStatus\(\);\s*void loadDashboard\(\)\.then/,
+  );
 });
 
 test("season cards use the shared completion label and only show real update rules", async () => {
@@ -2930,4 +2966,246 @@ test("account import validates selection count and series IDs", async (t) => {
     (await invalidResponse.json()).error.code,
     "ACCOUNT_IMPORT_INVALID_ID",
   );
+});
+
+test("access credentials protect pages and APIs across login, password changes, and logout", async (t) => {
+  const harness = await startHarness(t);
+  const loginPage = await fetch(`${harness.origin}/login`);
+  assert.equal(loginPage.status, 200);
+  assert.match(loginPage.headers.get("content-type"), /^text\/html/);
+  assert.match(await loginPage.text(), /id="login-form"/);
+
+  const loginScript = await fetch(`${harness.origin}/login.js`);
+  assert.equal(loginScript.status, 200);
+  assert.match(
+    loginScript.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+
+  const initialPassword = "correct-horse";
+  const setupResponse = await fetch(
+    `${harness.origin}/api/access/credentials`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "owner",
+        currentPassword: "",
+        newPassword: initialPassword,
+      }),
+    },
+  );
+  assert.equal(setupResponse.status, 200);
+  const setupPayload = await setupResponse.json();
+  assert.equal(setupPayload.credentials.username, "owner");
+  assert.equal(setupPayload.credentials.configured, true);
+  assert.match(setupResponse.headers.get("set-cookie"), /HttpOnly/);
+
+  const protectedPage = await fetch(`${harness.origin}/`, {
+    redirect: "manual",
+  });
+  assert.equal(protectedPage.status, 302);
+  assert.equal(protectedPage.headers.get("location"), "/login?next=%2F");
+
+  const protectedState = await fetch(`${harness.origin}/api/state`);
+  assert.equal(protectedState.status, 401);
+  assert.equal(
+    (await protectedState.json()).error.code,
+    "ACCESS_AUTH_REQUIRED",
+  );
+
+  const invalidLogin = await fetch(`${harness.origin}/api/access/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: "owner",
+      password: "wrong-password",
+    }),
+  });
+  assert.equal(invalidLogin.status, 401);
+  assert.equal(
+    (await invalidLogin.json()).error.code,
+    "ACCESS_LOGIN_INVALID",
+  );
+
+  const loginResponse = await fetch(`${harness.origin}/api/access/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: "owner",
+      password: initialPassword,
+    }),
+  });
+  assert.equal(loginResponse.status, 200);
+  const oldCookie = sessionCookie(loginResponse);
+  assert.ok(oldCookie);
+
+  const authenticatedPage = await fetch(`${harness.origin}/`, {
+    headers: { cookie: oldCookie },
+  });
+  assert.equal(authenticatedPage.status, 200);
+  const authenticatedState = await fetch(`${harness.origin}/api/state`, {
+    headers: { cookie: oldCookie },
+  });
+  assert.equal(authenticatedState.status, 200);
+
+  const nextPassword = "next-correct-horse";
+  const updateResponse = await fetch(
+    `${harness.origin}/api/access/credentials`,
+    {
+      method: "PATCH",
+      headers: {
+        cookie: oldCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        username: "owner-next",
+        currentPassword: initialPassword,
+        newPassword: nextPassword,
+      }),
+    },
+  );
+  assert.equal(updateResponse.status, 200);
+  const updatePayload = await updateResponse.json();
+  assert.equal(updatePayload.credentials.username, "owner-next");
+  assert.equal(updatePayload.passwordChanged, true);
+  const nextCookie = sessionCookie(updateResponse);
+  assert.ok(nextCookie);
+
+  const oldSessionState = await fetch(`${harness.origin}/api/state`, {
+    headers: { cookie: oldCookie },
+  });
+  assert.equal(oldSessionState.status, 401);
+  const nextSessionState = await fetch(`${harness.origin}/api/state`, {
+    headers: { cookie: nextCookie },
+  });
+  assert.equal(nextSessionState.status, 200);
+
+  const logoutResponse = await fetch(`${harness.origin}/api/access/logout`, {
+    method: "POST",
+    headers: {
+      cookie: nextCookie,
+      "content-type": "application/json",
+    },
+    body: "{}",
+  });
+  assert.equal(logoutResponse.status, 200);
+  assert.match(logoutResponse.headers.get("set-cookie"), /Max-Age=0/);
+  const loggedOutState = await fetch(`${harness.origin}/api/state`, {
+    headers: { cookie: nextCookie },
+  });
+  assert.equal(loggedOutState.status, 401);
+
+  const nextLogin = await fetch(`${harness.origin}/api/access/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: "owner-next",
+      password: nextPassword,
+    }),
+  });
+  assert.equal(nextLogin.status, 200);
+  assert.ok(sessionCookie(nextLogin));
+});
+
+test("repeated HTTP access login failures return retry information", async (t) => {
+  const harness = await startHarness(t);
+  const setupResponse = await fetch(
+    `${harness.origin}/api/access/credentials`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "owner",
+        currentPassword: "",
+        newPassword: "correct-horse",
+      }),
+    },
+  );
+  assert.equal(setupResponse.status, 200);
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await fetch(`${harness.origin}/api/access/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "owner",
+        password: "wrong-password",
+      }),
+    });
+    assert.equal(response.status, 401);
+  }
+
+  const limitedResponse = await fetch(
+    `${harness.origin}/api/access/login`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: "owner",
+        password: "correct-horse",
+      }),
+    },
+  );
+  assert.equal(limitedResponse.status, 429);
+  assert.ok(Number(limitedResponse.headers.get("retry-after")) > 0);
+  const limitedPayload = await limitedResponse.json();
+  assert.equal(
+    limitedPayload.error.code,
+    "ACCESS_LOGIN_RATE_LIMITED",
+  );
+  assert.ok(limitedPayload.error.retryAfterSeconds > 0);
+});
+
+test("system update endpoints expose version info and run a check", async (t) => {
+  const calls = [];
+  const updateChecker = {
+    info() {
+      return {
+        version: "1.14.0",
+        repositoryUrl:
+          "https://github.com/Pandazznb/panda-drama-assistant",
+        releasesUrl:
+          "https://github.com/Pandazznb/panda-drama-assistant/releases",
+      };
+    },
+    async check() {
+      calls.push("check");
+      return {
+        ok: true,
+        available: true,
+        currentVersion: "1.14.0",
+        latestVersion: "1.15.0",
+        releaseUrl:
+          "https://github.com/Pandazznb/panda-drama-assistant/releases/tag/v1.15.0",
+        publishedAt: "2026-11-27T12:00:00.000Z",
+        checkedAt: "2026-11-28T00:00:00.000Z",
+        message: "发现新版本 1.15.0。",
+      };
+    },
+  };
+  const harness = await startHarness(t, { updateChecker });
+
+  const infoResponse = await fetch(
+    `${harness.origin}/api/system/update`,
+  );
+  assert.equal(infoResponse.status, 200);
+  assert.deepEqual(await infoResponse.json(), {
+    ok: true,
+    ...updateChecker.info(),
+  });
+
+  const checkResponse = await fetch(
+    `${harness.origin}/api/system/update`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    },
+  );
+  assert.equal(checkResponse.status, 200);
+  const checkPayload = await checkResponse.json();
+  assert.equal(checkPayload.available, true);
+  assert.equal(checkPayload.latestVersion, "1.15.0");
+  assert.deepEqual(calls, ["check"]);
 });

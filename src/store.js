@@ -1084,6 +1084,13 @@ const SQLITE_SCHEMA = `
     ON discovery_reminders(next_reminder_at);
 `;
 
+const SQLITE_ACCESS_AUTH_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS access_auth (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload TEXT NOT NULL
+  );
+`;
+
 // Released migrations are immutable. Add every future schema change as the
 // next version instead of editing an existing migration in place.
 const SQLITE_MIGRATIONS = Object.freeze([
@@ -1091,6 +1098,12 @@ const SQLITE_MIGRATIONS = Object.freeze([
     version: 1,
     up(database) {
       database.exec(SQLITE_SCHEMA);
+    },
+  }),
+  Object.freeze({
+    version: 2,
+    up(database) {
+      database.exec(SQLITE_ACCESS_AUTH_SCHEMA);
     },
   }),
 ]);
@@ -1539,6 +1552,34 @@ export class SqliteStateStore {
 
   async persist() {
     return this.mutate(() => undefined);
+  }
+
+  async getAccessAuth() {
+    if (!this.initialized) {
+      await this.init();
+    }
+    const row = this.db
+      .prepare("SELECT payload FROM access_auth WHERE id = 1")
+      .get();
+    return row ? parseStoredPayload(row.payload, "应用登录凭据") : null;
+  }
+
+  async setAccessAuth(credentials) {
+    return this.enqueue(async () => {
+      if (!this.initialized) {
+        await this.init();
+      }
+      await this.withImmediateTransaction(() => {
+        this.db
+          .prepare(
+            `INSERT INTO access_auth (id, payload)
+             VALUES (1, ?)
+             ON CONFLICT(id) DO UPDATE SET payload = excluded.payload`,
+          )
+          .run(JSON.stringify(credentials));
+      });
+      await this.secureDatabaseFiles();
+    });
   }
 
   async close() {
