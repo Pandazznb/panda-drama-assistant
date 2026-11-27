@@ -32,6 +32,7 @@ const MAX_WECOM_APP_TO_USER_MEMBERS = 100;
 const MAX_WECOM_APP_ACCESS_TOKEN_LENGTH = 512;
 const MAX_DINGTALK_ACCESS_TOKEN_LENGTH = 256;
 const MAX_DINGTALK_SECRET_LENGTH = 256;
+const MAX_NOTIFICATION_NAME_LENGTH = 64;
 const MAX_PROXY_URL_LENGTH = 2_048;
 const NTFY_TOPIC_PATTERN = /^[A-Za-z0-9_-]+$/;
 const NTFY_TOKEN_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
@@ -44,6 +45,7 @@ const WECOM_APP_USER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 const WECOM_APP_ACCESS_TOKEN_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
 const DINGTALK_ACCESS_TOKEN_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
 const DINGTALK_SECRET_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
+const NOTIFICATION_ITEM_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 const PROXY_PROTOCOLS = new Set(["http:", "https:"]);
 const WEBHOOK_MESSAGE_PREFIX = `【${APP_NAME}】`;
 
@@ -113,6 +115,10 @@ function storedString(value, maxLength) {
   return String(value || "")
     .trim()
     .slice(0, maxLength);
+}
+
+function validStoredNotificationName(value) {
+  return storedString(value, MAX_NOTIFICATION_NAME_LENGTH);
 }
 
 function validStoredBarkKey(value) {
@@ -284,90 +290,195 @@ function maskProxyUrl(value) {
   return `${endpoint.protocol}//${credentials}${endpoint.host}`;
 }
 
+function emptyNotificationChannelConfig(channel) {
+  if (channel === "bark") {
+    return { enabled: false, key: "" };
+  }
+  if (channel === "ntfy") {
+    return { enabled: false, topic: "", token: "" };
+  }
+  if (channel === "telegram") {
+    return { enabled: false, botToken: "", chatId: "" };
+  }
+  if (channel === "wecom") {
+    return { enabled: false, key: "" };
+  }
+  if (channel === "wecomApp") {
+    return {
+      enabled: false,
+      corpId: "",
+      secret: "",
+      agentId: "",
+      toUser: "",
+    };
+  }
+  if (channel === "dingtalk") {
+    return { enabled: false, accessToken: "", secret: "" };
+  }
+  return { enabled: false };
+}
+
+function normalizeNotificationItemConfig(channel, input) {
+  const source = isPlainObject(input) ? input : {};
+  const config = emptyNotificationChannelConfig(channel);
+  config.enabled = source.enabled === true;
+
+  if (channel === "bark") {
+    config.key = validStoredBarkKey(source.key);
+  } else if (channel === "ntfy") {
+    config.topic = validStoredNtfyTopic(source.topic);
+    config.token = validStoredNtfyToken(source.token);
+  } else if (channel === "telegram") {
+    config.botToken = validStoredTelegramToken(source.botToken);
+    config.chatId = validStoredTelegramChatId(source.chatId);
+  } else if (channel === "wecom") {
+    config.key = validStoredWeComKey(source.key);
+  } else if (channel === "wecomApp") {
+    config.corpId = validStoredWeComAppCorpId(source.corpId);
+    config.secret = validStoredWeComAppSecret(source.secret);
+    config.agentId = validStoredWeComAppAgentId(source.agentId);
+    config.toUser = validStoredWeComAppToUser(source.toUser);
+  } else if (channel === "dingtalk") {
+    config.accessToken = validStoredDingTalkAccessToken(source.accessToken);
+    config.secret = validStoredDingTalkSecret(source.secret);
+  }
+
+  return config;
+}
+
+function notificationItemMatchesLegacyChannel(item, channel, config) {
+  if (item.type !== channel) {
+    return false;
+  }
+  const itemConfig = normalizeNotificationItemConfig(channel, item);
+  return Object.keys(config).every(
+    (key) => itemConfig[key] === config[key],
+  );
+}
+
+function normalizeNotificationItems(input, legacyChannels) {
+  const sourceItems = Array.isArray(input) ? input : [];
+  const candidates = sourceItems
+    .map((item, index) => {
+      if (
+        !isPlainObject(item) ||
+        !NOTIFICATION_CHANNELS.includes(item.type)
+      ) {
+        return null;
+      }
+      const fallbackId = `notification-${item.type}-${index + 1}`;
+      const id =
+        typeof item.id === "string" &&
+        NOTIFICATION_ITEM_ID_PATTERN.test(item.id.trim())
+          ? item.id.trim()
+          : fallbackId;
+      return {
+        id,
+        type: item.type,
+        ...(validStoredNotificationName(item.name)
+          ? { name: validStoredNotificationName(item.name) }
+          : {}),
+        ...normalizeNotificationItemConfig(item.type, item),
+      };
+    })
+    .filter(Boolean);
+
+  for (const channel of NOTIFICATION_CHANNELS) {
+    const config = legacyChannels[channel];
+    if (
+      !config.enabled &&
+      !isNotificationChannelConfigured(channel, config)
+    ) {
+      continue;
+    }
+    if (
+      candidates.some((item) =>
+        notificationItemMatchesLegacyChannel(item, channel, config),
+      )
+    ) {
+      continue;
+    }
+    candidates.push({
+      id: `legacy-${channel}`,
+      type: channel,
+      ...normalizeNotificationItemConfig(channel, config),
+    });
+  }
+
+  const usedIds = new Set();
+  return candidates.map((item, index) => {
+    let id = item.id;
+    if (usedIds.has(id)) {
+      const base = `${item.type}-${index + 1}`;
+      id = base;
+      let suffix = 2;
+      while (usedIds.has(id)) {
+        id = `${base}-${suffix}`;
+        suffix += 1;
+      }
+    }
+    usedIds.add(id);
+    return { ...item, id };
+  });
+}
+
+function legacyChannelsFromItems(items) {
+  return Object.fromEntries(
+    NOTIFICATION_CHANNELS.map((channel) => {
+      const item = items.find((entry) => entry.type === channel);
+      if (!item) {
+        return [channel, emptyNotificationChannelConfig(channel)];
+      }
+      const config = emptyNotificationChannelConfig(channel);
+      for (const key of Object.keys(config)) {
+        config[key] = item[key];
+      }
+      return [channel, config];
+    }),
+  );
+}
+
 export function createDefaultNotificationSettings() {
+  const legacyChannels = Object.fromEntries(
+    NOTIFICATION_CHANNELS.map((channel) => [
+      channel,
+      emptyNotificationChannelConfig(channel),
+    ]),
+  );
   return {
     proxy: {
       enabled: false,
       url: "",
       channels: normalizeProxyChannels(),
     },
-    bark: {
-      enabled: false,
-      key: "",
-    },
-    ntfy: {
-      enabled: false,
-      topic: "",
-      token: "",
-    },
-    telegram: {
-      enabled: false,
-      botToken: "",
-      chatId: "",
-    },
-    wecom: {
-      enabled: false,
-      key: "",
-    },
-    wecomApp: {
-      enabled: false,
-      corpId: "",
-      secret: "",
-      agentId: "",
-      toUser: "",
-    },
-    dingtalk: {
-      enabled: false,
-      accessToken: "",
-      secret: "",
-    },
+    items: [],
+    ...legacyChannels,
   };
 }
 
 export function normalizeNotificationSettings(input, legacyBarkKey = "") {
   const source = isPlainObject(input) ? input : {};
   const proxy = isPlainObject(source.proxy) ? source.proxy : {};
-  const bark = isPlainObject(source.bark) ? source.bark : {};
-  const ntfy = isPlainObject(source.ntfy) ? source.ntfy : {};
-  const telegram = isPlainObject(source.telegram) ? source.telegram : {};
-  const wecom = isPlainObject(source.wecom) ? source.wecom : {};
-  const wecomApp = isPlainObject(source.wecomApp) ? source.wecomApp : {};
-  const dingtalk = isPlainObject(source.dingtalk) ? source.dingtalk : {};
   const migratedBarkKey = validStoredBarkKey(legacyBarkKey);
-  const barkKey = validStoredBarkKey(bark.key) || migratedBarkKey;
+  const legacyChannels = Object.fromEntries(
+    NOTIFICATION_CHANNELS.map((channel) => [
+      channel,
+      normalizeNotificationItemConfig(channel, source[channel]),
+    ]),
+  );
+  legacyChannels.bark.key =
+    legacyChannels.bark.key || migratedBarkKey;
+  legacyChannels.bark.enabled =
+    legacyChannels.bark.enabled || Boolean(migratedBarkKey);
+  const items = normalizeNotificationItems(
+    source.items,
+    legacyChannels,
+  );
 
   return {
     proxy: normalizeProxySettings(proxy),
-    bark: {
-      enabled: bark.enabled === true || Boolean(migratedBarkKey),
-      key: barkKey,
-    },
-    ntfy: {
-      enabled: ntfy.enabled === true,
-      topic: validStoredNtfyTopic(ntfy.topic),
-      token: validStoredNtfyToken(ntfy.token),
-    },
-    telegram: {
-      enabled: telegram.enabled === true,
-      botToken: validStoredTelegramToken(telegram.botToken),
-      chatId: validStoredTelegramChatId(telegram.chatId),
-    },
-    wecom: {
-      enabled: wecom.enabled === true,
-      key: validStoredWeComKey(wecom.key),
-    },
-    wecomApp: {
-      enabled: wecomApp.enabled === true,
-      corpId: validStoredWeComAppCorpId(wecomApp.corpId),
-      secret: validStoredWeComAppSecret(wecomApp.secret),
-      agentId: validStoredWeComAppAgentId(wecomApp.agentId),
-      toUser: validStoredWeComAppToUser(wecomApp.toUser),
-    },
-    dingtalk: {
-      enabled: dingtalk.enabled === true,
-      accessToken: validStoredDingTalkAccessToken(dingtalk.accessToken),
-      secret: validStoredDingTalkSecret(dingtalk.secret),
-    },
+    items,
+    ...legacyChannelsFromItems(items),
   };
 }
 
@@ -636,9 +747,66 @@ export function isNotificationChannelConfigured(channel, config) {
 
 export function enabledNotificationChannels(settings) {
   const normalized = normalizeNotificationSettings(settings);
-  return NOTIFICATION_CHANNELS.filter(
-    (channel) => normalized[channel].enabled,
-  );
+  return [
+    ...new Set(
+      normalized.items
+        .filter((item) => item.enabled)
+        .map((item) => item.type),
+    ),
+  ];
+}
+
+function describeNotificationItem(item) {
+  const common = {
+    id: item.id,
+    type: item.type,
+    name: item.name || "",
+    label: item.name || CHANNEL_LABELS[item.type],
+    enabled: item.enabled,
+    configured: isNotificationChannelConfigured(item.type, item),
+  };
+
+  if (item.type === "bark") {
+    return { ...common, keyHint: maskBarkKey(item.key) };
+  }
+  if (item.type === "ntfy") {
+    return {
+      ...common,
+      topicHint: maskSecret(item.topic),
+      tokenConfigured: Boolean(item.token),
+      tokenHint: maskSecret(item.token),
+    };
+  }
+  if (item.type === "telegram") {
+    return {
+      ...common,
+      tokenConfigured: Boolean(item.botToken),
+      tokenHint: maskSecret(item.botToken),
+      chatIdHint: maskSecret(item.chatId),
+    };
+  }
+  if (item.type === "wecom") {
+    return { ...common, keyHint: maskSecret(item.key) };
+  }
+  if (item.type === "wecomApp") {
+    return {
+      ...common,
+      corpIdConfigured: Boolean(item.corpId),
+      secretConfigured: Boolean(item.secret),
+      agentIdConfigured: Boolean(item.agentId),
+      toUserConfigured: Boolean(item.toUser),
+    };
+  }
+  if (item.type === "dingtalk") {
+    return {
+      ...common,
+      accessTokenConfigured: Boolean(item.accessToken),
+      accessTokenHint: maskSecret(item.accessToken),
+      secretConfigured: Boolean(item.secret),
+      secretHint: maskSecret(item.secret),
+    };
+  }
+  return common;
 }
 
 export function describeNotificationSettings(settings) {
@@ -650,17 +818,15 @@ export function describeNotificationSettings(settings) {
   for (const channel of NOTIFICATION_CHANNELS) {
     const config = normalized[channel];
     const configured = isNotificationChannelConfigured(channel, config);
-    if (config.enabled) {
-      enabledCount += 1;
-    }
-    if (configured) {
-      configuredCount += 1;
-    }
     channels[channel] = {
       enabled: config.enabled,
       configured,
     };
   }
+  enabledCount = normalized.items.filter((item) => item.enabled).length;
+  configuredCount = normalized.items.filter((item) =>
+    isNotificationChannelConfigured(item.type, item),
+  ).length;
 
   channels.bark.keyHint = maskBarkKey(normalized.bark.key);
   channels.ntfy.topicHint = maskSecret(normalized.ntfy.topic);
@@ -686,6 +852,7 @@ export function describeNotificationSettings(settings) {
   return {
     enabledCount,
     configuredCount,
+    items: normalized.items.map(describeNotificationItem),
     proxy: {
       enabled: normalized.proxy.enabled,
       configured: Boolean(normalized.proxy.url),
@@ -834,6 +1001,93 @@ function applyChannelPatch(current, patch, channel) {
   return next;
 }
 
+function applyNotificationItemsPatch(currentItems, patchItems) {
+  if (!Array.isArray(patchItems)) {
+    throw new NotificationError(
+      "通知方式列表格式不正确。",
+      "INVALID_NOTIFICATION_SETTINGS",
+      400,
+    );
+  }
+
+  const existingItems = new Map(
+    currentItems.map((item) => [item.id, item]),
+  );
+  const usedIds = new Set();
+  return patchItems.map((patch, index) => {
+    if (!isPlainObject(patch)) {
+      throw new NotificationError(
+        `第 ${index + 1} 个通知方式格式不正确。`,
+        "INVALID_NOTIFICATION_SETTINGS",
+        400,
+      );
+    }
+    const id = optionalString(patch.id);
+    if (!NOTIFICATION_ITEM_ID_PATTERN.test(id)) {
+      throw new NotificationError(
+        `第 ${index + 1} 个通知方式缺少有效标识。`,
+        "INVALID_NOTIFICATION_SETTINGS",
+        400,
+      );
+    }
+    if (usedIds.has(id)) {
+      throw new NotificationError(
+        "通知方式标识不能重复。",
+        "INVALID_NOTIFICATION_SETTINGS",
+        400,
+      );
+    }
+    usedIds.add(id);
+
+    const type = optionalString(patch.type);
+    if (!NOTIFICATION_CHANNELS.includes(type)) {
+      throw new NotificationError(
+        `第 ${index + 1} 个通知方式类型不受支持。`,
+        "INVALID_NOTIFICATION_SETTINGS",
+        400,
+      );
+    }
+    const existing = existingItems.get(id);
+    if (existing && existing.type !== type) {
+      throw new NotificationError(
+        "已添加的通知方式不能修改类型，请删除后重新添加。",
+        "INVALID_NOTIFICATION_SETTINGS",
+        400,
+      );
+    }
+    const current = existing || {
+      id,
+      type,
+      ...emptyNotificationChannelConfig(type),
+    };
+    let name = validStoredNotificationName(current.name);
+    if (Object.hasOwn(patch, "name")) {
+      if (typeof patch.name !== "string") {
+        throw new NotificationError(
+          `第 ${index + 1} 个通知方式的名称格式不正确。`,
+          "INVALID_NOTIFICATION_SETTINGS",
+          400,
+        );
+      }
+      name = patch.name.trim();
+      if ([...name].length > MAX_NOTIFICATION_NAME_LENGTH) {
+        throw new NotificationError(
+          `通知方式名称不能超过 ${MAX_NOTIFICATION_NAME_LENGTH} 个字符。`,
+          "INVALID_NOTIFICATION_SETTINGS",
+          400,
+        );
+      }
+    }
+    const nextItem = applyChannelPatch(current, patch, type);
+    if (name) {
+      nextItem.name = name;
+    } else {
+      delete nextItem.name;
+    }
+    return nextItem;
+  });
+}
+
 export function applyProxySettingsPatch(current, patch) {
   if (!isPlainObject(patch)) {
     throw new NotificationError(
@@ -923,16 +1177,35 @@ export function applyNotificationSettingsPatch(current, patch) {
 
   const normalized = normalizeNotificationSettings(current);
   const next = normalizeNotificationSettings(normalized);
-  for (const channel of NOTIFICATION_CHANNELS) {
-    if (!Object.hasOwn(patch, channel)) {
-      continue;
+  if (Object.hasOwn(patch, "items")) {
+    next.items = applyNotificationItemsPatch(next.items, patch.items);
+  } else {
+    for (const channel of NOTIFICATION_CHANNELS) {
+      if (!Object.hasOwn(patch, channel)) {
+        continue;
+      }
+      const index = next.items.findIndex((item) => item.type === channel);
+      const currentItem =
+        index >= 0
+          ? next.items[index]
+          : {
+              id: `legacy-${channel}`,
+              type: channel,
+              ...emptyNotificationChannelConfig(channel),
+            };
+      const updatedItem = {
+        id: currentItem.id,
+        type: channel,
+        ...applyChannelPatch(currentItem, patch[channel], channel),
+      };
+      if (index >= 0) {
+        next.items[index] = updatedItem;
+      } else {
+        next.items.push(updatedItem);
+      }
     }
-    next[channel] = applyChannelPatch(
-      next[channel],
-      patch[channel],
-      channel,
-    );
   }
+  Object.assign(next, legacyChannelsFromItems(next.items));
   if (Object.hasOwn(patch, "proxy")) {
     next.proxy = applyProxySettingsPatch(next.proxy, patch.proxy);
   }
@@ -1447,10 +1720,8 @@ export async function sendNotificationChannels(
   } = {},
 ) {
   const normalized = normalizeNotificationSettings(settings);
-  const channels = NOTIFICATION_CHANNELS.filter(
-    (channel) => normalized[channel].enabled,
-  );
-  if (!channels.length) {
+  const enabledItems = normalized.items.filter((item) => item.enabled);
+  if (!enabledItems.length) {
     throw new NotificationError(
       "还没有启用任何通知渠道。",
       "NO_NOTIFICATION_CHANNEL",
@@ -1458,14 +1729,33 @@ export async function sendNotificationChannels(
     );
   }
 
-  const proxiedChannels = new Set(
-    channels.filter(
-      (channel) =>
-        normalized.proxy.enabled && normalized.proxy.channels[channel],
-    ),
+  const typeCounts = enabledItems.reduce((counts, item) => {
+    counts[item.type] = (counts[item.type] || 0) + 1;
+    return counts;
+  }, {});
+  const typeIndexes = {};
+  const itemLabels = new Map(
+    enabledItems.map((item) => {
+      const index = (typeIndexes[item.type] || 0) + 1;
+      typeIndexes[item.type] = index;
+      return [
+        item.id,
+        typeCounts[item.type] > 1
+          ? item.name || `${CHANNEL_LABELS[item.type]} ${index}`
+          : item.name || CHANNEL_LABELS[item.type],
+      ];
+    }),
+  );
+  const proxiedItemIds = new Set(
+    enabledItems
+      .filter(
+        (item) =>
+          normalized.proxy.enabled && normalized.proxy.channels[item.type],
+      )
+      .map((item) => item.id),
   );
   let proxyDispatcher = null;
-  if (proxiedChannels.size > 0) {
+  if (proxiedItemIds.size > 0) {
     try {
       proxyDispatcher = createProxyDispatcher(normalized.proxy.url);
     } catch {
@@ -1479,39 +1769,42 @@ export async function sendNotificationChannels(
 
   try {
     const results = await Promise.all(
-      channels.map(async (channel) => {
-        const config = normalized[channel];
-        if (!isNotificationChannelConfigured(channel, config)) {
+      enabledItems.map(async (item) => {
+        const label = itemLabels.get(item.id);
+        if (!isNotificationChannelConfigured(item.type, item)) {
           return {
-            channel,
-            label: CHANNEL_LABELS[channel],
+            channel: item.type,
+            itemId: item.id,
+            label,
             ok: false,
             error: "配置不完整。",
           };
         }
         try {
           const channelFetch =
-            proxyDispatcher && proxiedChannels.has(channel)
+            proxyDispatcher && proxiedItemIds.has(item.id)
               ? (url, options = {}) =>
                   fetchImpl(url, {
                     ...options,
                     dispatcher: proxyDispatcher,
                   })
               : fetchImpl;
-          await sendToChannel(channel, config, message, {
+          await sendToChannel(item.type, item, message, {
             fetchImpl: channelFetch,
             timeoutMs,
           });
           return {
-            channel,
-            label: CHANNEL_LABELS[channel],
+            channel: item.type,
+            itemId: item.id,
+            label,
             ok: true,
             error: null,
           };
         } catch (error) {
           return {
-            channel,
-            label: CHANNEL_LABELS[channel],
+            channel: item.type,
+            itemId: item.id,
+            label,
             ok: false,
             error: truncate(error?.message, 240) || "通知发送失败。",
           };
@@ -1570,6 +1863,7 @@ export const __test = {
   MAX_NTFY_TOPIC_LENGTH,
   MAX_TELEGRAM_CHAT_ID_LENGTH,
   MAX_TITLE_LENGTH,
+  MAX_NOTIFICATION_NAME_LENGTH,
   maskSecret,
   truncateUtf8,
 };

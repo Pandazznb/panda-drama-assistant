@@ -1100,8 +1100,12 @@
     >
       <form class="dialog__panel" id="settings-form" novalidate>
         <div class="dialog__header">
-          <div>
-            <p class="eyebrow">检查计划、通知与消息格式</p>
+          <div class="dialog__title-group">
+            <span class="dialog__title-icon" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24">
+                <use href="#icon-settings"></use>
+              </svg>
+            </span>
             <h2 id="settings-title">设置</h2>
           </div>
           <button
@@ -1132,9 +1136,6 @@
             tabindex="0"
             data-settings-tab="account"
           >
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <use href="#icon-user-round"></use>
-            </svg>
             <span>账号同步</span>
           </button>
           <button
@@ -1147,9 +1148,6 @@
             tabindex="-1"
             data-settings-tab="general"
           >
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <use href="#icon-settings"></use>
-            </svg>
             <span>常规设置</span>
           </button>
           <button
@@ -1162,25 +1160,7 @@
             tabindex="-1"
             data-settings-tab="notification"
           >
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <use href="#icon-bell"></use>
-            </svg>
             <span>通知设置</span>
-          </button>
-          <button
-            class="settings-tab"
-            id="settings-tab-templates"
-            type="button"
-            role="tab"
-            aria-selected="false"
-            aria-controls="settings-panel-templates"
-            tabindex="-1"
-            data-settings-tab="templates"
-          >
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <use href="#icon-layers"></use>
-            </svg>
-            <span>消息模板</span>
           </button>
           <button
             class="settings-tab"
@@ -1192,9 +1172,6 @@
             tabindex="-1"
             data-settings-tab="security"
           >
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <use href="#icon-shield-check"></use>
-            </svg>
             <span>安全设置</span>
           </button>
           <button
@@ -1207,9 +1184,6 @@
             tabindex="-1"
             data-settings-tab="system"
           >
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <use href="#icon-settings"></use>
-            </svg>
             <span>系统设置</span>
           </button>
         </div>
@@ -1357,11 +1331,66 @@
             data-settings-panel="notification"
             hidden
           >
-          <div class="notification-settings">
-            <p class="notification-settings__label">通知渠道</p>
-            <p class="notification-settings__help">
-              可同时启用多个渠道；单个渠道失败不会阻止其他渠道发送。
-            </p>
+            <div
+              class="notification-settings-view"
+              id="settings-notification-overview"
+            >
+              <div class="notification-settings">
+                <div class="notification-section-heading">
+                  <div>
+                    <p class="notification-settings__label">通知渠道</p>
+                    <p class="notification-settings__help">
+                      点击渠道可修改配置；拖动右侧抓手可调整发送顺序。
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  class="notification-item-list"
+                  id="settings-notification-items"
+                ></div>
+                <div
+                  class="notification-empty"
+                  id="settings-notification-empty"
+                >
+                  <p>还没有添加通知渠道。</p>
+                  <span>选择类型后添加，即可填写对应配置。</span>
+                </div>
+
+                <div class="notification-add">
+                  <label for="settings-notification-type">添加通知方式</label>
+                  <div class="notification-add__controls">
+                    <select id="settings-notification-type">
+                      <option value="bark">Bark</option>
+                      <option value="ntfy">ntfy</option>
+                      <option value="telegram">Telegram</option>
+                      <option value="wecom">企业微信群机器人</option>
+                      <option value="wecomApp">企业微信应用</option>
+                      <option value="dingtalk">钉钉</option>
+                    </select>
+                    <button
+                      class="button button--secondary"
+                      type="button"
+                      id="settings-add-notification"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <use href="#icon-plus"></use>
+                      </svg>
+                      <span>添加通知方式</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class="notification-settings notification-settings--legacy"
+                aria-hidden="true"
+                hidden
+              >
+                <p class="notification-settings__label">通知渠道</p>
+                <p class="notification-settings__help">
+                  可同时启用多个渠道；单个渠道失败不会阻止其他渠道发送。
+                </p>
 
             <fieldset
               class="notification-channel"
@@ -1799,122 +1828,163 @@
                   <span>清除已保存的钉钉配置</span>
                 </label>
               </div>
-            </fieldset>
-          </div>
+                </fieldset>
+              </div>
 
-          <fieldset
-            class="notification-channel proxy-settings"
-            data-proxy-settings
-          >
-            <legend>发送代理</legend>
-            <div class="notification-channel__summary">
-              <div>
-                <p>仅为勾选的通知渠道启用 HTTP 或 HTTPS 代理。</p>
-                <span class="channel-status" data-proxy-status>未配置</span>
-              </div>
-              <label class="channel-toggle" for="proxy-enabled">
-                <input id="proxy-enabled" type="checkbox">
-                <span class="channel-toggle__track" aria-hidden="true"></span>
-                <span>启用</span>
-              </label>
-            </div>
-            <div class="notification-channel__config" data-proxy-config hidden>
-              <div class="field">
-                <label for="proxy-url">代理地址</label>
-                <div class="input-with-action">
-                  <input
-                    id="proxy-url"
-                    name="proxyUrl"
-                    type="password"
-                    autocomplete="new-password"
-                    spellcheck="false"
-                    placeholder="例如 http://127.0.0.1:7890"
-                    aria-describedby="proxy-help settings-feedback"
-                  >
-                  <button
-                    class="input-action"
-                    type="button"
-                    data-toggle-secret="proxy-url"
-                    aria-label="显示代理地址"
-                    aria-pressed="false"
-                  >
-                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                      <use href="#icon-eye"></use>
-                    </svg>
-                  </button>
+              <div class="notification-template-settings">
+                <div class="notification-template-settings__heading">
+                  <div>
+                    <h3>通知模板</h3>
+                    <p>点击模板可修改标题、正文和更新条目。</p>
+                  </div>
                 </div>
-                <p class="field__help" id="proxy-help">
-                  支持 http:// 和 https:// 代理，可包含用户名和密码；留空会保留已保存的地址。
-                </p>
+                <div
+                  class="notification-template-card-list"
+                  id="settings-notification-template-cards"
+                ></div>
               </div>
-              <div
-                class="proxy-channel-field"
-                role="group"
-                aria-labelledby="proxy-channel-label"
-                aria-describedby="proxy-channel-help settings-feedback"
+
+              <fieldset
+                class="notification-channel proxy-settings"
+                data-proxy-settings
               >
-                <p id="proxy-channel-label">走代理的通知渠道</p>
-                <div class="proxy-channel-options">
-                  <label class="check-field" for="proxy-channel-bark">
-                    <input
-                      id="proxy-channel-bark"
-                      type="checkbox"
-                      data-proxy-channel="bark"
-                    >
-                    <span>Bark</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-ntfy">
-                    <input
-                      id="proxy-channel-ntfy"
-                      type="checkbox"
-                      data-proxy-channel="ntfy"
-                    >
-                    <span>ntfy</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-telegram">
-                    <input
-                      id="proxy-channel-telegram"
-                      type="checkbox"
-                      data-proxy-channel="telegram"
-                    >
-                    <span>Telegram</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-wecom">
-                    <input
-                      id="proxy-channel-wecom"
-                      type="checkbox"
-                      data-proxy-channel="wecom"
-                    >
-                    <span>企业微信群机器人</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-wecom-app">
-                    <input
-                      id="proxy-channel-wecom-app"
-                      type="checkbox"
-                      data-proxy-channel="wecomApp"
-                    >
-                    <span>企业微信应用</span>
-                  </label>
-                  <label class="check-field" for="proxy-channel-dingtalk">
-                    <input
-                      id="proxy-channel-dingtalk"
-                      type="checkbox"
-                      data-proxy-channel="dingtalk"
-                    >
-                    <span>钉钉</span>
+                <legend>发送代理</legend>
+                <div class="notification-channel__summary">
+                  <div>
+                    <p>仅为勾选的通知渠道启用 HTTP 或 HTTPS 代理。</p>
+                    <span class="channel-status" data-proxy-status>未配置</span>
+                  </div>
+                  <label class="channel-toggle" for="proxy-enabled">
+                    <input id="proxy-enabled" type="checkbox">
+                    <span class="channel-toggle__track" aria-hidden="true"></span>
+                    <span>启用</span>
                   </label>
                 </div>
-                <p class="field__help" id="proxy-channel-help">
-                  只勾选网络受限的渠道；未勾选的渠道继续直连。
+                <div class="notification-channel__config" data-proxy-config hidden>
+                  <div class="field">
+                    <label for="proxy-url">代理地址</label>
+                    <div class="input-with-action">
+                      <input
+                        id="proxy-url"
+                        name="proxyUrl"
+                        type="password"
+                        autocomplete="new-password"
+                        spellcheck="false"
+                        placeholder="例如 http://127.0.0.1:7890"
+                        aria-describedby="proxy-help settings-feedback"
+                      >
+                      <button
+                        class="input-action"
+                        type="button"
+                        data-toggle-secret="proxy-url"
+                        aria-label="显示代理地址"
+                        aria-pressed="false"
+                      >
+                        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                          <use href="#icon-eye"></use>
+                        </svg>
+                      </button>
+                    </div>
+                    <p class="field__help" id="proxy-help">
+                      支持 http:// 和 https:// 代理，可包含用户名和密码；留空会保留已保存的地址。
+                    </p>
+                  </div>
+                  <div
+                    class="proxy-channel-field"
+                    role="group"
+                    aria-labelledby="proxy-channel-label"
+                    aria-describedby="proxy-channel-help settings-feedback"
+                  >
+                    <p id="proxy-channel-label">走代理的通知渠道</p>
+                    <div class="proxy-channel-options">
+                      <label class="check-field" for="proxy-channel-bark">
+                        <input
+                          id="proxy-channel-bark"
+                          type="checkbox"
+                          data-proxy-channel="bark"
+                        >
+                        <span>Bark</span>
+                      </label>
+                      <label class="check-field" for="proxy-channel-ntfy">
+                        <input
+                          id="proxy-channel-ntfy"
+                          type="checkbox"
+                          data-proxy-channel="ntfy"
+                        >
+                        <span>ntfy</span>
+                      </label>
+                      <label class="check-field" for="proxy-channel-telegram">
+                        <input
+                          id="proxy-channel-telegram"
+                          type="checkbox"
+                          data-proxy-channel="telegram"
+                        >
+                        <span>Telegram</span>
+                      </label>
+                      <label class="check-field" for="proxy-channel-wecom">
+                        <input
+                          id="proxy-channel-wecom"
+                          type="checkbox"
+                          data-proxy-channel="wecom"
+                        >
+                        <span>企业微信群机器人</span>
+                      </label>
+                      <label class="check-field" for="proxy-channel-wecom-app">
+                        <input
+                          id="proxy-channel-wecom-app"
+                          type="checkbox"
+                          data-proxy-channel="wecomApp"
+                        >
+                        <span>企业微信应用</span>
+                      </label>
+                      <label class="check-field" for="proxy-channel-dingtalk">
+                        <input
+                          id="proxy-channel-dingtalk"
+                          type="checkbox"
+                          data-proxy-channel="dingtalk"
+                        >
+                        <span>钉钉</span>
+                      </label>
+                    </div>
+                    <p class="field__help" id="proxy-channel-help">
+                      只勾选网络受限的渠道；未勾选的渠道继续直连。
+                    </p>
+                  </div>
+                  <label class="check-field channel-clear" for="clear-proxy">
+                    <input id="clear-proxy" type="checkbox">
+                    <span>清除已保存的代理配置</span>
+                  </label>
+                </div>
+              </fieldset>
+            </div>
+
+            <div
+              class="notification-channel-editor"
+              id="settings-notification-editor"
+              hidden
+            ></div>
+            <div
+              class="notification-template-editors"
+              id="settings-notification-template-editors"
+              hidden
+            >
+              <div class="notification-subview-bar">
+                <button
+                  class="notification-subview-back"
+                  type="button"
+                  data-notification-template-back
+                >
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <use href="#icon-arrow-left"></use>
+                  </svg>
+                  <span>返回通知设置</span>
+                </button>
+                <p id="settings-notification-template-editor-title">
+                  编辑通知模板
                 </p>
               </div>
-              <label class="check-field channel-clear" for="clear-proxy">
-                <input id="clear-proxy" type="checkbox">
-                <span>清除已保存的代理配置</span>
-              </label>
+              <div id="settings-notification-template-forms"></div>
             </div>
-          </fieldset>
-
           </section>
 
           <section
@@ -2086,13 +2156,9 @@
             </div>
           </section>
 
-          <section
-            class="settings-panel notification-template-settings"
-            id="settings-panel-templates"
-            role="tabpanel"
-            aria-labelledby="settings-tab-templates"
-            tabindex="0"
-            data-settings-panel="templates"
+          <div
+            class="notification-template-source"
+            id="settings-notification-template-source"
             hidden
           >
             <div class="notification-template-settings__heading">
@@ -3099,7 +3165,7 @@
                 </div>
               </div>
             </details>
-          </section>
+          </div>
 
           <section
             class="settings-panel settings-security"
@@ -3119,7 +3185,7 @@
               <div class="settings-feature-heading__copy">
                 <h3>应用登录保护</h3>
                 <p>
-                  设置独立的账号和密码，防止他人打开短剧助手或访问接口。
+                  设置独立的登录账号、显示名称和密码，防止他人打开短剧助手或访问接口。
                 </p>
               </div>
               <span
@@ -3143,8 +3209,8 @@
                 </svg>
               </span>
               <div class="account-profile__identity">
-                <p>当前账号</p>
-                <strong id="access-current-account-name">正在读取账号</strong>
+                <p>当前名称</p>
+                <strong id="access-current-account-name">正在读取名称</strong>
                 <span id="access-current-account-meta">
                   正在读取登录保护状态…
                 </span>
@@ -3157,10 +3223,35 @@
 
             <div class="settings-security__fields">
               <div class="field">
-                <label for="access-username">用户名</label>
+                <label for="access-username">名称</label>
                 <input
                   id="access-username"
                   name="accessUsername"
+                  type="text"
+                  minlength="3"
+                  maxlength="64"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="3-64 个字符，不能包含空格"
+                  aria-describedby="access-username-help access-username-error"
+                >
+                <p class="field__help" id="access-username-help">
+                  只用于首页显示为“名称的追更”，不参与登录。
+                </p>
+                <p
+                  class="field__feedback"
+                  id="access-username-error"
+                  data-field-error
+                  aria-live="polite"
+                ></p>
+              </div>
+
+              <div class="field">
+                <label for="access-account">登录账号</label>
+                <input
+                  id="access-account"
+                  name="accessAccount"
                   type="text"
                   minlength="3"
                   maxlength="64"
@@ -3168,14 +3259,14 @@
                   autocapitalize="off"
                   spellcheck="false"
                   placeholder="3-64 个字符，不能包含空格"
-                  aria-describedby="access-username-help access-username-error"
+                  aria-describedby="access-account-help access-account-error"
                 >
-                <p class="field__help" id="access-username-help">
-                  用于登录，也会在首页显示为“用户名的追更”。修改后旧用户名立即失效。
+                <p class="field__help" id="access-account-help">
+                  只用于登录，不会显示在首页。修改后旧登录账号立即失效。
                 </p>
                 <p
                   class="field__feedback"
-                  id="access-username-error"
+                  id="access-account-error"
                   data-field-error
                   aria-live="polite"
                 ></p>
@@ -3207,7 +3298,7 @@
                   </button>
                 </div>
                 <p class="field__help" id="access-current-password-help">
-                  登录保护启用后，保存账号或密码前需要验证当前密码。
+                  登录保护启用后，保存登录账号、名称或密码前需要验证当前密码。
                 </p>
                 <p
                   class="field__feedback"
@@ -3329,7 +3420,7 @@
                 <use href="#icon-shield-check"></use>
               </svg>
               <p>
-                密码只以加密摘要保存在本机数据库中。修改密码后，其他设备上的登录会话会立即失效。
+                密码只以加密摘要保存在本机数据库中。修改登录账号或密码后，其他设备上的登录会话会立即失效；修改名称不会影响登录。
               </p>
             </div>
           </section>
@@ -3443,31 +3534,35 @@
               </section>
             </div>
           </section>
-        </div>
 
-        <div class="dialog__actions dialog__actions--split">
-          <button
-            class="button button--quiet"
-            type="button"
-            id="test-notifications"
-            hidden
-          >
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <use href="#icon-bell"></use>
-            </svg>
-            <span>测试全部渠道</span>
-          </button>
-          <div class="dialog__action-group">
+          <div class="settings-action-bar">
             <button
               class="button button--quiet"
               type="button"
-              data-close-dialog="settings-dialog"
+              id="test-notifications"
+              hidden
             >
-              取消
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <use href="#icon-bell"></use>
+              </svg>
+              <span>测试全部渠道</span>
             </button>
-            <button class="button button--primary" type="submit" id="save-settings">
-              <span data-save-settings-label>保存常规设置</span>
-            </button>
+            <div class="settings-action-bar__group">
+              <button
+                class="button button--quiet"
+                type="button"
+                data-close-dialog="settings-dialog"
+              >
+                取消
+              </button>
+              <button
+                class="button button--primary"
+                type="submit"
+                id="save-settings"
+              >
+                <span data-save-settings-label>保存常规设置</span>
+              </button>
+            </div>
           </div>
         </div>
       </form>
@@ -3778,6 +3873,18 @@
       </symbol>
       <symbol id="icon-close" viewBox="0 0 24 24">
         <path d="m18 6-12 12M6 6l12 12"></path>
+      </symbol>
+      <symbol id="icon-grip-vertical" viewBox="0 0 24 24">
+        <circle cx="9" cy="5" r="1"></circle>
+        <circle cx="9" cy="12" r="1"></circle>
+        <circle cx="9" cy="19" r="1"></circle>
+        <circle cx="15" cy="5" r="1"></circle>
+        <circle cx="15" cy="12" r="1"></circle>
+        <circle cx="15" cy="19" r="1"></circle>
+      </symbol>
+      <symbol id="icon-arrow-left" viewBox="0 0 24 24">
+        <path d="m12 19-7-7 7-7"></path>
+        <path d="M19 12H5"></path>
       </symbol>
       <symbol id="icon-bell" viewBox="0 0 24 24">
         <path d="M10.27 21a2 2 0 0 0 3.46 0"></path>

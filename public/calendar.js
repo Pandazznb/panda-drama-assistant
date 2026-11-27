@@ -8,6 +8,7 @@ import {
   resolveUpdateEventOccurredAt,
 } from "./calendar-events.js";
 import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
+import { filterCalendarEntries } from "./calendar-filters.js";
 
 (() => {
   "use strict";
@@ -1184,23 +1185,6 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     );
   }
 
-  function filterCalendarEntries(entries) {
-    if (state.typeFilter === "all") {
-      return entries;
-    }
-    if (state.typeFilter === "season") {
-      return entries.filter(
-        (entry) => entry.type === "update" && entry.kind === "season",
-      );
-    }
-    if (state.typeFilter === "episode") {
-      return entries.filter(
-        (entry) => entry.type === "update" && entry.kind === "episode",
-      );
-    }
-    return [];
-  }
-
   function filterPendingEntries(entries) {
     return state.typeFilter === "all" ? entries : [];
   }
@@ -1351,16 +1335,17 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     ].join("");
   }
 
-  function timelineDateKeys(entryIndex, today) {
-    const currentWeekDates = weekDates(today);
-    const futureDates = [...entryIndex.keys()].filter(
-      (dateKey) => dateKey > today && !currentWeekDates.includes(dateKey),
-    );
-    return [...new Set([...currentWeekDates, ...futureDates])]
-      .filter(
-        (dateKey) => bucketForDate(entryIndex, dateKey).entries.length > 0,
-      )
-      .sort();
+  function timelineDateKeys(entryIndex, today, selectedDate) {
+    const selectedWeekStart = startOfWeek(selectedDate);
+    const currentWeekStart = startOfWeek(today);
+    const datedKeys = [...entryIndex.keys()].sort();
+
+    if (selectedWeekStart < currentWeekStart) {
+      const selectedWeekDateSet = new Set(weekDates(selectedDate));
+      return datedKeys.filter((dateKey) => selectedWeekDateSet.has(dateKey));
+    }
+
+    return datedKeys.filter((dateKey) => dateKey >= currentWeekStart);
   }
 
   function renderWeekStrip(entryIndex, visibleTimelineDates) {
@@ -1446,9 +1431,16 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
     }
 
     const today = todayDateKey();
+    const selectedWeekDates = weekDates(state.selectedDate);
+    const selectedWeekIsPast =
+      startOfWeek(state.selectedDate) < startOfWeek(today);
     elements.weekTimeline.setAttribute(
       "aria-label",
-      "当前周有更新的日期，以及未来全部更新",
+      selectedWeekIsPast
+        ? `${formatMonthDay(selectedWeekDates[0])}至${formatMonthDay(
+            selectedWeekDates[6],
+          )}这一周的更新`
+        : "本周及未来有更新的日期",
     );
     elements.weekTimeline.innerHTML = visibleTimelineDates
       .map((dateKey) => {
@@ -1484,8 +1476,11 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
       })
       .join("");
     if (visibleTimelineDates.length === 0) {
-      elements.weekTimeline.innerHTML =
-        '<p class="calendar-week-timeline__empty" role="status">当前周和未来日期暂时都没有短剧更新排期或预约档期。</p>';
+      elements.weekTimeline.innerHTML = `<p class="calendar-week-timeline__empty" role="status">${
+        selectedWeekIsPast
+          ? "所选一周暂时没有短剧更新排期或预约档期。"
+          : "本周及未来日期暂时都没有短剧更新排期或预约档期。"
+      }</p>`;
     }
     elements.weekTimeline.setAttribute("aria-busy", "false");
   }
@@ -1893,11 +1888,15 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
   }
 
   function render() {
-    const visibleEntries = filterCalendarEntries(state.data.entries);
+    const visibleEntries = filterCalendarEntries(
+      state.data.entries,
+      state.typeFilter,
+    );
     const entryIndex = buildEntryIndex(visibleEntries);
     const visibleTimelineDates = timelineDateKeys(
       entryIndex,
       todayDateKey(),
+      state.selectedDate,
     );
     elements.workspace.dataset.view = state.view;
     elements.workspace.dataset.type = state.typeFilter;
@@ -1926,15 +1925,20 @@ import { buildSeasonUpdateSchedule } from "./calendar-schedule.js";
   }
 
   function updateWeekView({ focus = false, scrollTimeline = false } = {}) {
-    const visibleEntries = filterCalendarEntries(state.data.entries);
+    const visibleEntries = filterCalendarEntries(
+      state.data.entries,
+      state.typeFilter,
+    );
     const entryIndex = buildEntryIndex(visibleEntries);
     const visibleTimelineDates = timelineDateKeys(
       entryIndex,
       todayDateKey(),
+      state.selectedDate,
     );
     renderOverview(entryIndex);
     renderPeriodControls();
     renderWeekStrip(entryIndex, visibleTimelineDates);
+    renderWeekTimeline(entryIndex, visibleTimelineDates);
     syncWeekTimelineSelection();
     if (scrollTimeline) {
       scrollWeekTimelineTo(state.selectedDate);

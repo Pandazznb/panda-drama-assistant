@@ -324,8 +324,56 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
     stylesResponse.headers.get("content-security-policy"),
     /unsafe-inline/,
   );
+  const styles = await stylesResponse.text();
+  assert.match(
+    styles,
+    /\.settings-tabs\s*\{[^}]*scrollbar-width:\s*none;[^}]*\}/s,
+  );
+  assert.match(
+    styles,
+    /\.settings-tabs::-webkit-scrollbar\s*\{[^}]*display:\s*none;[^}]*\}/s,
+  );
+  assert.match(
+    styles,
+    /\.settings-tabs\s*\{[^}]*border:\s*0;[^}]*\}/s,
+  );
+  assert.match(
+    styles,
+    /\.settings-tabs\s*\{[^}]*background:\s*transparent;[^}]*border-radius:\s*0;[^}]*\}/s,
+  );
+  assert.match(
+    styles,
+    /\.settings-tab\[aria-selected="true"\]\s*\{[^}]*background:\s*transparent;[^}]*box-shadow:\s*inset 0 -2px 0 var\(--color-accent\);[^}]*\}/s,
+  );
+  assert.match(
+    styles,
+    /\.dialog--settings \.dialog__header\s*\{[^}]*border-bottom:\s*0;[^}]*\}/s,
+  );
+  assert.match(
+    styles,
+    /\.dialog--settings \.dialog__header \.icon-button\s*\{[^}]*border-radius:\s*50%;[^}]*\}/s,
+  );
   const page = await pageResponse.text();
   assert.match(page, /短剧助手/);
+  assert.match(page, /id="settings-notification-items"/);
+  assert.match(page, /id="settings-notification-empty"/);
+  assert.match(page, /id="settings-add-notification"/);
+  assert.match(
+    page,
+    /<div\s+class="notification-item-list"\s+id="settings-notification-items"\s*><\/div>/,
+  );
+  const notificationEmptyStart = page.indexOf(
+    'id="settings-notification-empty"',
+  );
+  const notificationEmptyTagStart = page.lastIndexOf(
+    "<div",
+    notificationEmptyStart,
+  );
+  const notificationEmptyTagEnd = page.indexOf(">", notificationEmptyStart);
+  assert.doesNotMatch(
+    page.slice(notificationEmptyTagStart, notificationEmptyTagEnd),
+    /\bhidden\b/,
+  );
   assert.equal((page.match(/data-theme-toggle/g) || []).length, 1);
   assert.doesNotMatch(page, /data-theme-choice=/);
   assert.match(
@@ -345,8 +393,30 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /id="open-add-dialog"/);
   assert.match(page, /id="access-current-account-name"/);
   assert.match(page, /id="access-current-account-meta"/);
-  assert.match(page, /<label for="access-username">用户名<\/label>/);
-  assert.equal((page.match(/data-settings-tab=/g) || []).length, 6);
+  assert.match(page, /<label for="access-account">登录账号<\/label>/);
+  assert.match(page, /<label for="access-username">名称<\/label>/);
+  assert.ok(
+    page.indexOf('id="access-username"') < page.indexOf('id="access-account"'),
+  );
+  const settingsDialogStart = page.indexOf('id="settings-dialog"');
+  const settingsDialog = page.slice(
+    settingsDialogStart,
+    page.indexOf("</dialog>", settingsDialogStart),
+  );
+  assert.match(settingsDialog, /class="settings-action-bar"/);
+  assert.match(
+    settingsDialog,
+    /<\/div>\s*<\/section>\s*<div class="settings-action-bar">/,
+  );
+  assert.doesNotMatch(
+    settingsDialog,
+    /class="dialog__actions dialog__actions--split"/,
+  );
+  assert.equal((page.match(/data-settings-tab=/g) || []).length, 5);
+  assert.match(
+    settingsDialog,
+    /class="dialog__title-group"[\s\S]*?class="dialog__title-icon"[\s\S]*?#icon-settings[\s\S]*?<h2 id="settings-title">设置<\/h2>/,
+  );
   assert.match(page, /data-settings-tab="account"/);
   assert.match(page, /data-settings-tab="security"/);
   assert.match(page, /data-settings-tab="system"/);
@@ -364,12 +434,54 @@ test("HTTP app serves the dashboard and starts with an empty state", async (t) =
   assert.match(page, /id="settings-account-sync-details"/);
   assert.doesNotMatch(page, /id="settings-account-details"/);
   assert.match(page, /同步明细/);
+  const notificationPanelStart = page.indexOf(
+    'data-settings-panel="notification"',
+  );
+  const notificationPanel = page.slice(
+    notificationPanelStart,
+    page.indexOf(
+      'data-settings-panel="account"',
+      notificationPanelStart,
+    ),
+  );
+  assert.match(
+    notificationPanel,
+    /id="settings-notification-overview"/,
+  );
+  assert.match(
+    notificationPanel,
+    /id="settings-notification-items"/,
+  );
+  assert.match(
+    notificationPanel,
+    /id="settings-notification-editor"/,
+  );
+  assert.match(
+    notificationPanel,
+    /id="settings-notification-template-cards"/,
+  );
+  assert.match(
+    notificationPanel,
+    /id="settings-notification-template-editors"/,
+  );
+  assert.match(
+    notificationPanel,
+    /id="settings-notification-template-forms"/,
+  );
+  assert.ok(
+    notificationPanel.indexOf("通知渠道") <
+      notificationPanel.indexOf("通知模板"),
+  );
+  assert.ok(
+    notificationPanel.indexOf("通知模板") <
+      notificationPanel.indexOf("发送代理"),
+  );
   const templateSectionStart = page.indexOf(
-    'data-settings-panel="templates"',
+    'id="settings-notification-template-source"',
   );
   const templateSection = page.slice(
     templateSectionStart,
-    page.indexOf("</section>", templateSectionStart),
+    page.indexOf('id="settings-panel-security"', templateSectionStart),
   );
   for (const type of ["detailed", "batch", "reminder"]) {
     for (const field of [
@@ -717,7 +829,7 @@ test("cover cache endpoint serves immutable images and retries without caching e
 
   const workerResponse = await fetch(`${harness.origin}/sw.js`);
   const worker = await workerResponse.text();
-  assert.match(worker, /shell-v64/);
+  assert.match(worker, /shell-v73/);
   assert.match(worker, /"\/cover-image\.js"/);
 });
 
@@ -740,6 +852,40 @@ test("home title follows the authenticated access username", async () => {
   assert.match(
     appScript,
     /void loadAccessSecurityStatus\(\);\s*void loadDashboard\(\)\.then/,
+  );
+});
+
+test("notification settings reuse channel markup when the tab is reopened", async () => {
+  const [appScript, styles] = await Promise.all([
+    fs.readFile(path.join(ROOT_DIR, "public", "app.js"), "utf8"),
+    fs.readFile(path.join(ROOT_DIR, "public", "styles.css"), "utf8"),
+  ]);
+  const renderSource = appScript.match(
+    /(function renderNotificationItems\(items\) \{[\s\S]*?\n\})/,
+  )?.[1];
+  const setTabSource = appScript.match(
+    /(function setSettingsTab\([\s\S]*?\n\})/,
+  )?.[1];
+  const tabListenerSource = appScript.match(
+    /(elements\.settingsTabs\.forEach\([\s\S]*?\n\}\);)/,
+  )?.[1];
+
+  assert.ok(renderSource);
+  assert.ok(setTabSource);
+  assert.ok(tabListenerSource);
+  assert.match(
+    renderSource,
+    /if \(markup !== appState\.notificationItemsMarkup\) \{/,
+  );
+  assert.doesNotMatch(tabListenerSource, /showNotificationOverview\(\)/);
+  assert.match(
+    setTabSource,
+    /if \(nextTab === "notification" && previousTab !== "notification"\) \{\s*showNotificationOverview\(\);/,
+  );
+  assert.doesNotMatch(setTabSource, /scrollIntoView\(/);
+  assert.doesNotMatch(
+    styles,
+    /\.notification-settings-view:not\(\[hidden\]\)[\s\S]{0,80}animation:/,
   );
 });
 
@@ -1333,7 +1479,7 @@ test("settings API saves a custom Cron schedule and all notification channels wi
   assert.equal(JSON.stringify(state).includes("proxy-pass"), false);
 
   const onDisk = await harness.store.read();
-  assert.equal(onDisk.version, 14);
+  assert.equal(onDisk.version, 15);
   assert.equal(onDisk.settings.checkCron, "0 0 * * 0");
   assert.equal(onDisk.settings.staleCompletionDays, 120);
   assert.equal(onDisk.settings.discoveryReminderDurationMinutes, 1440);
@@ -2121,6 +2267,7 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(script, /subscriptionPlaceholderSeasons/);
   assert.match(script, /reservationPlaceholderId/);
   assert.match(script, /buildSeasonUpdateSchedule/);
+  assert.match(script, /filterCalendarEntries/);
   assert.match(script, /estimatedUpdateEntries/);
   assert.match(script, /bucket\.estimatedUpdates/);
   assert.match(script, /calendar-date-dot--estimated/);
@@ -2140,11 +2287,29 @@ test("calendar page is served and linked from every primary page", async (t) => 
     /function movePeriod[\s\S]*?state\.view === "week"[\s\S]*?updateWeekView\(\)/,
   );
   assert.match(script, /timelineDateKeys/);
-  assert.match(script, /const currentWeekDates = weekDates\(today\)/);
-  assert.match(script, /dateKey > today/);
+  assert.match(
+    script,
+    /function timelineDateKeys\(entryIndex, today, selectedDate\)/,
+  );
+  assert.match(script, /const selectedWeekStart = startOfWeek\(selectedDate\)/);
+  assert.match(script, /const currentWeekStart = startOfWeek\(today\)/);
+  assert.match(script, /selectedWeekStart < currentWeekStart/);
+  assert.match(
+    script,
+    /return datedKeys\.filter\(\(dateKey\) => dateKey >= currentWeekStart\)/,
+  );
+  assert.doesNotMatch(
+    script,
+    /return datedKeys\.filter\(\(dateKey\) => dateKey >= today\)/,
+  );
+  assert.match(
+    script,
+    /function updateWeekView[\s\S]*?renderWeekTimeline\(entryIndex, visibleTimelineDates\)/,
+  );
   assert.match(script, /data-timeline-date/);
   assert.match(script, /scrollIntoView/);
-  assert.match(script, /当前周和未来日期暂时都没有短剧更新排期或预约档期/);
+  assert.match(script, /所选一周暂时没有短剧更新排期或预约档期/);
+  assert.match(script, /本周及未来日期暂时都没有短剧更新排期或预约档期/);
   assert.doesNotMatch(script, /WEEK_SECTION_OFFSETS/);
   assert.doesNotMatch(script, /data-week-offset/);
 
@@ -2201,6 +2366,18 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(scheduleScript, /confirmedTotalEpisodeCount/);
   assert.match(scheduleScript, /seasonIsCompleted/);
 
+  const filterScriptResponse = await fetch(
+    `${harness.origin}/calendar-filters.js`,
+  );
+  assert.equal(filterScriptResponse.status, 200);
+  assert.match(
+    filterScriptResponse.headers.get("content-type"),
+    /^text\/javascript/,
+  );
+  const filterScript = await filterScriptResponse.text();
+  assert.match(filterScript, /placeholder-schedule/);
+  assert.match(filterScript, /isEpisodeCalendarEntry/);
+
   for (const pathname of ["/", "/rankings", "/filters", "/logs"]) {
     const response = await fetch(`${harness.origin}${pathname}`);
     assert.equal(response.status, 200);
@@ -2216,6 +2393,7 @@ test("calendar page is served and linked from every primary page", async (t) => 
   assert.match(serviceWorker, /"\/calendar"/);
   assert.match(serviceWorker, /"\/calendar\.js"/);
   assert.match(serviceWorker, /"\/calendar-events\.js"/);
+  assert.match(serviceWorker, /"\/calendar-filters\.js"/);
   assert.match(serviceWorker, /"\/calendar-reservations\.js"/);
   assert.match(serviceWorker, /"\/calendar-schedule\.js"/);
   assert.match(serviceWorker, /"\/calendar\.css"/);
@@ -2968,7 +3146,7 @@ test("account import validates selection count and series IDs", async (t) => {
   );
 });
 
-test("access credentials protect pages and APIs across login, password changes, and logout", async (t) => {
+test("access credentials keep login account, display username, and password independent", async (t) => {
   const harness = await startHarness(t);
   const loginPage = await fetch(`${harness.origin}/login`);
   assert.equal(loginPage.status, 200);
@@ -2983,13 +3161,16 @@ test("access credentials protect pages and APIs across login, password changes, 
   );
 
   const initialPassword = "correct-horse";
+  const initialAccount = "owner-login";
+  const initialUsername = "owner-display";
   const setupResponse = await fetch(
     `${harness.origin}/api/access/credentials`,
     {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        username: "owner",
+        account: initialAccount,
+        username: initialUsername,
         currentPassword: "",
         newPassword: initialPassword,
       }),
@@ -2997,7 +3178,8 @@ test("access credentials protect pages and APIs across login, password changes, 
   );
   assert.equal(setupResponse.status, 200);
   const setupPayload = await setupResponse.json();
-  assert.equal(setupPayload.credentials.username, "owner");
+  assert.equal(setupPayload.credentials.account, initialAccount);
+  assert.equal(setupPayload.credentials.username, initialUsername);
   assert.equal(setupPayload.credentials.configured, true);
   assert.match(setupResponse.headers.get("set-cookie"), /HttpOnly/);
 
@@ -3018,8 +3200,8 @@ test("access credentials protect pages and APIs across login, password changes, 
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      username: "owner",
-      password: "wrong-password",
+      account: initialUsername,
+      password: initialPassword,
     }),
   });
   assert.equal(invalidLogin.status, 401);
@@ -3028,15 +3210,32 @@ test("access credentials protect pages and APIs across login, password changes, 
     "ACCESS_LOGIN_INVALID",
   );
 
+  const invalidPassword = await fetch(`${harness.origin}/api/access/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      account: initialAccount,
+      password: "wrong-password",
+    }),
+  });
+  assert.equal(invalidPassword.status, 401);
+  assert.equal(
+    (await invalidPassword.json()).error.code,
+    "ACCESS_LOGIN_INVALID",
+  );
+
   const loginResponse = await fetch(`${harness.origin}/api/access/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      username: "owner",
+      account: initialAccount,
       password: initialPassword,
     }),
   });
   assert.equal(loginResponse.status, 200);
+  const loginPayload = await loginResponse.json();
+  assert.equal(loginPayload.account, initialAccount);
+  assert.equal(loginPayload.username, initialUsername);
   const oldCookie = sessionCookie(loginResponse);
   assert.ok(oldCookie);
 
@@ -3048,9 +3247,25 @@ test("access credentials protect pages and APIs across login, password changes, 
     headers: { cookie: oldCookie },
   });
   assert.equal(authenticatedState.status, 200);
+  const statusResponse = await fetch(
+    `${harness.origin}/api/access/status`,
+  );
+  const unauthStatus = await statusResponse.json();
+  assert.equal(unauthStatus.authenticated, false);
+  assert.equal(unauthStatus.account, "");
+  assert.equal(unauthStatus.username, "");
+  const authenticatedStatus = await fetch(
+    `${harness.origin}/api/access/status`,
+    {
+      headers: { cookie: oldCookie },
+    },
+  );
+  const statusPayload = await authenticatedStatus.json();
+  assert.equal(statusPayload.account, initialAccount);
+  assert.equal(statusPayload.username, initialUsername);
 
-  const nextPassword = "next-correct-horse";
-  const updateResponse = await fetch(
+  const nextUsername = "next-display";
+  const usernameResponse = await fetch(
     `${harness.origin}/api/access/credentials`,
     {
       method: "PATCH",
@@ -3059,32 +3274,138 @@ test("access credentials protect pages and APIs across login, password changes, 
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        username: "owner-next",
+        account: initialAccount,
+        username: nextUsername,
         currentPassword: initialPassword,
-        newPassword: nextPassword,
+        newPassword: "",
       }),
     },
   );
-  assert.equal(updateResponse.status, 200);
-  const updatePayload = await updateResponse.json();
-  assert.equal(updatePayload.credentials.username, "owner-next");
-  assert.equal(updatePayload.passwordChanged, true);
-  const nextCookie = sessionCookie(updateResponse);
-  assert.ok(nextCookie);
+  assert.equal(usernameResponse.status, 200);
+  assert.equal(usernameResponse.headers.get("set-cookie"), null);
+  const usernamePayload = await usernameResponse.json();
+  assert.equal(usernamePayload.accountChanged, false);
+  assert.equal(usernamePayload.usernameChanged, true);
+  assert.equal(usernamePayload.passwordChanged, false);
+  assert.equal(usernamePayload.credentials.account, initialAccount);
+  assert.equal(usernamePayload.credentials.username, nextUsername);
+
+  const sessionAfterUsernameChange = await fetch(
+    `${harness.origin}/api/state`,
+    {
+      headers: { cookie: oldCookie },
+    },
+  );
+  assert.equal(sessionAfterUsernameChange.status, 200);
+  const usernameStatusResponse = await fetch(
+    `${harness.origin}/api/access/status`,
+    {
+      headers: { cookie: oldCookie },
+    },
+  );
+  const usernameStatus = await usernameStatusResponse.json();
+  assert.equal(usernameStatus.account, initialAccount);
+  assert.equal(usernameStatus.username, nextUsername);
+
+  const nextAccount = "next-login";
+  const accountResponse = await fetch(
+    `${harness.origin}/api/access/credentials`,
+    {
+      method: "PATCH",
+      headers: {
+        cookie: oldCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        account: nextAccount,
+        username: nextUsername,
+        currentPassword: initialPassword,
+        newPassword: "",
+      }),
+    },
+  );
+  assert.equal(accountResponse.status, 200);
+  const accountPayload = await accountResponse.json();
+  assert.equal(accountPayload.accountChanged, true);
+  assert.equal(accountPayload.usernameChanged, false);
+  assert.equal(accountPayload.passwordChanged, false);
+  const accountCookie = sessionCookie(accountResponse);
+  assert.ok(accountCookie);
 
   const oldSessionState = await fetch(`${harness.origin}/api/state`, {
     headers: { cookie: oldCookie },
   });
   assert.equal(oldSessionState.status, 401);
-  const nextSessionState = await fetch(`${harness.origin}/api/state`, {
-    headers: { cookie: nextCookie },
+  const accountSessionState = await fetch(`${harness.origin}/api/state`, {
+    headers: { cookie: accountCookie },
   });
-  assert.equal(nextSessionState.status, 200);
+  assert.equal(accountSessionState.status, 200);
+
+  const oldAccountLogin = await fetch(`${harness.origin}/api/access/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      account: initialAccount,
+      password: initialPassword,
+    }),
+  });
+  assert.equal(oldAccountLogin.status, 401);
+
+  const nextAccountLogin = await fetch(
+    `${harness.origin}/api/access/login`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        account: nextAccount,
+        password: initialPassword,
+      }),
+    },
+  );
+  assert.equal(nextAccountLogin.status, 200);
+  assert.equal((await nextAccountLogin.json()).username, nextUsername);
+
+  const nextPassword = "next-correct-horse";
+  const passwordResponse = await fetch(
+    `${harness.origin}/api/access/credentials`,
+    {
+      method: "PATCH",
+      headers: {
+        cookie: accountCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        account: nextAccount,
+        username: nextUsername,
+        currentPassword: initialPassword,
+        newPassword: nextPassword,
+      }),
+    },
+  );
+  assert.equal(passwordResponse.status, 200);
+  const passwordPayload = await passwordResponse.json();
+  assert.equal(passwordPayload.accountChanged, false);
+  assert.equal(passwordPayload.usernameChanged, false);
+  assert.equal(passwordPayload.passwordChanged, true);
+  const passwordCookie = sessionCookie(passwordResponse);
+  assert.ok(passwordCookie);
+
+  const accountSessionAfterPassword = await fetch(
+    `${harness.origin}/api/state`,
+    {
+      headers: { cookie: accountCookie },
+    },
+  );
+  assert.equal(accountSessionAfterPassword.status, 401);
+  const passwordSessionState = await fetch(`${harness.origin}/api/state`, {
+    headers: { cookie: passwordCookie },
+  });
+  assert.equal(passwordSessionState.status, 200);
 
   const logoutResponse = await fetch(`${harness.origin}/api/access/logout`, {
     method: "POST",
     headers: {
-      cookie: nextCookie,
+      cookie: passwordCookie,
       "content-type": "application/json",
     },
     body: "{}",
@@ -3092,7 +3413,7 @@ test("access credentials protect pages and APIs across login, password changes, 
   assert.equal(logoutResponse.status, 200);
   assert.match(logoutResponse.headers.get("set-cookie"), /Max-Age=0/);
   const loggedOutState = await fetch(`${harness.origin}/api/state`, {
-    headers: { cookie: nextCookie },
+    headers: { cookie: passwordCookie },
   });
   assert.equal(loggedOutState.status, 401);
 
@@ -3100,11 +3421,14 @@ test("access credentials protect pages and APIs across login, password changes, 
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      username: "owner-next",
+      account: nextAccount,
       password: nextPassword,
     }),
   });
   assert.equal(nextLogin.status, 200);
+  const nextLoginPayload = await nextLogin.json();
+  assert.equal(nextLoginPayload.account, nextAccount);
+  assert.equal(nextLoginPayload.username, nextUsername);
   assert.ok(sessionCookie(nextLogin));
 });
 
@@ -3116,6 +3440,7 @@ test("repeated HTTP access login failures return retry information", async (t) =
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        account: "owner",
         username: "owner",
         currentPassword: "",
         newPassword: "correct-horse",
@@ -3129,7 +3454,7 @@ test("repeated HTTP access login failures return retry information", async (t) =
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        username: "owner",
+        account: "owner",
         password: "wrong-password",
       }),
     });
@@ -3142,7 +3467,7 @@ test("repeated HTTP access login failures return retry information", async (t) =
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        username: "owner",
+        account: "owner",
         password: "correct-horse",
       }),
     },

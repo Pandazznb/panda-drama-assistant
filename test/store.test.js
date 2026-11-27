@@ -131,6 +131,72 @@ test("automatic SQLite migrations preserve data and create a secure backup", asy
   }
 });
 
+test("SQLite v2 databases automatically add persistent access sessions", async () => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "hongguo-session-migration-"),
+  );
+  const databaseFile = path.join(directory, "state.sqlite3");
+  const database = new DatabaseSync(databaseFile);
+
+  try {
+    database.exec(`
+      CREATE TABLE access_auth (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        payload TEXT NOT NULL
+      );
+      INSERT INTO access_auth (id, payload)
+      VALUES (1, '{"username":"owner"}');
+      PRAGMA user_version = 2;
+    `);
+
+    const result = await runSqliteMigrations(database, {
+      databaseFile,
+    });
+
+    assert.equal(result.fromVersion, 2);
+    assert.equal(result.toVersion, 3);
+    assert.ok(result.backupPath);
+    assert.equal(
+      database.prepare("PRAGMA user_version").get().user_version,
+      3,
+    );
+    assert.equal(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'access_sessions'",
+        )
+        .get().count,
+      1,
+    );
+    assert.equal(
+      database
+        .prepare("SELECT payload FROM access_auth WHERE id = 1")
+        .get().payload,
+      '{"username":"owner"}',
+    );
+
+    const backup = new DatabaseSync(result.backupPath);
+    try {
+      assert.equal(
+        backup.prepare("PRAGMA user_version").get().user_version,
+        2,
+      );
+      assert.equal(
+        backup
+          .prepare(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'access_sessions'",
+          )
+          .get().count,
+        0,
+      );
+    } finally {
+      backup.close();
+    }
+  } finally {
+    database.close();
+  }
+});
+
 test("a failed automatic SQLite migration rolls back and keeps the old version", async () => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "hongguo-migration-failure-"),
@@ -1018,7 +1084,7 @@ test("normalizeState clears a verified legacy completion without a finale marker
     ],
   });
   const subscription = normalized.subscriptions[0];
-  assert.equal(normalized.version, 14);
+  assert.equal(normalized.version, 15);
   assert.equal(subscription.seriesStatus, "unknown");
   assert.match(subscription.seriesStatusReason, /系列完结标识/);
   assert.equal(subscription.completedAt, null);
@@ -1189,7 +1255,7 @@ test("store persists a legacy state migration and completion event cleanup", asy
   const store = new JsonStateStore(filePath);
   try {
     const state = await store.init();
-    assert.equal(state.version, 14);
+    assert.equal(state.version, 15);
     assert.deepEqual(
       state.events.map((event) => event.id),
       ["evt_disk_episode"],

@@ -12,6 +12,7 @@ import {
   buildWeComAppTokenRequest,
   buildWeComRequest,
   describeNotificationSettings,
+  enabledNotificationChannels,
   normalizeNotificationSettings,
   normalizeProxyUrl,
   normalizeWeComAppAgentId,
@@ -111,6 +112,228 @@ test("notification settings migrate a legacy Bark key and never expose secrets",
   assert.equal(serialized.includes("wecom-app-access-token-123"), false);
   assert.equal(serialized.includes("ding-access_TOKEN-123"), false);
   assert.equal(serialized.includes("SEC0123456789+/abcdef"), false);
+});
+
+test("fresh notification settings have no visible notification items", () => {
+  const settings = normalizeNotificationSettings();
+  assert.deepEqual(settings.items, []);
+});
+
+test("legacy configured notification channels all migrate into items", () => {
+  const settings = normalizeNotificationSettings(ALL_CHANNELS);
+  assert.deepEqual(
+    settings.items.map((item) => item.type),
+    ["bark", "ntfy", "telegram", "wecom", "wecomApp", "dingtalk"],
+  );
+  assert.equal(settings.items.every((item) => item.enabled), true);
+});
+
+test("legacy channel settings merge into an existing empty item list", () => {
+  const settings = normalizeNotificationSettings({
+    items: [],
+    bark: {
+      enabled: true,
+      key: "legacy_BARK-key",
+    },
+  });
+
+  assert.deepEqual(settings.items, [
+    {
+      id: "legacy-bark",
+      type: "bark",
+      enabled: true,
+      key: "legacy_BARK-key",
+    },
+  ]);
+});
+
+test("an equivalent item prevents a legacy channel from being duplicated", () => {
+  const settings = normalizeNotificationSettings({
+    items: [
+      {
+        id: "bark-existing",
+        type: "bark",
+        enabled: true,
+        key: "legacy_BARK-key",
+      },
+    ],
+    bark: {
+      enabled: true,
+      key: "legacy_BARK-key",
+    },
+  });
+
+  assert.equal(settings.items.length, 1);
+  assert.equal(settings.items[0].id, "bark-existing");
+});
+
+test("many notification items retain their order, ids, and blank secrets", () => {
+  const items = Array.from({ length: 24 }, (_, index) => ({
+    id: `bark-instance-${index + 1}`,
+    type: "bark",
+    enabled: false,
+    key: `bark_KEY_${index + 1}`,
+  }));
+  const saved = applyNotificationSettingsPatch(normalizeNotificationSettings(), {
+    items,
+  });
+  assert.equal(saved.items.length, 24);
+  assert.deepEqual(
+    saved.items.map((item) => item.id),
+    items.map((item) => item.id),
+  );
+
+  const retained = saved.items
+    .filter((item) => item.id !== "bark-instance-12")
+    .map(({ id, type, enabled }) => ({ id, type, enabled }));
+  const resaved = applyNotificationSettingsPatch(saved, {
+    items: retained,
+  });
+  assert.equal(resaved.items.length, 23);
+  assert.equal(
+    resaved.items.some((item) => item.id === "bark-instance-12"),
+    false,
+  );
+  assert.equal(
+    resaved.items.find((item) => item.id === "bark-instance-23").key,
+    "bark_KEY_23",
+  );
+});
+
+test("notification item names persist, trim, clear, and keep item order", () => {
+  const saved = applyNotificationSettingsPatch(
+    normalizeNotificationSettings(),
+    {
+      items: [
+        {
+          id: "bark-work",
+          type: "bark",
+          name: "  工作手机  ",
+          enabled: false,
+        },
+        {
+          id: "ntfy-personal",
+          type: "ntfy",
+          name: "个人提醒",
+          enabled: false,
+        },
+      ],
+    },
+  );
+
+  assert.deepEqual(
+    saved.items.map(({ id, name }) => ({ id, name })),
+    [
+      { id: "bark-work", name: "工作手机" },
+      { id: "ntfy-personal", name: "个人提醒" },
+    ],
+  );
+
+  const reordered = applyNotificationSettingsPatch(saved, {
+    items: [
+      {
+        id: "ntfy-personal",
+        type: "ntfy",
+        name: "个人提醒",
+        enabled: false,
+      },
+      {
+        id: "bark-work",
+        type: "bark",
+        name: "",
+        enabled: false,
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    reordered.items.map(({ id, name }) => ({ id, name })),
+    [
+      { id: "ntfy-personal", name: "个人提醒" },
+      { id: "bark-work", name: undefined },
+    ],
+  );
+});
+
+test("an empty notification item list clears every saved notification", () => {
+  const saved = applyNotificationSettingsPatch(normalizeNotificationSettings(), {
+    items: [
+      {
+        id: "bark-first",
+        type: "bark",
+        enabled: true,
+        key: "bark_KEY_first",
+      },
+    ],
+  });
+  const cleared = applyNotificationSettingsPatch(saved, { items: [] });
+  assert.deepEqual(cleared.items, []);
+  assert.equal(cleared.bark.enabled, false);
+  assert.equal(cleared.bark.key, "");
+  assert.deepEqual(normalizeNotificationSettings(cleared).items, []);
+});
+
+test("enabled notification type discovery is deduplicated", () => {
+  const settings = normalizeNotificationSettings({
+    items: [
+      {
+        id: "bark-first",
+        type: "bark",
+        enabled: true,
+        key: "bark_KEY_first",
+      },
+      {
+        id: "bark-second",
+        type: "bark",
+        enabled: true,
+        key: "bark_KEY_second",
+      },
+      {
+        id: "ntfy-first",
+        type: "ntfy",
+        enabled: true,
+        topic: "notification-topic",
+      },
+    ],
+  });
+  assert.deepEqual(enabledNotificationChannels(settings), ["bark", "ntfy"]);
+});
+
+test("multiple enabled instances of one notification type send separately", async () => {
+  const calls = [];
+  const settings = normalizeNotificationSettings({
+    items: [
+      {
+        id: "bark-first",
+        type: "bark",
+        enabled: true,
+        key: "bark_KEY_first",
+      },
+      {
+        id: "bark-second",
+        type: "bark",
+        enabled: true,
+        key: "bark_KEY_second",
+      },
+    ],
+  });
+  const result = await sendNotificationChannels(
+    settings,
+    { title: "测试", body: "正文" },
+    { fetchImpl: successfulFetch(calls) },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.total, 2);
+  assert.deepEqual(
+    result.results.map((item) => item.itemId),
+    ["bark-first", "bark-second"],
+  );
+  assert.deepEqual(
+    result.results.map((item) => item.label),
+    ["Bark 1", "Bark 2"],
+  );
+  assert.equal(calls.length, 2);
 });
 
 test("notification proxy accepts HTTP(S) origins and masks credentials", () => {

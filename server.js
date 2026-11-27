@@ -105,6 +105,13 @@ const STATIC_FILES = new Map([
     },
   ],
   [
+    "/calendar-filters.js",
+    {
+      file: "calendar-filters.js",
+      type: "text/javascript; charset=utf-8",
+    },
+  ],
+  [
     "/calendar-reservations.js",
     {
       file: "calendar-reservations.js",
@@ -861,20 +868,21 @@ export function createRequestHandler(
           const body = (await readJsonBody(request)) || {};
           const result = await accessAuth.login({
             request,
-            username: body.username,
+            account: body.account ?? body.username,
             password: body.password,
           });
           await recordSystemLog(systemLog, {
             category: "security",
             action: "access.login.succeeded",
             level: "success",
-            message: `应用账号 ${result.username} 登录成功。`,
+            message: `应用登录账号 ${result.account} 登录成功。`,
           });
           sendJson(
             response,
             200,
             {
               ok: true,
+              account: result.account,
               username: result.username,
             },
             { "set-cookie": result.cookie },
@@ -901,7 +909,7 @@ export function createRequestHandler(
         request.method === "POST" &&
         pathname === "/api/access/logout"
       ) {
-        const cookie = accessAuth.logout(request);
+        const cookie = await accessAuth.logout(request);
         if (access.authenticated) {
           await recordSystemLog(systemLog, {
             category: "security",
@@ -962,17 +970,28 @@ export function createRequestHandler(
         const body = (await readJsonBody(request)) || {};
         const result = await accessAuth.updateCredentials({
           request,
-          username: body.username,
+          account: body.account ?? body.username,
+          username: body.username ?? body.account,
           currentPassword: body.currentPassword,
           newPassword: body.newPassword,
         });
+        const changes = [];
+        if (result.accountChanged) {
+          changes.push(`登录账号已更新为 ${result.account}`);
+        }
+        if (result.usernameChanged) {
+          changes.push(`名称已更新为 ${result.username}`);
+        }
+        if (result.passwordChanged) {
+          changes.push("登录密码已修改");
+        }
         await recordSystemLog(systemLog, {
           category: "security",
           action: "access.credentials.updated",
           level: "success",
-          message: result.passwordChanged
-            ? `应用登录账号已更新为 ${result.credentials.username}，密码已修改。`
-            : `应用登录账号已更新为 ${result.credentials.username}。`,
+          message: changes.length
+            ? `应用安全设置已更新：${changes.join("，")}。`
+            : "应用安全设置已保存。",
         });
         sendJson(
           response,
@@ -980,9 +999,11 @@ export function createRequestHandler(
           {
             ok: true,
             credentials: result.credentials,
+            accountChanged: result.accountChanged,
+            usernameChanged: result.usernameChanged,
             passwordChanged: result.passwordChanged,
           },
-          { "set-cookie": result.cookie },
+          result.cookie ? { "set-cookie": result.cookie } : {},
         );
         return;
       }

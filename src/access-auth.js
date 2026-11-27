@@ -15,8 +15,8 @@ const DEFAULT_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_LOGIN_FAILURES = 5;
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_MAX_LENGTH = 128;
-const USERNAME_MIN_LENGTH = 3;
-const USERNAME_MAX_LENGTH = 64;
+const IDENTIFIER_MIN_LENGTH = 3;
+const IDENTIFIER_MAX_LENGTH = 64;
 const SCRYPT_KEY_LENGTH = 64;
 const SCRYPT_PARAMETERS = Object.freeze({
   N: 16_384,
@@ -36,20 +36,49 @@ function accessError(statusCode, code, message, retryAfterSeconds = 0) {
   return error;
 }
 
-function normalizeUsername(value) {
-  const username = String(value ?? "").trim();
+function normalizeIdentifier(value, { label, code }) {
+  const identifier = String(value ?? "").trim();
   if (
-    username.length < USERNAME_MIN_LENGTH ||
-    username.length > USERNAME_MAX_LENGTH ||
-    /\s/.test(username)
+    identifier.length < IDENTIFIER_MIN_LENGTH ||
+    identifier.length > IDENTIFIER_MAX_LENGTH ||
+    /\s/.test(identifier)
   ) {
     throw accessError(
       400,
-      "INVALID_ACCESS_USERNAME",
-      `用户名需为 ${USERNAME_MIN_LENGTH}-${USERNAME_MAX_LENGTH} 个字符，且不能包含空格。`,
+      code,
+      `${label}需为 ${IDENTIFIER_MIN_LENGTH}-${IDENTIFIER_MAX_LENGTH} 个字符，且不能包含空格。`,
     );
   }
-  return username;
+  return identifier;
+}
+
+function normalizeAccount(value) {
+  return normalizeIdentifier(value, {
+    label: "登录账号",
+    code: "INVALID_ACCESS_ACCOUNT",
+  });
+}
+
+function normalizeUsername(value) {
+  return normalizeIdentifier(value, {
+    label: "名称",
+    code: "INVALID_ACCESS_USERNAME",
+  });
+}
+
+function normalizeCredentials(credentials) {
+  if (!credentials) {
+    return null;
+  }
+  const legacyUsername = String(credentials.username || "").trim();
+  const account = String(credentials.account || legacyUsername).trim();
+  const username = String(credentials.username || account).trim();
+  return {
+    ...credentials,
+    version: 2,
+    account,
+    username,
+  };
 }
 
 function normalizePassword(value, { required = true, label = "新密码" } = {}) {
@@ -112,6 +141,12 @@ function cookieString(request, value, maxAgeSeconds) {
 function passwordKey(username) {
   return createHash("sha256")
     .update(String(username || "").trim().toLowerCase())
+    .digest("hex");
+}
+
+function sessionTokenHash(sessionId) {
+  return createHash("sha256")
+    .update(String(sessionId || ""))
     .digest("hex");
 }
 
@@ -178,12 +213,14 @@ function credentialSummary(credentials) {
   if (!credentials) {
     return {
       configured: false,
+      account: "",
       username: "",
       updatedAt: null,
     };
   }
   return {
     configured: true,
+    account: credentials.account,
     username: credentials.username,
     updatedAt: credentials.updatedAt || null,
   };
@@ -208,12 +245,11 @@ export class AccessAuthService {
       Math.trunc(Number(maxLoginFailures) || 0),
     );
     this.now = now;
-    this.sessions = new Map();
     this.loginFailures = new Map();
   }
 
   async credentials() {
-    return this.store.getAccessAuth();
+    return normalizeCredentials(await this.store.getAccessAuth());
   }
 
   sessionIdFromRequest(request) {
@@ -222,17 +258,18 @@ export class AccessAuthService {
     );
   }
 
-  authenticatedSessionId(request) {
+  async authenticatedSessionId(request) {
     const sessionId = this.sessionIdFromRequest(request);
     if (!sessionId) {
       return "";
     }
-    const session = this.sessions.get(sessionId);
+    const tokenHash = sessionTokenHash(sessionId);
+    const session = await this.store.getAccessSession(tokenHash);
     if (!session) {
       return "";
     }
     if (session.expiresAt <= this.now()) {
-      this.sessions.delete(sessionId);
+      await this.store.deleteAccessSession(tokenHash);
       return "";
     }
     return sessionId;
@@ -241,10 +278,12 @@ export class AccessAuthService {
   async status(request) {
     const credentials = await this.credentials();
     const authenticated =
-      !credentials || Boolean(this.authenticatedSessionId(request));
+      !credentials ||
+      Boolean(await this.authenticatedSessionId(request));
     return {
       configured: Boolean(credentials),
       authenticated,
+      account: authenticated ? credentials?.account || "" : "",
       username: authenticated ? credentials?.username || "" : "",
       updatedAt: authenticated ? credentials?.updatedAt || null : null,
     };
@@ -255,7 +294,9 @@ export class AccessAuthService {
     return {
       configured: Boolean(credentials),
       authenticated:
-        !credentials || Boolean(this.authenticatedSessionId(request)),
+        !credentials ||
+        Boolean(await this.authenticatedSessionId(request)),
+      account: credentials?.account || "",
       username: credentials?.username || "",
     };
   }
@@ -335,10 +376,14 @@ export class AccessAuthService {
     }
   }
 
-  createSession(request) {
+  async createSession(request) {
     const sessionId = randomBytes(32).toString("base64url");
-    this.sessions.set(sessionId, {
-      expiresAt: this.now() + this.sessionTtlMs,
+    const now = this.now();
+    await this.store.purgeExpiredAccessSessions(now);
+    await this.store.setAccessSession({
+      tokenHash: sessionTokenHash(sessionId),
+      expiresAt: now + this.sessionTtlMs,
+      createdAt: new Date(now).toISOString(),
     });
     return {
       sessionId,
@@ -350,7 +395,7 @@ export class AccessAuthService {
     };
   }
 
-  async login({ request, username, password }) {
+  async login({ request, account, username, password }) {
     const credentials = await this.credentials();
     if (!credentials) {
       throw accessError(
@@ -360,17 +405,17 @@ export class AccessAuthService {
       );
     }
 
-    const normalizedUsername = String(username ?? "").trim();
-    const keys = this.rateLimitKeys(request, normalizedUsername);
+    const normalizedAccount = String(account ?? username ?? "").trim();
+    const keys = this.rateLimitKeys(request, normalizedAccount);
     this.loginRateLimit(keys);
 
     const passwordValue = String(password ?? "");
-    const usernameMatches = normalizedUsername === credentials.username;
-    const passwordMatches = usernameMatches
+    const accountMatches = normalizedAccount === credentials.account;
+    const passwordMatches = accountMatches
       ? await verifyPassword(passwordValue, credentials)
       : await consumeDummyVerification(passwordValue).then(() => false);
 
-    if (!usernameMatches || !passwordMatches) {
+    if (!accountMatches || !passwordMatches) {
       this.recordLoginFailure(keys);
       throw accessError(
         401,
@@ -381,27 +426,30 @@ export class AccessAuthService {
 
     this.clearLoginFailures(keys);
     return {
-      ...this.createSession(request),
+      ...(await this.createSession(request)),
+      account: credentials.account,
       username: credentials.username,
     };
   }
 
-  logout(request) {
+  async logout(request) {
     const sessionId = this.sessionIdFromRequest(request);
     if (sessionId) {
-      this.sessions.delete(sessionId);
+      await this.store.deleteAccessSession(sessionTokenHash(sessionId));
     }
     return cookieString(request, "", 0);
   }
 
   async updateCredentials({
     request,
+    account,
     username,
     currentPassword,
     newPassword,
   }) {
     const credentials = await this.credentials();
-    const nextUsername = normalizeUsername(username);
+    const nextAccount = normalizeAccount(account ?? username);
+    const nextUsername = normalizeUsername(username ?? account);
     const nextPassword = normalizePassword(newPassword, {
       required: !credentials,
     });
@@ -432,7 +480,8 @@ export class AccessAuthService {
           parameters: credentials.parameters,
         };
     const nextCredentials = {
-      version: 1,
+      version: 2,
+      account: nextAccount,
       username: nextUsername,
       salt: passwordData.salt,
       passwordHash: passwordData.passwordHash,
@@ -441,12 +490,22 @@ export class AccessAuthService {
     };
 
     await this.store.setAccessAuth(nextCredentials);
-    this.sessions.clear();
+    const accountChanged = nextAccount !== credentials?.account;
+    const passwordChanged = Boolean(nextPassword);
+    const securityChanged = accountChanged || passwordChanged;
+    if (securityChanged) {
+      await this.store.clearAccessSessions();
+    }
     return {
-      ...this.createSession(request),
+      ...(securityChanged
+        ? await this.createSession(request)
+        : { sessionId: "", cookie: "" }),
+      account: nextCredentials.account,
       username: nextCredentials.username,
       credentials: credentialSummary(nextCredentials),
-      passwordChanged: Boolean(nextPassword),
+      accountChanged,
+      usernameChanged: nextUsername !== credentials?.username,
+      passwordChanged,
     };
   }
 }

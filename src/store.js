@@ -49,7 +49,7 @@ import {
   toSafeInteger,
 } from "./utils.js";
 
-const STATE_VERSION = 14;
+const STATE_VERSION = 15;
 const STORED_NEXT_CHECK_VERSION = 10;
 const SERIES_COMPLETION_RULE_VERSION = 2;
 export const MAX_EVENTS = 100;
@@ -1091,6 +1091,17 @@ const SQLITE_ACCESS_AUTH_SCHEMA = `
   );
 `;
 
+const SQLITE_ACCESS_SESSIONS_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS access_sessions (
+    token_hash TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS access_sessions_expires_at_idx
+    ON access_sessions(expires_at);
+`;
+
 // Released migrations are immutable. Add every future schema change as the
 // next version instead of editing an existing migration in place.
 const SQLITE_MIGRATIONS = Object.freeze([
@@ -1104,6 +1115,12 @@ const SQLITE_MIGRATIONS = Object.freeze([
     version: 2,
     up(database) {
       database.exec(SQLITE_ACCESS_AUTH_SCHEMA);
+    },
+  }),
+  Object.freeze({
+    version: 3,
+    up(database) {
+      database.exec(SQLITE_ACCESS_SESSIONS_SCHEMA);
     },
   }),
 ]);
@@ -1579,6 +1596,94 @@ export class SqliteStateStore {
           .run(JSON.stringify(credentials));
       });
       await this.secureDatabaseFiles();
+    });
+  }
+
+  async getAccessSession(tokenHash) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    const row = this.db
+      .prepare(
+        `SELECT token_hash, expires_at, created_at
+         FROM access_sessions
+         WHERE token_hash = ?`,
+      )
+      .get(String(tokenHash || ""));
+    return row
+      ? {
+          tokenHash: row.token_hash,
+          expiresAt: Number(row.expires_at),
+          createdAt: row.created_at,
+        }
+      : null;
+  }
+
+  async setAccessSession({ tokenHash, expiresAt, createdAt }) {
+    return this.enqueue(async () => {
+      if (!this.initialized) {
+        await this.init();
+      }
+      await this.withImmediateTransaction(() => {
+        this.db
+          .prepare(
+            `INSERT INTO access_sessions
+               (token_hash, expires_at, created_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(token_hash) DO UPDATE SET
+               expires_at = excluded.expires_at,
+               created_at = excluded.created_at`,
+          )
+          .run(
+            String(tokenHash || ""),
+            Math.trunc(Number(expiresAt) || 0),
+            String(createdAt || nowIso()),
+          );
+      });
+      await this.secureDatabaseFiles();
+    });
+  }
+
+  async deleteAccessSession(tokenHash) {
+    return this.enqueue(async () => {
+      if (!this.initialized) {
+        await this.init();
+      }
+      await this.withImmediateTransaction(() => {
+        this.db
+          .prepare("DELETE FROM access_sessions WHERE token_hash = ?")
+          .run(String(tokenHash || ""));
+      });
+      await this.secureDatabaseFiles();
+    });
+  }
+
+  async clearAccessSessions() {
+    return this.enqueue(async () => {
+      if (!this.initialized) {
+        await this.init();
+      }
+      await this.withImmediateTransaction(() => {
+        this.db.prepare("DELETE FROM access_sessions").run();
+      });
+      await this.secureDatabaseFiles();
+    });
+  }
+
+  async purgeExpiredAccessSessions(now = Date.now()) {
+    return this.enqueue(async () => {
+      if (!this.initialized) {
+        await this.init();
+      }
+      const result = await this.withImmediateTransaction(() =>
+        this.db
+          .prepare("DELETE FROM access_sessions WHERE expires_at <= ?")
+          .run(Math.trunc(Number(now) || 0)),
+      );
+      if (result?.changes > 0) {
+        await this.secureDatabaseFiles();
+      }
+      return Number(result?.changes || 0);
     });
   }
 

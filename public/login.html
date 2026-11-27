@@ -105,10 +105,10 @@
 
           <form class="login-form" id="login-form" novalidate hidden>
             <div class="field login-field">
-              <label for="login-username">登录账号</label>
+              <label for="login-account">登录账号</label>
               <input
-                id="login-username"
-                name="username"
+                id="login-account"
+                name="account"
                 type="text"
                 autocomplete="username"
                 autocapitalize="off"
@@ -116,14 +116,14 @@
                 spellcheck="false"
                 enterkeyhint="next"
                 placeholder="输入应用登录账号"
-                aria-describedby="login-username-help login-username-error"
+                aria-describedby="login-account-help login-account-error"
               >
-              <p class="field__help" id="login-username-help">
-                使用短剧助手中设置的应用账号，不是红果账号。
+              <p class="field__help" id="login-account-help">
+                填写“设置 · 安全设置”中的登录账号，不是名称，也不是红果账号。
               </p>
               <p
                 class="field__feedback login-field__error"
-                id="login-username-error"
+                id="login-account-error"
                 aria-live="polite"
                 hidden
               ></p>

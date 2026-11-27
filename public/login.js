@@ -4,13 +4,13 @@ const LOGIN_REQUEST_TIMEOUT_MS = 20_000;
 const elements = {
   status: document.querySelector("#login-page-status"),
   form: document.querySelector("#login-form"),
-  username: document.querySelector("#login-username"),
+  account: document.querySelector("#login-account"),
   password: document.querySelector("#login-password"),
   passwordToggle: document.querySelector("#login-password-toggle"),
   passwordIcons: [
     ...document.querySelectorAll("[data-password-icon]"),
   ],
-  usernameError: document.querySelector("#login-username-error"),
+  accountError: document.querySelector("#login-account-error"),
   passwordError: document.querySelector("#login-password-error"),
   formAlert: document.querySelector("#login-form-alert"),
   submit: document.querySelector("#login-submit"),
@@ -89,8 +89,8 @@ function setFieldInvalid(input, errorElement, message = "") {
 
 function clearErrors() {
   setFieldInvalid(
-    elements.username,
-    elements.usernameError,
+    elements.account,
+    elements.accountError,
   );
   setFieldInvalid(
     elements.password,
@@ -227,8 +227,8 @@ function handleLoginError(error) {
   if (error?.status === 401) {
     const message = "账号或密码不正确。";
     setFieldInvalid(
-      elements.username,
-      elements.usernameError,
+      elements.account,
+      elements.accountError,
       message,
     );
     setFieldInvalid(
@@ -237,7 +237,7 @@ function handleLoginError(error) {
       message,
     );
     setFormAlert(message);
-    focusAfterPaint(elements.username);
+    focusAfterPaint(elements.account);
     return false;
   }
 
@@ -283,7 +283,7 @@ async function loadLoginStatus() {
     setStatus("登录保护已启用，请输入应用账号和密码。");
     setFormVisible(true);
     if (window.matchMedia("(pointer: fine)").matches) {
-      focusAfterPaint(elements.username);
+      focusAfterPaint(elements.account);
     }
   } catch (error) {
     setStatus(
@@ -299,8 +299,8 @@ elements.passwordToggle.addEventListener("click", () => {
   elements.password.focus();
 });
 
-elements.username.addEventListener("input", () => {
-  setFieldInvalid(elements.username, elements.usernameError);
+elements.account.addEventListener("input", () => {
+  setFieldInvalid(elements.account, elements.accountError);
   setFormAlert();
 });
 
@@ -317,17 +317,17 @@ elements.form.addEventListener("submit", async (event) => {
 
   clearErrors();
   setPasswordVisibility(false);
-  const username = elements.username.value.trim();
+  const account = elements.account.value.trim();
   const password = elements.password.value;
   let firstInvalidInput = null;
 
-  if (!username) {
+  if (!account) {
     setFieldInvalid(
-      elements.username,
-      elements.usernameError,
+      elements.account,
+      elements.accountError,
       "请输入登录账号。",
     );
-    firstInvalidInput ||= elements.username;
+    firstInvalidInput ||= elements.account;
   }
   if (!password) {
     setFieldInvalid(
@@ -347,7 +347,7 @@ elements.form.addEventListener("submit", async (event) => {
   try {
     await requestJson("/api/access/login", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ account, password }),
     });
     setStatus("登录成功，正在进入短剧助手…", "success");
     elements.form.hidden = true;

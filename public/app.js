@@ -168,6 +168,33 @@ const elements = {
   proxyChannelInputs: [
     ...document.querySelectorAll("[data-proxy-channel]"),
   ],
+  notificationItems: document.querySelector("#settings-notification-items"),
+  notificationOverview: document.querySelector(
+    "#settings-notification-overview",
+  ),
+  notificationEditor: document.querySelector(
+    "#settings-notification-editor",
+  ),
+  notificationEmpty: document.querySelector(
+    "#settings-notification-empty",
+  ),
+  notificationType: document.querySelector("#settings-notification-type"),
+  addNotification: document.querySelector("#settings-add-notification"),
+  notificationTemplateCards: document.querySelector(
+    "#settings-notification-template-cards",
+  ),
+  notificationTemplateEditors: document.querySelector(
+    "#settings-notification-template-editors",
+  ),
+  notificationTemplateForms: document.querySelector(
+    "#settings-notification-template-forms",
+  ),
+  notificationTemplateSource: document.querySelector(
+    "#settings-notification-template-source",
+  ),
+  notificationTemplateEditorTitle: document.querySelector(
+    "#settings-notification-template-editor-title",
+  ),
   notificationChannels: {
     bark: {
       root: document.querySelector('[data-notification-channel="bark"]'),
@@ -277,6 +304,7 @@ const elements = {
   accessCurrentAccountMeta: document.querySelector(
     "#access-current-account-meta",
   ),
+  accessAccount: document.querySelector("#access-account"),
   accessUsername: document.querySelector("#access-username"),
   accessCurrentPasswordField: document.querySelector(
     "#access-current-password-field",
@@ -337,6 +365,12 @@ const appState = {
   toastTimer: null,
   toastHideTimer: null,
   listMotionTimer: null,
+  notificationItems: [],
+  notificationItemsMarkup: "",
+  notificationItemSequence: 0,
+  activeNotificationId: null,
+  activeNotificationTemplate: null,
+  notificationDrag: null,
   hasRenderedSubscriptionList: false,
   screenshotFiles: [],
   screenshotItems: [],
@@ -393,6 +427,7 @@ const appState = {
   accessSecurity: {
     configured: false,
     authenticated: false,
+    account: "",
     username: "",
     updatedAt: null,
     loaded: false,
@@ -463,6 +498,11 @@ const notificationTemplateLabels = Object.freeze({
   detailed: "单系列详情",
   batch: "批量汇总",
   reminder: "持续提醒",
+});
+const notificationTemplateDescriptions = Object.freeze({
+  detailed: "手动检查单个系列时使用",
+  batch: "定时检查或延迟汇总时使用",
+  reminder: "持续提醒有效期内的重复消息使用",
 });
 const notificationTemplateFieldOrder = Object.freeze([
   "title",
@@ -675,6 +715,245 @@ const notificationChannelLabels = {
   wecomApp: "企业微信应用",
   dingtalk: "钉钉",
 };
+const notificationChannelIconNames = {
+  bark: "bell",
+  ntfy: "bell",
+  telegram: "message",
+  wecom: "message",
+  wecomApp: "message",
+  dingtalk: "message",
+};
+const notificationTypeDefinitions = Object.freeze({
+  bark: Object.freeze({
+    description: "发送到 iPhone 上的 Bark App。",
+    fields: Object.freeze([
+      Object.freeze({
+        key: "key",
+        label: "Bark key",
+        type: "password",
+        autocomplete: "new-password",
+        placeholder: "粘贴 Bark key",
+        help: "只填写 key，不要粘贴完整网址。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.keyHint),
+        validate: (value) =>
+          /^[A-Za-z0-9_-]{1,128}$/.test(value)
+            ? ""
+            : "Bark key 只能包含字母、数字、下划线和短横线。",
+      }),
+    ]),
+  }),
+  ntfy: Object.freeze({
+    description: "通过 ntfy 推送到手机或桌面。",
+    fields: Object.freeze([
+      Object.freeze({
+        key: "topic",
+        label: "Topic",
+        type: "text",
+        autocomplete: "off",
+        autocapitalize: "off",
+        spellcheck: false,
+        placeholder: "例如 drama-assistant-8f3a",
+        help: "仅支持字母、数字、下划线和短横线。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.topicHint),
+        validate: (value) =>
+          /^[A-Za-z0-9_-]{1,64}$/.test(value)
+            ? ""
+            : "Topic 只能包含字母、数字、下划线或短横线，且不能超过 64 个字符。",
+      }),
+      Object.freeze({
+        key: "token",
+        label: "Access token",
+        optional: true,
+        type: "password",
+        autocomplete: "new-password",
+        placeholder: "留空表示不鉴权",
+        help: "配置了私有 ntfy 服务时才需要。",
+        required: false,
+        configured: (item) => Boolean(item.meta?.tokenConfigured),
+        validate: (value) =>
+          /^[A-Za-z0-9._~+/=-]{1,512}$/.test(value)
+            ? ""
+            : "ntfy access token 格式不正确。",
+      }),
+    ]),
+  }),
+  telegram: Object.freeze({
+    description: "通过 Telegram Bot 发送提醒。",
+    fields: Object.freeze([
+      Object.freeze({
+        key: "botToken",
+        label: "Bot token",
+        type: "password",
+        autocomplete: "new-password",
+        placeholder: "从 BotFather 获取",
+        help: "格式为数字 ID、冒号和 Bot token。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.tokenConfigured),
+        validate: (value) =>
+          /^\d{5,20}:[A-Za-z0-9_-]{20,64}$/.test(value)
+            ? ""
+            : "Telegram Bot token 格式不正确。",
+      }),
+      Object.freeze({
+        key: "chatId",
+        label: "Chat ID",
+        type: "text",
+        autocomplete: "off",
+        autocapitalize: "off",
+        spellcheck: false,
+        placeholder: "例如 123456789 或 @channel",
+        help: "填写接收提醒的私聊、群组或频道 ID。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.chatIdHint),
+        validate: (value) =>
+          /^(?:-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{3,31})$/.test(value)
+            ? ""
+            : "Telegram chat ID 应为数字 ID 或 @channelusername。",
+      }),
+    ]),
+  }),
+  wecom: Object.freeze({
+    description: "通过企业微信群机器人发送提醒。",
+    fields: Object.freeze([
+      Object.freeze({
+        key: "key",
+        label: "机器人 key",
+        type: "password",
+        autocomplete: "new-password",
+        placeholder: "粘贴企业微信机器人 key",
+        help: "只填写 key 参数，不要粘贴完整网址。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.keyHint),
+        validate: (value) =>
+          /^[A-Za-z0-9_-]{1,128}$/.test(value)
+            ? ""
+            : "企业微信机器人 key 格式不正确。",
+      }),
+    ]),
+  }),
+  wecomApp: Object.freeze({
+    description: "通过企业微信自建应用发送提醒。",
+    fields: Object.freeze([
+      Object.freeze({
+        key: "corpId",
+        label: "企业 ID",
+        type: "text",
+        autocomplete: "off",
+        autocapitalize: "off",
+        spellcheck: false,
+        placeholder: "企业微信管理后台的企业 ID",
+        help: "填写企业微信管理后台显示的企业 ID。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.corpIdConfigured),
+        validate: (value) =>
+          /^[A-Za-z0-9_-]{1,64}$/.test(value)
+            ? ""
+            : "企业微信应用的企业 ID 格式不正确。",
+      }),
+      Object.freeze({
+        key: "secret",
+        label: "Secret",
+        type: "password",
+        autocomplete: "new-password",
+        placeholder: "自建应用的 Secret",
+        help: "填写自建应用的 Secret。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.secretConfigured),
+        validate: (value) =>
+          /^[A-Za-z0-9._~+/=-]{1,256}$/.test(value)
+            ? ""
+            : "企业微信应用的 Secret 格式不正确。",
+      }),
+      Object.freeze({
+        key: "agentId",
+        label: "AgentId",
+        type: "text",
+        inputmode: "numeric",
+        autocomplete: "off",
+        autocapitalize: "off",
+        spellcheck: false,
+        placeholder: "例如 1000002",
+        help: "填写自建应用的 AgentId。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.agentIdConfigured),
+        validate: (value) => {
+          const number = Number(value);
+          return /^\d+$/.test(value) &&
+            Number.isInteger(number) &&
+            number >= 1 &&
+            number <= 2_147_483_647
+            ? ""
+            : "AgentId 必须是正整数。";
+        },
+      }),
+      Object.freeze({
+        key: "toUser",
+        label: "接收成员",
+        type: "text",
+        autocomplete: "off",
+        autocapitalize: "off",
+        spellcheck: false,
+        placeholder: "@all 或 UserID1|UserID2",
+        help: "填写 @all，或使用 | 分隔的 UserID。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.toUserConfigured),
+        validate: (value) => {
+          const members = value.split(/[|,，\s]+/).filter(Boolean);
+          const valid =
+            members.length > 0 &&
+            members.length <= 100 &&
+            !(members.includes("@all") && members.length !== 1) &&
+            members.every(
+              (member) =>
+                member.length <= 64 &&
+                (member === "@all" ||
+                  /^[A-Za-z0-9._-]+$/.test(member)),
+            ) &&
+            members.join("|").length <= 1024;
+          return valid
+            ? ""
+            : "接收成员仅支持 @all，或使用 | 分隔的 UserID。";
+        },
+      }),
+    ]),
+  }),
+  dingtalk: Object.freeze({
+    description: "通过钉钉群机器人发送提醒。",
+    fields: Object.freeze([
+      Object.freeze({
+        key: "accessToken",
+        label: "Access token",
+        type: "password",
+        autocomplete: "new-password",
+        placeholder: "粘贴钉钉机器人 access token",
+        help: "只填写 access_token 参数，不要粘贴完整网址。",
+        required: true,
+        configured: (item) => Boolean(item.meta?.accessTokenConfigured),
+        validate: (value) =>
+          /^[A-Za-z0-9._~+/=-]{1,256}$/.test(value)
+            ? ""
+            : "钉钉机器人 access token 格式不正确。",
+      }),
+      Object.freeze({
+        key: "secret",
+        label: "加签 Secret",
+        optional: true,
+        type: "password",
+        autocomplete: "new-password",
+        placeholder: "启用加签时填写",
+        help: "机器人未启用加签时可留空。",
+        required: false,
+        configured: (item) => Boolean(item.meta?.secretConfigured),
+        validate: (value) =>
+          /^[A-Za-z0-9._~+/=-]{1,256}$/.test(value)
+            ? ""
+            : "钉钉机器人加签 Secret 格式不正确。",
+      }),
+    ]),
+  }),
+});
 const episodeNotificationWindowOptions = new Set([
   0,
   60,
@@ -695,7 +974,6 @@ const SETTINGS_TABS = Object.freeze([
   "account",
   "general",
   "notification",
-  "templates",
   "security",
   "system",
 ]);
@@ -1329,6 +1607,18 @@ function seasonUpdateRuleMarkup(season) {
 
 function enabledNotificationLabels(settings) {
   const notifications = settings?.notifications;
+  if (Array.isArray(notifications?.items)) {
+    const labels = new Set();
+    for (const item of notifications.items) {
+      if (
+        item?.enabled === true &&
+        notificationChannelOrder.includes(item.type)
+      ) {
+        labels.add(notificationChannelLabels[item.type]);
+      }
+    }
+    return [...labels];
+  }
   return notificationChannelOrder
     .filter((channel) => notifications?.[channel]?.enabled)
     .map((channel) => notificationChannelLabels[channel]);
@@ -1448,7 +1738,7 @@ function setFieldError(input, hasError, message = "") {
   field?.classList.toggle("has-error", hasError);
   input.setAttribute("aria-invalid", hasError ? "true" : "false");
   const feedback = field?.querySelector(
-    "[data-template-field-error], [data-field-error]",
+    "[data-template-field-error], [data-field-error], [data-notification-field-error]",
   );
   if (feedback) {
     feedback.textContent = hasError ? message : "";
@@ -6845,6 +7135,8 @@ function renderAccessSecurityStatus(status) {
   appState.accessSecurity = {
     configured,
     authenticated,
+    account:
+      configured && authenticated ? String(status?.account || "") : "",
     username:
       configured && authenticated ? String(status?.username || "") : "",
     updatedAt:
@@ -6867,7 +7159,7 @@ function renderAccessSecurityStatus(status) {
     : "设置密码";
   elements.saveAccessCredentials.hidden = false;
   setAccessCredentialsButtonLabel(
-    configured ? "保存登录设置" : "启用登录保护",
+    configured ? "保存安全设置" : "启用登录保护",
   );
   elements.logoutAccess.hidden = !configured;
   elements.accessCurrentAccount.dataset.state = configured
@@ -6875,11 +7167,12 @@ function renderAccessSecurityStatus(status) {
     : "empty";
 
   if (configured) {
+    const account = appState.accessSecurity.account || "未登录";
     const username = appState.accessSecurity.username || "未登录";
     const loggedIn = appState.accessSecurity.authenticated;
     elements.accessCurrentAccountName.textContent = username;
     elements.accessCurrentAccountMeta.textContent = loggedIn
-      ? `已登录${
+      ? `登录账号：${account}${
           appState.accessSecurity.updatedAt
             ? ` · 最近修改 ${formatDateTime(
                 appState.accessSecurity.updatedAt,
@@ -6888,18 +7181,20 @@ function renderAccessSecurityStatus(status) {
         }`
       : "当前会话未登录";
     if (loggedIn) {
+      elements.accessAccount.value = account;
       elements.accessUsername.value = username;
-      elements.accessSecuritySummary.textContent = `登录保护已启用。首页当前显示为“${username}的追更”。`;
+      elements.accessSecuritySummary.textContent =
+        `登录保护已启用。登录账号为“${account}”，首页当前显示为“${username}的追更”。`;
     } else {
       elements.accessSecuritySummary.textContent =
-        "登录保护已启用，请重新登录后修改用户名或密码。";
+        "登录保护已启用，请重新登录后修改安全设置。";
     }
   } else {
-    elements.accessCurrentAccountName.textContent = "尚未设置用户名";
+    elements.accessCurrentAccountName.textContent = "尚未设置名称";
     elements.accessCurrentAccountMeta.textContent =
-      "启用登录保护后，首页会显示“用户名的追更”";
+      "启用登录保护后，首页会显示“名称的追更”";
     elements.accessSecuritySummary.textContent =
-      "登录保护尚未启用。设置用户名和密码后，访问短剧助手及接口都需要先登录。";
+      "登录保护尚未启用。设置登录账号、名称和密码后，访问短剧助手及接口都需要先登录。";
   }
 }
 
@@ -6915,7 +7210,7 @@ async function loadAccessSecurityStatus({ force = false } = {}) {
   elements.accessSecurityStatus.textContent = "正在读取";
   elements.accessSecurityStatus.classList.remove("is-enabled");
   elements.accessCurrentAccount.dataset.state = "loading";
-  elements.accessCurrentAccountName.textContent = "正在读取账号";
+  elements.accessCurrentAccountName.textContent = "正在读取名称";
   elements.accessCurrentAccountMeta.textContent =
     "正在读取登录保护状态…";
   elements.accessSecuritySummary.textContent = "正在读取登录保护状态…";
@@ -6928,7 +7223,7 @@ async function loadAccessSecurityStatus({ force = false } = {}) {
     appState.accessSecurity.loaded = false;
     elements.accessSecurityStatus.textContent = "读取失败";
     elements.accessCurrentAccount.dataset.state = "error";
-    elements.accessCurrentAccountName.textContent = "账号信息读取失败";
+    elements.accessCurrentAccountName.textContent = "安全信息读取失败";
     elements.accessCurrentAccountMeta.textContent =
       "请稍后重新进入安全设置再试";
     elements.accessSecuritySummary.textContent =
@@ -6941,6 +7236,7 @@ async function loadAccessSecurityStatus({ force = false } = {}) {
 
 function clearAccessSecurityErrors() {
   for (const input of [
+    elements.accessAccount,
     elements.accessUsername,
     elements.accessCurrentPassword,
     elements.accessNewPassword,
@@ -6973,6 +7269,7 @@ async function saveAccessCredentials() {
   }
 
   const configured = appState.accessSecurity.configured;
+  const account = elements.accessAccount.value.trim();
   const username = elements.accessUsername.value.trim();
   const currentPassword = elements.accessCurrentPassword.value;
   const newPassword = elements.accessNewPassword.value;
@@ -6980,13 +7277,23 @@ async function saveAccessCredentials() {
   const errors = [];
 
   if (
+    account.length < 3 ||
+    account.length > 64 ||
+    /\s/.test(account)
+  ) {
+    errors.push([
+      elements.accessAccount,
+      "登录账号需为 3-64 个字符，且不能包含空格。",
+    ]);
+  }
+  if (
     username.length < 3 ||
     username.length > 64 ||
     /\s/.test(username)
   ) {
     errors.push([
       elements.accessUsername,
-      "用户名需为 3-64 个字符，且不能包含空格。",
+      "名称需为 3-64 个字符，且不能包含空格。",
     ]);
   }
   if (configured && !currentPassword) {
@@ -7030,6 +7337,7 @@ async function saveAccessCredentials() {
     const result = await requestJson("/api/access/credentials", {
       method: "PATCH",
       body: JSON.stringify({
+        account,
         username,
         currentPassword,
         newPassword,
@@ -7044,12 +7352,13 @@ async function saveAccessCredentials() {
       authenticated: true,
     });
     const message =
-      result.message ||
-      (result.passwordChanged
-        ? "账号和密码已更新。"
-        : configured
-          ? "用户名已更新。"
-          : "登录保护已启用。");
+      !configured
+        ? "登录保护已启用。"
+        : result.accountChanged || result.passwordChanged
+          ? "登录账号或密码已更新，旧登录会话已失效。"
+          : result.usernameChanged
+            ? "名称已更新，登录账号和密码保持不变。"
+            : "安全设置已保存。";
     setFormFeedback(
       elements.accessSecurityFeedback,
       message,
@@ -7061,6 +7370,7 @@ async function saveAccessCredentials() {
     resetSecretInput(elements.accessNewPassword);
     resetSecretInput(elements.accessConfirmPassword);
     const fieldByCode = {
+      INVALID_ACCESS_ACCOUNT: elements.accessAccount,
       INVALID_ACCESS_USERNAME: elements.accessUsername,
       INVALID_ACCESS_PASSWORD: elements.accessNewPassword,
       ACCESS_CURRENT_PASSWORD_REQUIRED:
@@ -7078,7 +7388,7 @@ async function saveAccessCredentials() {
     setButtonBusy(elements.saveAccessCredentials, false);
     setAccessCredentialsButtonLabel(
       appState.accessSecurity.configured
-        ? "保存登录设置"
+        ? "保存安全设置"
         : "启用登录保护",
     );
   }
@@ -7262,126 +7572,739 @@ function setProxySettingsMetadata(proxy, { resetValues = false } = {}) {
   syncProxySettings();
 }
 
-function syncNotificationChannel(channel) {
-  channel.config.hidden = !channel.enabled.checked;
-  channel.root.classList.toggle("is-enabled", channel.enabled.checked);
-  if (channel.clear.checked) {
-    channel.status.textContent = "保存后清除";
-  } else if (channel.configured) {
-    channel.status.textContent = "已配置";
-  } else if (channel.enabled.checked) {
-    channel.status.textContent = "待填写";
-  } else {
-    channel.status.textContent = "未配置";
+function nextNotificationItemId(type) {
+  let id;
+  do {
+    appState.notificationItemSequence += 1;
+    id = `notification-${type}-${Date.now()}-${appState.notificationItemSequence}`;
+  } while (
+    appState.notificationItems.some((item) => item.id === id)
+  );
+  return id;
+}
+
+function normalizeNotificationItems(items) {
+  const usedIds = new Set();
+  return (Array.isArray(items) ? items : [])
+    .map((source, index) => {
+      if (
+        !source ||
+        !notificationChannelOrder.includes(source.type)
+      ) {
+        return null;
+      }
+      let id =
+        typeof source.id === "string" ? source.id.trim() : "";
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(id) || usedIds.has(id)) {
+        id = `notification-${source.type}-${Date.now()}-${index + 1}`;
+        let suffix = 2;
+        while (usedIds.has(id)) {
+          id = `notification-${source.type}-${Date.now()}-${suffix}`;
+          suffix += 1;
+        }
+      }
+      usedIds.add(id);
+      const values =
+        source.values &&
+        typeof source.values === "object" &&
+        !Array.isArray(source.values)
+          ? { ...source.values }
+          : {};
+      const meta =
+        source.meta &&
+        typeof source.meta === "object" &&
+        !Array.isArray(source.meta)
+          ? { ...source, ...source.meta }
+          : { ...source };
+      const name =
+        typeof source.name === "string"
+          ? [...source.name.trim()].slice(0, 64).join("")
+          : "";
+      return {
+        id,
+        type: source.type,
+        ...(name ? { name } : {}),
+        enabled: source.enabled === true,
+        values,
+        meta,
+      };
+    })
+    .filter(Boolean);
+}
+
+function notificationItemDisplayLabel(item) {
+  if (item.name) {
+    return item.name;
+  }
+  const sameTypeItems = appState.notificationItems.filter(
+    (entry) => entry.type === item.type,
+  );
+  const baseLabel = notificationChannelLabels[item.type];
+  if (sameTypeItems.length <= 1) {
+    return baseLabel;
+  }
+  const index = sameTypeItems.findIndex((entry) => entry.id === item.id);
+  return `${baseLabel} ${index + 1}`;
+}
+
+function normalizeNotificationNameInput(input) {
+  const name = [...String(input.value || "")].slice(0, 64).join("");
+  if (input.value !== name) {
+    input.value = name;
+  }
+  return name.trim();
+}
+
+function notificationItemField(item, fieldKey) {
+  return notificationTypeDefinitions[item.type]?.fields.find(
+    (field) => field.key === fieldKey,
+  );
+}
+
+function notificationItemFieldInput(itemId, fieldKey) {
+  return (
+    elements.notificationEditor.querySelector(
+      `[data-notification-id="${itemId}"] [data-notification-field="${fieldKey}"]`,
+    ) ||
+    elements.notificationItems.querySelector(
+      `[data-notification-id="${itemId}"] [data-notification-field="${fieldKey}"]`,
+    )
+  );
+}
+
+function notificationFieldConfigured(item, field) {
+  return Boolean(field.configured?.(item));
+}
+
+function notificationFieldValue(item, field) {
+  return String(item.values?.[field.key] ?? "");
+}
+
+function notificationItemConfigured(item) {
+  const fields = notificationTypeDefinitions[item.type]?.fields || [];
+  return fields
+    .filter((field) => field.required)
+    .every(
+      (field) =>
+        Boolean(notificationFieldValue(item, field).trim()) ||
+        notificationFieldConfigured(item, field),
+    );
+}
+
+function notificationItemHasStoredConfiguration(item) {
+  const fields = notificationTypeDefinitions[item.type]?.fields || [];
+  return fields.some((field) => notificationFieldConfigured(item, field));
+}
+
+function notificationItemStatus(item) {
+  const configured = notificationItemConfigured(item);
+  if (item.enabled && configured) {
+    return { label: "已启用", className: "is-enabled" };
+  }
+  if (item.enabled) {
+    return { label: "待填写", className: "is-incomplete" };
+  }
+  if (configured) {
+    return { label: "已配置", className: "is-configured" };
+  }
+  if (notificationItemHasStoredConfiguration(item)) {
+    return { label: "待补充", className: "is-incomplete" };
+  }
+  return { label: "未配置", className: "is-empty" };
+}
+
+function syncNotificationItemStatus(itemId) {
+  const item = appState.notificationItems.find(
+    (entry) => entry.id === itemId,
+  );
+  if (!item) {
+    return;
+  }
+  const status = notificationItemStatus(item);
+  const cards = [
+    ...elements.notificationItems.querySelectorAll(
+      `[data-notification-id="${itemId}"]`,
+    ),
+    ...elements.notificationEditor.querySelectorAll(
+      `[data-notification-id="${itemId}"]`,
+    ),
+  ];
+  for (const card of cards) {
+    const statusElements = card.querySelectorAll(
+      "[data-notification-status]",
+    );
+    for (const statusElement of statusElements) {
+      statusElement.textContent = status.label;
+      statusElement.classList.remove(
+        "is-enabled",
+        "is-configured",
+        "is-incomplete",
+        "is-empty",
+      );
+      statusElement.classList.add(status.className);
+    }
+    card.classList.toggle("is-enabled", item.enabled);
   }
 }
 
-function setNotificationChannelMetadata(notifications, { resetValues = false } = {}) {
-  const bark = notifications?.bark || {};
-  const ntfy = notifications?.ntfy || {};
-  const telegram = notifications?.telegram || {};
-  const wecom = notifications?.wecom || {};
-  const wecomApp = notifications?.wecomApp || {};
-  const dingtalk = notifications?.dingtalk || {};
-  const barkChannel = elements.notificationChannels.bark;
-  const ntfyChannel = elements.notificationChannels.ntfy;
-  const telegramChannel = elements.notificationChannels.telegram;
-  const wecomChannel = elements.notificationChannels.wecom;
-  const wecomAppChannel = elements.notificationChannels.wecomApp;
-  const dingtalkChannel = elements.notificationChannels.dingtalk;
+function notificationFieldHint(item, field) {
+  const hintKeys = {
+    key: ["keyHint"],
+    topic: ["topicHint"],
+    token: ["tokenHint"],
+    botToken: ["tokenHint"],
+    chatId: ["chatIdHint"],
+    secret: ["secretHint"],
+    accessToken: ["accessTokenHint"],
+  };
+  const hint = (hintKeys[field.key] || [])
+    .map((key) => String(item.meta?.[key] || "").trim())
+    .find(Boolean);
+  return hint
+    ? `已保存 ${hint}，留空保持不变`
+    : "已保存，留空保持不变";
+}
 
-  barkChannel.configured = Boolean(bark.configured);
-  barkChannel.clear.hidden = !bark.keyHint;
-  barkChannel.key.placeholder = bark.keyHint
-    ? `已保存 ${bark.keyHint}，留空保持不变`
-    : "粘贴 Bark key";
-
-  ntfyChannel.configured = Boolean(ntfy.configured);
-  ntfyChannel.topicConfigured = Boolean(ntfy.topicHint);
-  ntfyChannel.tokenConfigured = Boolean(ntfy.tokenConfigured);
-  ntfyChannel.clear.hidden = !(
-    ntfy.topicHint ||
-    ntfy.tokenConfigured
-  );
-  ntfyChannel.topic.placeholder = ntfy.topicHint
-    ? `已保存 ${ntfy.topicHint}，留空保持不变`
-    : "例如 drama-assistant-8f3a";
-  ntfyChannel.token.placeholder = ntfy.tokenConfigured
-    ? `已保存 ${ntfy.tokenHint || "token"}，留空保持不变`
-    : "留空表示不鉴权";
-
-  telegramChannel.configured = Boolean(telegram.configured);
-  telegramChannel.tokenConfigured = Boolean(telegram.tokenConfigured);
-  telegramChannel.chatIdConfigured = Boolean(telegram.chatIdHint);
-  telegramChannel.clear.hidden = !(
-    telegram.tokenConfigured ||
-    telegram.chatIdHint
-  );
-  telegramChannel.botToken.placeholder = telegram.tokenConfigured
-    ? `已保存 ${telegram.tokenHint || "token"}，留空保持不变`
-    : "从 BotFather 获取";
-  telegramChannel.chatId.placeholder = telegram.chatIdHint
-    ? `已保存 ${telegram.chatIdHint}，留空保持不变`
-    : "例如 123456789 或 @channel";
-
-  wecomChannel.configured = Boolean(wecom.configured);
-  wecomChannel.clear.hidden = !wecom.keyHint;
-  wecomChannel.key.placeholder = wecom.keyHint
-    ? `已保存 ${wecom.keyHint}，留空保持不变`
-    : "粘贴企业微信机器人 key";
-
-  wecomAppChannel.configured = Boolean(wecomApp.configured);
-  wecomAppChannel.corpIdConfigured = Boolean(wecomApp.corpIdConfigured);
-  wecomAppChannel.secretConfigured = Boolean(wecomApp.secretConfigured);
-  wecomAppChannel.agentIdConfigured = Boolean(wecomApp.agentIdConfigured);
-  wecomAppChannel.toUserConfigured = Boolean(wecomApp.toUserConfigured);
-  wecomAppChannel.clear.hidden = !(
-    wecomAppChannel.corpIdConfigured ||
-    wecomAppChannel.secretConfigured ||
-    wecomAppChannel.agentIdConfigured ||
-    wecomAppChannel.toUserConfigured
-  );
-  wecomAppChannel.corpId.placeholder = wecomAppChannel.corpIdConfigured
-    ? "已保存企业 ID，留空保持不变"
-    : "企业微信管理后台的企业 ID";
-  wecomAppChannel.secret.placeholder = wecomAppChannel.secretConfigured
-    ? "已保存 Secret，留空保持不变"
-    : "自建应用的 Secret";
-  wecomAppChannel.agentId.placeholder = wecomAppChannel.agentIdConfigured
-    ? "已保存 AgentId，留空保持不变"
-    : "例如 1000002";
-  wecomAppChannel.toUser.placeholder = wecomAppChannel.toUserConfigured
-    ? "已保存接收成员，留空保持不变"
-    : "@all 或 UserID1|UserID2";
-
-  dingtalkChannel.configured = Boolean(dingtalk.configured);
-  dingtalkChannel.accessTokenConfigured = Boolean(
-    dingtalk.accessTokenConfigured,
-  );
-  dingtalkChannel.secretConfigured = Boolean(dingtalk.secretConfigured);
-  dingtalkChannel.clear.hidden = !(
-    dingtalk.accessTokenConfigured || dingtalk.secretConfigured
-  );
-  dingtalkChannel.accessToken.placeholder = dingtalk.accessTokenConfigured
-    ? `已保存 ${dingtalk.accessTokenHint || "token"}，留空保持不变`
-    : "粘贴钉钉机器人 access token";
-  dingtalkChannel.secret.placeholder = dingtalk.secretConfigured
-    ? `已保存 ${dingtalk.secretHint || "secret"}，留空保持不变`
-    : "启用加签时填写，否则留空";
-
-  for (const channelKey of notificationChannelOrder) {
-    const channel = elements.notificationChannels[channelKey];
-    if (resetValues) {
-      channel.clear.checked = false;
-      for (const input of channel.config.querySelectorAll("input")) {
-        if (input.type === "password") {
-          resetSecretInput(input);
-        } else {
-          input.value = "";
-        }
+function notificationItemFieldMarkup(item, field, inputId, helpId, errorId) {
+  const configured = notificationFieldConfigured(item, field);
+  const value = notificationFieldValue(item, field);
+  const placeholder = configured
+    ? notificationFieldHint(item, field)
+    : field.placeholder;
+  const optionalLabel = field.optional ? "（可选）" : "";
+  const requiredMark = field.required
+    ? ' <span aria-hidden="true">*</span>'
+    : "";
+  const autocapitalize = field.autocapitalize
+    ? ` autocapitalize="${escapeHtml(field.autocapitalize)}"`
+    : "";
+  const autocorrect =
+    field.autocapitalize === "off" ? ' autocorrect="off"' : "";
+  const spellcheck =
+    field.spellcheck === false ? ' spellcheck="false"' : "";
+  const inputmode = field.inputmode
+    ? ` inputmode="${escapeHtml(field.inputmode)}"`
+    : "";
+  const required =
+    field.required && !configured ? " required" : "";
+  const input = `
+    <input
+      id="${inputId}"
+      name="${escapeHtml(inputId)}"
+      type="${escapeHtml(field.type)}"
+      value="${escapeHtml(value)}"
+      autocomplete="${escapeHtml(field.autocomplete || "off")}"${autocapitalize}${autocorrect}${spellcheck}${inputmode}${required}
+      placeholder="${escapeHtml(placeholder)}"
+      data-notification-field="${escapeHtml(field.key)}"
+      aria-describedby="${helpId} ${errorId}"
+    >
+  `;
+  return `
+    <div class="field notification-item__field">
+      <label for="${inputId}">
+        ${escapeHtml(field.label)}${optionalLabel}${requiredMark}
+      </label>
+      <p class="field__help" id="${helpId}">${escapeHtml(field.help)}</p>
+      ${
+        field.type === "password"
+          ? `
+            <div class="input-with-action">
+              ${input}
+              <button
+                class="input-action"
+                type="button"
+                data-toggle-secret="${inputId}"
+                data-label="显示 ${escapeHtml(field.label)}"
+                aria-label="显示 ${escapeHtml(field.label)}"
+                aria-controls="${inputId}"
+                aria-pressed="false"
+              >
+                ${icon("eye")}
+              </button>
+            </div>
+          `
+          : input
       }
+      <p
+        class="field__feedback"
+        id="${errorId}"
+        data-notification-field-error
+        aria-live="polite"
+      ></p>
+    </div>
+  `;
+}
+
+function notificationItemMarkup(item, displayLabel) {
+  const definition = notificationTypeDefinitions[item.type];
+  const titleId = `notification-title-${item.id}`;
+  const toggleId = `notification-enabled-${item.id}`;
+  const status = notificationItemStatus(item);
+  const index = appState.notificationItems.findIndex(
+    (entry) => entry.id === item.id,
+  );
+  const canMoveUp = index > 0;
+  const canMoveDown =
+    index >= 0 && index < appState.notificationItems.length - 1;
+  return `
+    <article
+      class="notification-summary-card${item.enabled ? " is-enabled" : ""}"
+      data-notification-id="${item.id}"
+      data-notification-type="${item.type}"
+      aria-labelledby="${titleId}"
+    >
+      <div class="notification-summary-card__top">
+        <button
+          class="notification-summary-card__open"
+          type="button"
+          data-edit-notification
+          aria-label="编辑 ${escapeHtml(displayLabel)}"
+        >
+          <span class="notification-summary-card__icon" aria-hidden="true">
+            ${icon(notificationChannelIconNames[item.type] || "bell")}
+          </span>
+          <span class="notification-summary-card__copy">
+            <span class="notification-summary-card__type">
+              ${escapeHtml(notificationChannelLabels[item.type])}
+            </span>
+            <strong id="${titleId}">${escapeHtml(displayLabel)}</strong>
+            <span class="notification-summary-card__description">
+              ${escapeHtml(definition.description)}
+            </span>
+          </span>
+        </button>
+        <div class="notification-summary-card__quick-actions">
+          <button
+            class="notification-summary-card__order"
+            type="button"
+            data-move-notification="up"
+            aria-label="上移 ${escapeHtml(displayLabel)}"
+            title="上移"
+            ${canMoveUp ? "" : "disabled"}
+          >
+            ${icon(
+              "arrow-right",
+              "icon notification-summary-card__order-icon is-up",
+            )}
+          </button>
+          <button
+            class="notification-summary-card__order"
+            type="button"
+            data-move-notification="down"
+            aria-label="下移 ${escapeHtml(displayLabel)}"
+            title="下移"
+            ${canMoveDown ? "" : "disabled"}
+          >
+            ${icon(
+              "arrow-right",
+              "icon notification-summary-card__order-icon is-down",
+            )}
+          </button>
+          <button
+            class="notification-drag-handle"
+            type="button"
+            data-notification-drag-handle
+            aria-label="拖动调整 ${escapeHtml(displayLabel)} 的顺序"
+            title="拖动调整顺序"
+            draggable="false"
+          >
+            ${icon("grip-vertical")}
+          </button>
+          <button
+            class="icon-button notification-summary-card__delete"
+            type="button"
+            data-delete-notification
+            aria-label="删除 ${escapeHtml(displayLabel)}"
+            title="删除 ${escapeHtml(displayLabel)}"
+          >
+            ${icon("trash")}
+          </button>
+        </div>
+      </div>
+      <div class="notification-summary-card__footer">
+        <span
+          class="notification-item__status ${status.className}"
+          data-notification-status
+        >${status.label}</span>
+        <label class="channel-toggle notification-summary-card__toggle" for="${toggleId}">
+          <input
+            id="${toggleId}"
+            type="checkbox"
+            data-notification-enabled
+            ${item.enabled ? "checked" : ""}
+          >
+          <span class="channel-toggle__track" aria-hidden="true"></span>
+          <span>启用</span>
+        </label>
+        <button
+          class="notification-summary-card__edit"
+          type="button"
+          data-edit-notification
+          aria-label="打开 ${escapeHtml(displayLabel)} 的配置"
+        >
+          <span>查看配置</span>
+          ${icon("arrow-right")}
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderNotificationItems(items) {
+  appState.notificationItems = normalizeNotificationItems(items);
+  const markup = appState.notificationItems
+    .map((item) => {
+      const displayLabel = notificationItemDisplayLabel(item);
+      return { item, displayLabel };
+    })
+    .map(({ item, displayLabel }) =>
+      notificationItemMarkup(item, displayLabel),
+    )
+    .join("");
+  if (markup !== appState.notificationItemsMarkup) {
+    elements.notificationItems.innerHTML = markup;
+    appState.notificationItemsMarkup = markup;
+  }
+  elements.notificationEmpty.hidden =
+    appState.notificationItems.length > 0;
+  if (appState.activeNotificationId) {
+    const activeItem = appState.notificationItems.find(
+      (item) => item.id === appState.activeNotificationId,
+    );
+    if (activeItem) {
+      renderNotificationEditor(activeItem);
+    } else {
+      appState.activeNotificationId = null;
+      elements.notificationEditor.hidden = true;
     }
-    syncNotificationChannel(channel);
+  }
+}
+
+function clearNotificationDragState() {
+  const drag = appState.notificationDrag;
+  if (!drag) {
+    return;
+  }
+  drag.card?.style.removeProperty("transform");
+  elements.notificationItems
+    .querySelectorAll(
+      ".is-dragging, .is-drop-before, .is-drop-after",
+    )
+    .forEach((card) => {
+      card.classList.remove(
+        "is-dragging",
+        "is-drop-before",
+        "is-drop-after",
+      );
+    });
+  document.body.classList.remove("is-notification-dragging");
+  appState.notificationDrag = null;
+}
+
+function notificationDropIndex(drag, pointerY) {
+  let index = 0;
+  for (const rect of drag.siblingRects) {
+    if (pointerY > rect.top + rect.height / 2) {
+      index += 1;
+    }
+  }
+  return index;
+}
+
+function setNotificationDropMarker(drag, dropIndex) {
+  for (const card of elements.notificationItems.querySelectorAll(
+    ".is-drop-before, .is-drop-after",
+  )) {
+    card.classList.remove("is-drop-before", "is-drop-after");
+  }
+  if (dropIndex < drag.siblingRects.length) {
+    elements.notificationItems
+      .querySelector(
+        `[data-notification-id="${drag.siblingRects[dropIndex].id}"]`,
+      )
+      ?.classList.add("is-drop-before");
+  } else if (drag.siblingRects.length > 0) {
+    elements.notificationItems
+      .querySelector(
+        `[data-notification-id="${
+          drag.siblingRects[drag.siblingRects.length - 1].id
+        }"]`,
+      )
+      ?.classList.add("is-drop-after");
+  }
+}
+
+function focusNotificationDragHandle(itemId) {
+  requestAnimationFrame(() => {
+    elements.notificationItems
+      .querySelector(
+        `[data-notification-id="${itemId}"] [data-notification-drag-handle]`,
+      )
+      ?.focus({ preventScroll: true });
+  });
+}
+
+function reorderNotificationItem(itemId, dropIndex, { focus = true } = {}) {
+  const fromIndex = appState.notificationItems.findIndex(
+    (item) => item.id === itemId,
+  );
+  if (fromIndex < 0) {
+    return false;
+  }
+  const nextIndex = Math.max(
+    0,
+    Math.min(dropIndex, appState.notificationItems.length - 1),
+  );
+  if (fromIndex === nextIndex) {
+    return false;
+  }
+  const [item] = appState.notificationItems.splice(fromIndex, 1);
+  appState.notificationItems.splice(nextIndex, 0, item);
+  renderNotificationItems(appState.notificationItems);
+  setFormFeedback(
+    elements.settingsFeedback,
+    "已调整通知渠道顺序。",
+    "success",
+  );
+  if (focus) {
+    focusNotificationDragHandle(itemId);
+  }
+  return true;
+}
+
+function startNotificationDrag(event, handle) {
+  if (event.button !== 0 || appState.activeNotificationId) {
+    return;
+  }
+  const card = handle.closest("[data-notification-id]");
+  const itemId = card?.dataset.notificationId;
+  if (!card || !itemId) {
+    return;
+  }
+  const rect = card.getBoundingClientRect();
+  const siblingRects = [...elements.notificationItems.children]
+    .filter((entry) => entry !== card)
+    .map((entry) => {
+      const siblingRect = entry.getBoundingClientRect();
+      return {
+        id: entry.dataset.notificationId,
+        top: siblingRect.top,
+        height: siblingRect.height,
+      };
+    });
+  appState.notificationDrag = {
+    card,
+    handle,
+    itemId,
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    pointerY: event.clientY,
+    top: rect.top,
+    left: rect.left,
+    width: rect.width,
+    siblingRects,
+    dropIndex: appState.notificationItems.findIndex(
+      (item) => item.id === itemId,
+    ),
+    started: false,
+  };
+  handle.setPointerCapture?.(event.pointerId);
+  handle.focus({ preventScroll: true });
+}
+
+function moveNotificationDrag(event) {
+  const drag = appState.notificationDrag;
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+  event.preventDefault();
+  drag.pointerY = event.clientY;
+  const deltaY = event.clientY - drag.startY;
+  if (!drag.started && Math.abs(deltaY) < 3) {
+    return;
+  }
+  if (!drag.started) {
+    drag.started = true;
+    drag.card.classList.add("is-dragging");
+    document.body.classList.add("is-notification-dragging");
+  }
+  drag.card.style.transform = `translate3d(0, ${deltaY}px, 0)`;
+  drag.dropIndex = notificationDropIndex(drag, event.clientY);
+  setNotificationDropMarker(drag, drag.dropIndex);
+}
+
+function finishNotificationDrag(event, { cancelled = false } = {}) {
+  const drag = appState.notificationDrag;
+  if (
+    !drag ||
+    (event.pointerId !== undefined && drag.pointerId !== event.pointerId)
+  ) {
+    return;
+  }
+  const { itemId, dropIndex, started } = drag;
+  drag.handle.releasePointerCapture?.(drag.pointerId);
+  clearNotificationDragState();
+  if (!cancelled && started) {
+    reorderNotificationItem(itemId, dropIndex);
+  } else {
+    focusNotificationDragHandle(itemId);
+  }
+}
+
+function createNotificationItem(type) {
+  if (!notificationTypeDefinitions[type]) {
+    return null;
+  }
+  const item = {
+    id: nextNotificationItemId(type),
+    type,
+    enabled: false,
+    values: {},
+    meta: {},
+  };
+  appState.notificationItems.push(item);
+  renderNotificationItems(appState.notificationItems);
+  return item;
+}
+
+function notificationEditorMarkup(item, displayLabel) {
+  const definition = notificationTypeDefinitions[item.type];
+  const status = notificationItemStatus(item);
+  const toggleId = `notification-editor-enabled-${item.id}`;
+  const nameId = `notification-editor-name-${item.id}`;
+  const fields = definition.fields
+    .map((field) => {
+      const inputId = `notification-field-${item.id}-${field.key}`;
+      const helpId = `${inputId}-help`;
+      return notificationItemFieldMarkup(
+        item,
+        field,
+        inputId,
+        helpId,
+        `${inputId}-error`,
+      );
+    })
+    .join("");
+  return `
+    <div class="notification-subview-bar">
+      <button
+        class="notification-subview-back"
+        type="button"
+        data-notification-back
+      >
+        ${icon("arrow-left")}
+        <span>返回通知设置</span>
+      </button>
+      <p>编辑通知渠道</p>
+    </div>
+    <section
+      class="notification-channel-editor__panel${item.enabled ? " is-enabled" : ""}"
+      data-notification-id="${item.id}"
+      data-notification-type="${item.type}"
+      aria-label="${escapeHtml(displayLabel)} 配置"
+    >
+      <header class="notification-channel-editor__header">
+        <div class="notification-channel-editor__identity">
+          <span>${escapeHtml(notificationChannelLabels[item.type])}</span>
+          <h3>${escapeHtml(displayLabel)}</h3>
+          <p>${escapeHtml(definition.description)}</p>
+        </div>
+        <div class="notification-channel-editor__state">
+          <span
+            class="notification-item__status ${status.className}"
+            data-notification-status
+          >${status.label}</span>
+          <label class="channel-toggle" for="${toggleId}">
+            <input
+              id="${toggleId}"
+              type="checkbox"
+              data-notification-enabled
+              ${item.enabled ? "checked" : ""}
+            >
+            <span class="channel-toggle__track" aria-hidden="true"></span>
+            <span>启用</span>
+          </label>
+        </div>
+      </header>
+      <div class="notification-channel-editor__body">
+        <div class="field notification-item__field">
+          <label for="${nameId}">名称</label>
+          <p class="field__help" id="${nameId}-help">
+            用于区分多个通知渠道，留空时显示渠道类型。
+          </p>
+          <input
+            id="${nameId}"
+            name="${nameId}"
+            type="text"
+            maxlength="64"
+            autocomplete="off"
+            placeholder="${escapeHtml(notificationChannelLabels[item.type])}"
+            value="${escapeHtml(item.name || "")}"
+            data-notification-name
+            aria-describedby="${nameId}-help"
+          >
+        </div>
+        ${fields}
+      </div>
+    </section>
+  `;
+}
+
+function renderNotificationEditor(item) {
+  const label = notificationItemDisplayLabel(item);
+  elements.notificationEditor.innerHTML = notificationEditorMarkup(
+    item,
+    label,
+  );
+}
+
+function showNotificationOverview({
+  focusId = "",
+  focusTemplateType = "",
+  renderItems = true,
+} = {}) {
+  clearNotificationDragState();
+  appState.activeNotificationId = null;
+  appState.activeNotificationTemplate = null;
+  elements.notificationOverview.hidden = false;
+  elements.notificationEditor.hidden = true;
+  elements.notificationEditor.innerHTML = "";
+  closeNotificationTemplateEditors();
+  elements.notificationTemplateEditors.hidden = true;
+  if (renderItems) {
+    renderNotificationItems(appState.notificationItems);
+  }
+  if (focusId) {
+    elements.notificationItems
+      .querySelector(
+        `[data-notification-id="${focusId}"] [data-edit-notification]`,
+      )
+      ?.focus({ preventScroll: true });
+  } else if (focusTemplateType) {
+    elements.notificationTemplateCards
+      .querySelector(
+        `[data-edit-notification-template="${focusTemplateType}"]`,
+      )
+      ?.focus({ preventScroll: true });
+  }
+}
+
+function openNotificationEditor(id, { focus = true } = {}) {
+  const item = appState.notificationItems.find((entry) => entry.id === id);
+  if (!item) {
+    return;
+  }
+  appState.activeNotificationId = item.id;
+  appState.activeNotificationTemplate = null;
+  elements.notificationOverview.hidden = true;
+  closeNotificationTemplateEditors();
+  elements.notificationTemplateEditors.hidden = true;
+  elements.notificationEditor.hidden = false;
+  renderNotificationEditor(item);
+  if (focus) {
+    elements.notificationEditor
+      .querySelector("[data-notification-name]")
+      ?.focus();
   }
 }
 
@@ -7390,6 +8313,10 @@ function setSettingsTab(
   { focusTab = false, focusFirstField = false } = {},
 ) {
   const nextTab = SETTINGS_TABS.includes(tab) ? tab : "general";
+  const previousTab = appState.settingsTab;
+  if (nextTab === "notification" && previousTab !== "notification") {
+    showNotificationOverview();
+  }
   appState.settingsTab = nextTab;
 
   let selectedButton = null;
@@ -7404,13 +8331,6 @@ function setSettingsTab(
       }
     }
   }
-  selectedButton?.scrollIntoView({
-    block: "nearest",
-    inline: "nearest",
-    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ? "auto"
-      : "smooth",
-  });
   for (const panel of elements.settingsPanels) {
     panel.hidden = panel.dataset.settingsPanel !== nextTab;
   }
@@ -7419,7 +8339,6 @@ function setSettingsTab(
     general: "保存常规设置",
     notification: "保存通知设置",
     account: "保存账号同步",
-    templates: "保存消息模板",
   };
   if (saveLabels[nextTab]) {
     elements.saveSettingsLabel.textContent = saveLabels[nextTab];
@@ -7437,22 +8356,18 @@ function setSettingsTab(
   if (focusFirstField) {
     const firstFields = {
       general: elements.checkCron,
-      notification: elements.episodeNotificationWindow,
+      notification:
+        elements.notificationOverview.hidden
+          ? elements.notificationEditor.querySelector(
+              "[data-notification-name], [data-notification-field]",
+            )
+          : elements.addNotification,
       account: elements.settingsAccountLogin.hidden
         ? elements.accountSyncCron
         : elements.settingsAccountLogin,
-      templates: notificationTemplateField("detailed", "title"),
       security: elements.accessUsername,
       system: elements.checkSystemUpdate,
     };
-    if (nextTab === "templates") {
-      const editor = elements.settingsForm.querySelector(
-        '[data-notification-template="detailed"]',
-      );
-      if (editor instanceof HTMLDetailsElement) {
-        editor.open = true;
-      }
-    }
     const firstField = firstFields[nextTab];
     firstField?.focus();
   }
@@ -7468,6 +8383,104 @@ function notificationTemplateFieldElements(type) {
   return notificationTemplateFieldOrder
     .map((field) => notificationTemplateField(type, field))
     .filter(Boolean);
+}
+
+function notificationTemplateIsCustomized(type) {
+  return notificationTemplateFieldElements(type).some((field) =>
+    String(field.value || "").trim(),
+  );
+}
+
+function notificationTemplateCardMarkup(type) {
+  const customized = notificationTemplateIsCustomized(type);
+  return `
+    <article
+      class="notification-template-card"
+      data-notification-template-card="${type}"
+    >
+      <button
+        class="notification-template-card__open"
+        type="button"
+        data-edit-notification-template="${type}"
+        aria-label="编辑${escapeHtml(notificationTemplateLabels[type])}模板"
+      >
+        <span class="notification-template-card__copy">
+          <strong>${escapeHtml(notificationTemplateLabels[type])}</strong>
+          <span>${escapeHtml(notificationTemplateDescriptions[type])}</span>
+        </span>
+        <span
+          class="template-editor__state${customized ? " is-customized" : ""}"
+          data-template-card-state
+        >${customized ? "已自定义" : "内置默认"}</span>
+        ${icon("chevron-right", "icon notification-template-card__chevron")}
+      </button>
+    </article>
+  `;
+}
+
+function renderNotificationTemplateCards() {
+  elements.notificationTemplateCards.innerHTML = Object.keys(
+    notificationTemplateLabels,
+  )
+    .map(notificationTemplateCardMarkup)
+    .join("");
+}
+
+function initializeNotificationTemplateEditors() {
+  for (const editor of elements.notificationTemplates) {
+    if (editor.parentElement !== elements.notificationTemplateForms) {
+      elements.notificationTemplateForms.append(editor);
+    }
+    editor.hidden = true;
+    editor.open = false;
+    const summary = editor.querySelector("summary");
+    if (summary) {
+      summary.hidden = true;
+    }
+  }
+  elements.notificationTemplateSource.hidden = true;
+  renderNotificationTemplateCards();
+}
+
+function closeNotificationTemplateEditors() {
+  for (const editor of elements.notificationTemplates) {
+    editor.hidden = true;
+    editor.open = false;
+    const summary = editor.querySelector("summary");
+    if (summary) {
+      summary.hidden = true;
+    }
+  }
+}
+
+function openNotificationTemplateEditor(type, { focus = true } = {}) {
+  const editor = elements.notificationTemplates.find(
+    (entry) => entry.dataset.notificationTemplate === type,
+  );
+  if (!editor) {
+    return;
+  }
+  appState.activeNotificationId = null;
+  appState.activeNotificationTemplate = type;
+  elements.notificationOverview.hidden = true;
+  elements.notificationEditor.hidden = true;
+  elements.notificationEditor.innerHTML = "";
+  elements.notificationTemplateEditors.hidden = false;
+  elements.notificationTemplateEditorTitle.textContent =
+    `编辑通知模板 · ${notificationTemplateLabels[type]}`;
+  for (const entry of elements.notificationTemplates) {
+    const selected = entry === editor;
+    entry.hidden = !selected;
+    entry.open = selected;
+    const summary = entry.querySelector("summary");
+    if (summary) {
+      summary.hidden = true;
+    }
+  }
+  refreshNotificationTemplateEditor(editor);
+  if (focus) {
+    notificationTemplateField(type, "title")?.focus();
+  }
 }
 
 function renderNotificationTemplateText(template, variables) {
@@ -7536,8 +8549,22 @@ function refreshNotificationTemplateEditor(editor) {
     updates,
   };
 
-  stateLabel.textContent = customized ? "已自定义" : "内置默认";
-  stateLabel.classList.toggle("is-customized", customized);
+  if (stateLabel) {
+    stateLabel.textContent = customized ? "已自定义" : "内置默认";
+    stateLabel.classList.toggle("is-customized", customized);
+  }
+  const templateCard = elements.notificationTemplateCards.querySelector(
+    `[data-notification-template-card="${type}"]`,
+  );
+  const templateCardState = templateCard?.querySelector(
+    "[data-template-card-state]",
+  );
+  if (templateCardState) {
+    templateCardState.textContent = customized
+      ? "已自定义"
+      : "内置默认";
+    templateCardState.classList.toggle("is-customized", customized);
+  }
   for (const field of fields) {
     const restoreButton = field
       .closest(".template-field")
@@ -7583,9 +8610,9 @@ function setNotificationTemplateValues(templates) {
       field.value = String(template[fieldName] ?? "");
       setFieldError(field, false);
     }
-    editor.open = false;
     refreshNotificationTemplateEditor(editor);
   }
+  renderNotificationTemplateCards();
 }
 
 function validateNotificationTemplateField(type, field, input) {
@@ -7741,7 +8768,6 @@ function focusSettingsError(error) {
       "INVALID_NOTIFICATION_TEMPLATE_LENGTH",
     ].includes(code)
   ) {
-    setSettingsTab("templates");
     const type =
       Object.keys(notificationTemplateLabels).find((key) =>
         error.message.includes(notificationTemplateLabels[key]),
@@ -7750,6 +8776,8 @@ function focusSettingsError(error) {
       notificationTemplateFieldOrder.find((name) =>
         error.message.includes(notificationTemplateFieldLabels[name]),
       ) || "title";
+    setSettingsTab("notification");
+    openNotificationTemplateEditor(type, { focus: false });
     const field = notificationTemplateField(type, fieldName);
     const editor = field?.closest("[data-notification-template]");
     if (editor) {
@@ -7776,36 +8804,34 @@ function focusSettingsError(error) {
     ],
     ["INVALID_DISCOVERY_REMINDER_CRON", elements.discoveryReminderCron],
   ]);
-  const notificationCodes = new Map([
-    ["INVALID_NOTIFICATION_PROXY", elements.proxySettings.url],
-    ["INCOMPLETE_NOTIFICATION_PROXY", elements.proxySettings.url],
-    [
-      "INVALID_WECOM_APP_CORP_ID",
-      elements.notificationChannels.wecomApp.corpId,
-    ],
-    [
-      "INVALID_WECOM_APP_SECRET",
-      elements.notificationChannels.wecomApp.secret,
-    ],
-    [
-      "INVALID_WECOM_APP_AGENT_ID",
-      elements.notificationChannels.wecomApp.agentId,
-    ],
-    [
-      "INVALID_WECOM_APP_TO_USER",
-      elements.notificationChannels.wecomApp.toUser,
-    ],
+  const proxyCodes = new Set([
+    "INVALID_NOTIFICATION_PROXY",
+    "INCOMPLETE_NOTIFICATION_PROXY",
+  ]);
+  const notificationFieldCodes = new Map([
+    ["INVALID_BARK_KEY", ["bark", "key"]],
+    ["INVALID_NTFY_TOPIC", ["ntfy", "topic"]],
+    ["INVALID_NTFY_TOKEN", ["ntfy", "token"]],
+    ["INVALID_TELEGRAM_TOKEN", ["telegram", "botToken"]],
+    ["INVALID_TELEGRAM_CHAT_ID", ["telegram", "chatId"]],
+    ["INVALID_WECOM_KEY", ["wecom", "key"]],
+    ["INVALID_WECOM_APP_CORP_ID", ["wecomApp", "corpId"]],
+    ["INVALID_WECOM_APP_SECRET", ["wecomApp", "secret"]],
+    ["INVALID_WECOM_APP_AGENT_ID", ["wecomApp", "agentId"]],
+    ["INVALID_WECOM_APP_TO_USER", ["wecomApp", "toUser"]],
+    ["INVALID_DINGTALK_ACCESS_TOKEN", ["dingtalk", "accessToken"]],
+    ["INVALID_DINGTALK_SECRET", ["dingtalk", "secret"]],
   ]);
   const accountCodes = new Map([
     ["INVALID_ACCOUNT_SYNC_CRON", elements.accountSyncCron],
   ]);
   const field =
     generalCodes.get(code) ||
-    notificationCodes.get(code) ||
+    (proxyCodes.has(code) ? elements.proxySettings.url : null) ||
     accountCodes.get(code);
   if (generalCodes.has(code)) {
     setSettingsTab("general");
-  } else if (notificationCodes.has(code)) {
+  } else if (proxyCodes.has(code)) {
     setSettingsTab("notification");
   } else if (accountCodes.has(code)) {
     setSettingsTab("account");
@@ -7813,18 +8839,85 @@ function focusSettingsError(error) {
   if (field) {
     setFieldError(field, true, error.message);
     field.focus();
+    return;
+  }
+
+  if (code === "INCOMPLETE_NOTIFICATION_SETTINGS") {
+    setSettingsTab("notification");
+    const item = appState.notificationItems.find(
+      (entry) => entry.enabled && !notificationItemConfigured(entry),
+    );
+    const missingField = notificationTypeDefinitions[item?.type]?.fields.find(
+      (entry) =>
+        entry.required &&
+        !notificationFieldValue(item, entry).trim() &&
+        !notificationFieldConfigured(item, entry),
+    );
+    const input =
+      item && missingField
+        ? notificationItemFieldInput(item.id, missingField.key)
+        : null;
+    if (input) {
+      openNotificationEditor(item.id, { focus: false });
+      setFieldError(input, true, error.message);
+      input.scrollIntoView({
+        block: "center",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+          .matches
+          ? "auto"
+          : "smooth",
+      });
+      input.focus({ preventScroll: true });
+    }
+    return;
+  }
+
+  const notificationTarget = notificationFieldCodes.get(code);
+  if (notificationTarget) {
+    setSettingsTab("notification");
+    const [type, fieldKey] = notificationTarget;
+    const candidates = appState.notificationItems.filter(
+      (item) => item.type === type,
+    );
+    const item =
+      candidates.find((entry) => {
+        const targetField = notificationItemField(entry, fieldKey);
+        return (
+          targetField &&
+          Boolean(notificationFieldValue(entry, targetField).trim())
+        );
+      }) ||
+      candidates.find((entry) => entry.enabled) ||
+      candidates[0];
+    const input = item
+      ? notificationItemFieldInput(item.id, fieldKey)
+      : null;
+    if (input) {
+      openNotificationEditor(item.id, { focus: false });
+      setFieldError(input, true, error.message);
+      input.scrollIntoView({
+        block: "center",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+          .matches
+          ? "auto"
+          : "smooth",
+      });
+      input.focus({ preventScroll: true });
+    }
+    return;
+  }
+
+  if (code.startsWith("INVALID_NOTIFICATION")) {
+    setSettingsTab("notification");
   }
 }
 
 elements.openSettings.addEventListener("click", () => {
   const settings = appState.dashboard?.settings;
   const notifications = settings?.notifications || {};
+  showNotificationOverview({ renderItems: false });
   setProxySettingsMetadata(notifications.proxy, { resetValues: true });
-  for (const channelKey of notificationChannelOrder) {
-    elements.notificationChannels[channelKey].enabled.checked = Boolean(
-      notifications[channelKey]?.enabled,
-    );
-  }
+  renderNotificationItems(notifications.items);
   elements.checkCron.value = settings?.checkCron || DEFAULT_CHECK_CRON;
   elements.staleCompletionDays.value = String(
     settings?.staleCompletionDays ?? DEFAULT_STALE_COMPLETION_DAYS,
@@ -7841,7 +8934,6 @@ elements.openSettings.addEventListener("click", () => {
     settings?.discoveryReminderCron || DEFAULT_DISCOVERY_REMINDER_CRON;
   elements.accountSyncCron.value =
     settings?.accountSyncCron || DEFAULT_ACCOUNT_SYNC_CRON;
-  setNotificationChannelMetadata(notifications, { resetValues: true });
   setNotificationTemplateValues(settings?.notificationTemplates);
   elements.settingsForm
     .querySelectorAll("input, select, textarea")
@@ -7864,6 +8956,7 @@ elements.openEvents.addEventListener("click", () => {
   openDialog(elements.eventsDialog);
 });
 
+initializeNotificationTemplateEditors();
 renderNotificationTemplateVariableLists();
 
 elements.settingsTabs.forEach((tab, index) => {
@@ -7949,6 +9042,97 @@ for (const editor of elements.notificationTemplates) {
 }
 
 elements.settingsForm.addEventListener("click", (event) => {
+  const backButton = event.target.closest("[data-notification-back]");
+  if (backButton) {
+    showNotificationOverview({
+      focusId: appState.activeNotificationId,
+    });
+    return;
+  }
+
+  const templateBack = event.target.closest(
+    "[data-notification-template-back]",
+  );
+  if (templateBack) {
+    showNotificationOverview({
+      focusTemplateType: appState.activeNotificationTemplate,
+    });
+    return;
+  }
+
+  const editTemplate = event.target.closest(
+    "[data-edit-notification-template]",
+  );
+  if (editTemplate) {
+    openNotificationTemplateEditor(
+      editTemplate.dataset.editNotificationTemplate,
+    );
+    return;
+  }
+
+  const editButton = event.target.closest("[data-edit-notification]");
+  if (editButton) {
+    const card = editButton.closest("[data-notification-id]");
+    if (card) {
+      openNotificationEditor(card.dataset.notificationId);
+    }
+    return;
+  }
+
+  const moveButton = event.target.closest("[data-move-notification]");
+  if (moveButton) {
+    const card = moveButton.closest("[data-notification-id]");
+    const itemId = card?.dataset.notificationId;
+    const direction = moveButton.dataset.moveNotification;
+    const index = appState.notificationItems.findIndex(
+      (item) => item.id === itemId,
+    );
+    if (
+      index < 0 ||
+      !["up", "down"].includes(direction) ||
+      moveButton.disabled
+    ) {
+      return;
+    }
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    if (reorderNotificationItem(itemId, nextIndex, { focus: false })) {
+      const nextButton = elements.notificationItems.querySelector(
+        `[data-notification-id="${itemId}"] [data-move-notification="${direction}"]`,
+      );
+      const fallbackButton = elements.notificationItems.querySelector(
+        `[data-notification-id="${itemId}"] [data-notification-drag-handle]`,
+      );
+      (nextButton?.disabled ? fallbackButton : nextButton)?.focus();
+    }
+    return;
+  }
+
+  const deleteButton = event.target.closest("[data-delete-notification]");
+  if (deleteButton) {
+    const card = deleteButton.closest("[data-notification-id]");
+    const item = appState.notificationItems.find(
+      (entry) => entry.id === card?.dataset.notificationId,
+    );
+    if (!item) {
+      return;
+    }
+    const displayLabel = notificationItemDisplayLabel(item);
+    if (
+      !window.confirm(
+        `确定删除通知渠道“${displayLabel}”吗？保存设置后生效。`,
+      )
+    ) {
+      return;
+    }
+    appState.notificationItems = appState.notificationItems.filter(
+      (entry) => entry.id !== item.id,
+    );
+    renderNotificationItems(appState.notificationItems);
+    setFormFeedback(elements.settingsFeedback, "已删除通知渠道，保存后生效。");
+    elements.addNotification.focus();
+    return;
+  }
+
   const button = event.target.closest("[data-toggle-secret]");
   if (!button) {
     return;
@@ -7984,6 +9168,7 @@ elements.checkSystemUpdate.addEventListener("click", () => {
 });
 
 for (const input of [
+  elements.accessAccount,
   elements.accessUsername,
   elements.accessCurrentPassword,
   elements.accessNewPassword,
@@ -8057,23 +9242,130 @@ for (const input of elements.proxyChannelInputs) {
   });
 }
 
-for (const channelKey of notificationChannelOrder) {
-  const channel = elements.notificationChannels[channelKey];
-  channel.enabled.addEventListener("change", () => {
-    syncNotificationChannel(channel);
-    setFormFeedback(elements.settingsFeedback);
-  });
-  channel.clear.addEventListener("change", () => {
-    if (channel.clear.checked) {
-      channel.enabled.checked = false;
-      channel.config.querySelectorAll("input").forEach((input) => {
-        setFieldError(input, false);
-      });
+elements.addNotification.addEventListener("click", () => {
+  const type = elements.notificationType.value;
+  const item = createNotificationItem(type);
+  if (!item) {
+    return;
+  }
+  setFormFeedback(elements.settingsFeedback);
+  openNotificationEditor(item.id);
+});
+
+elements.settingsForm.addEventListener("input", (event) => {
+  const nameInput = event.target.closest("[data-notification-name]");
+  if (nameInput) {
+    const panel = nameInput.closest("[data-notification-id]");
+    const item = appState.notificationItems.find(
+      (entry) => entry.id === panel?.dataset.notificationId,
+    );
+    if (!item) {
+      return;
     }
-    syncNotificationChannel(channel);
+    item.name = normalizeNotificationNameInput(nameInput);
+    const heading = panel.querySelector(
+      ".notification-channel-editor__identity h3",
+    );
+    if (heading) {
+      heading.textContent = notificationItemDisplayLabel(item);
+    }
     setFormFeedback(elements.settingsFeedback);
-  });
-}
+    return;
+  }
+
+  const input = event.target.closest("[data-notification-field]");
+  if (!input) {
+    return;
+  }
+  const card = input.closest("[data-notification-id]");
+  const item = appState.notificationItems.find(
+    (entry) => entry.id === card?.dataset.notificationId,
+  );
+  const field = item
+    ? notificationItemField(item, input.dataset.notificationField)
+    : null;
+  if (!item || !field) {
+    return;
+  }
+  item.values[field.key] = input.value;
+  input.required =
+    field.required &&
+    !notificationFieldConfigured(item, field) &&
+    !input.value.trim();
+  setFieldError(input, false);
+  syncNotificationItemStatus(item.id);
+  setFormFeedback(elements.settingsFeedback);
+});
+
+elements.settingsForm.addEventListener("change", (event) => {
+  const toggle = event.target.closest("[data-notification-enabled]");
+  if (!toggle) {
+    return;
+  }
+  const card = toggle.closest("[data-notification-id]");
+  const item = appState.notificationItems.find(
+    (entry) => entry.id === card?.dataset.notificationId,
+  );
+  if (!item) {
+    return;
+  }
+  item.enabled = toggle.checked;
+  syncNotificationItemStatus(item.id);
+  setFormFeedback(elements.settingsFeedback);
+});
+
+elements.notificationItems.addEventListener("pointerdown", (event) => {
+  const handle = event.target.closest("[data-notification-drag-handle]");
+  if (!handle) {
+    return;
+  }
+  startNotificationDrag(event, handle);
+});
+
+elements.notificationItems.addEventListener("pointermove", (event) => {
+  moveNotificationDrag(event);
+});
+
+elements.notificationItems.addEventListener("pointerup", (event) => {
+  finishNotificationDrag(event);
+});
+
+elements.notificationItems.addEventListener("pointercancel", (event) => {
+  finishNotificationDrag(event, { cancelled: true });
+});
+
+elements.notificationItems.addEventListener("keydown", (event) => {
+  const handle = event.target.closest("[data-notification-drag-handle]");
+  if (!handle) {
+    return;
+  }
+  const card = handle.closest("[data-notification-id]");
+  const itemId = card?.dataset.notificationId;
+  const index = appState.notificationItems.findIndex(
+    (item) => item.id === itemId,
+  );
+  if (index < 0) {
+    return;
+  }
+  let nextIndex = null;
+  if (event.key === "ArrowUp") {
+    nextIndex = Math.max(0, index - 1);
+  } else if (event.key === "ArrowDown") {
+    nextIndex = Math.min(
+      appState.notificationItems.length - 1,
+      index + 1,
+    );
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = appState.notificationItems.length - 1;
+  }
+  if (nextIndex === null) {
+    return;
+  }
+  event.preventDefault();
+  reorderNotificationItem(itemId, nextIndex);
+});
 
 function generalSettingsPayload() {
   const checkCron = elements.checkCron.value.trim().replace(/\s+/g, " ");
@@ -8156,6 +9448,54 @@ function generalSettingsPayload() {
   };
 }
 
+function notificationItemsPayload() {
+  return appState.notificationItems.map((item) => {
+    const definition = notificationTypeDefinitions[item.type];
+    const payload = {
+      id: item.id,
+      type: item.type,
+      name: String(item.name || "").trim(),
+      enabled: item.enabled,
+    };
+    for (const field of definition.fields) {
+      const value = notificationFieldValue(item, field).trim();
+      const input = notificationItemFieldInput(item.id, field.key);
+      if (
+        !value &&
+        field.required &&
+        !notificationFieldConfigured(item, field)
+      ) {
+        if (item.enabled) {
+          throw settingsValidationError(
+            `启用${notificationChannelLabels[item.type]}前请填写${
+              field.label
+            }。`,
+            input,
+            "INCOMPLETE_NOTIFICATION_SETTINGS",
+          );
+        }
+        continue;
+      }
+      if (!value) {
+        continue;
+      }
+      const validationMessage = field.validate?.(value) || "";
+      if (validationMessage) {
+        throw settingsValidationError(
+          validationMessage,
+          input,
+          "INVALID_NOTIFICATION_SETTINGS",
+        );
+      }
+      payload[field.key] =
+        item.type === "wecomApp" && field.key === "toUser"
+          ? value.split(/[|,，\s]+/).filter(Boolean).join("|")
+          : value;
+    }
+    return payload;
+  });
+}
+
 function notificationSettingsPayload() {
   const proxySettings = elements.proxySettings;
   const proxyClear = proxySettings.clear.checked;
@@ -8212,192 +9552,9 @@ function notificationSettingsPayload() {
     );
   }
 
-  const barkChannel = elements.notificationChannels.bark;
-  const barkKey = barkChannel.key.value.trim();
-  const barkClear = barkChannel.clear.checked;
-  const barkEnabled = barkChannel.enabled.checked && !barkClear;
-  if (barkEnabled && !barkKey && !barkChannel.configured) {
-    throw settingsValidationError(
-      "启用 Bark 前请填写 key。",
-      barkChannel.key,
-    );
-  }
-
-  const ntfyChannel = elements.notificationChannels.ntfy;
-  const ntfyTopic = ntfyChannel.topic.value.trim();
-  const ntfyToken = ntfyChannel.token.value.trim();
-  const ntfyClear = ntfyChannel.clear.checked;
-  const ntfyEnabled = ntfyChannel.enabled.checked && !ntfyClear;
-  if (
-    ntfyEnabled &&
-    !ntfyTopic &&
-    !(ntfyChannel.topicConfigured && !ntfyClear)
-  ) {
-    throw settingsValidationError(
-      "启用 ntfy 前请填写 topic。",
-      ntfyChannel.topic,
-    );
-  }
-
-  const telegramChannel = elements.notificationChannels.telegram;
-  const telegramBotToken = telegramChannel.botToken.value.trim();
-  const telegramChatId = telegramChannel.chatId.value.trim();
-  const telegramClear = telegramChannel.clear.checked;
-  const telegramEnabled = telegramChannel.enabled.checked && !telegramClear;
-  if (
-    telegramEnabled &&
-    !telegramBotToken &&
-    !(telegramChannel.tokenConfigured && !telegramClear)
-  ) {
-    throw settingsValidationError(
-      "启用 Telegram 前请填写 Bot token。",
-      telegramChannel.botToken,
-    );
-  }
-  if (
-    telegramEnabled &&
-    !telegramChatId &&
-    !(telegramChannel.chatIdConfigured && !telegramClear)
-  ) {
-    throw settingsValidationError(
-      "启用 Telegram 前请填写 chat ID。",
-      telegramChannel.chatId,
-    );
-  }
-
-  const wecomChannel = elements.notificationChannels.wecom;
-  const wecomKey = wecomChannel.key.value.trim();
-  const wecomClear = wecomChannel.clear.checked;
-  const wecomEnabled = wecomChannel.enabled.checked && !wecomClear;
-  if (wecomEnabled && !wecomKey && !wecomChannel.configured) {
-    throw settingsValidationError(
-      "启用企业微信前请填写机器人 key。",
-      wecomChannel.key,
-    );
-  }
-
-  const wecomAppChannel = elements.notificationChannels.wecomApp;
-  const wecomAppCorpId = wecomAppChannel.corpId.value.trim();
-  const wecomAppSecret = wecomAppChannel.secret.value.trim();
-  const wecomAppAgentId = wecomAppChannel.agentId.value.trim();
-  const wecomAppToUserRaw = wecomAppChannel.toUser.value.trim();
-  const wecomAppClear = wecomAppChannel.clear.checked;
-  const wecomAppEnabled =
-    wecomAppChannel.enabled.checked && !wecomAppClear;
-  const wecomAppMembers = wecomAppToUserRaw
-    .split(/[|,，\s]+/)
-    .filter(Boolean);
-  const wecomAppToUser = wecomAppMembers.join("|");
-  const wecomAppMemberPattern = /^[A-Za-z0-9._-]+$/;
-  if (
-    wecomAppCorpId &&
-    (wecomAppCorpId.length > 64 ||
-      !/^[A-Za-z0-9_-]+$/.test(wecomAppCorpId))
-  ) {
-    throw settingsValidationError(
-      "企业微信应用的企业 ID 格式不正确。",
-      wecomAppChannel.corpId,
-    );
-  }
-  if (
-    wecomAppSecret &&
-    (wecomAppSecret.length > 256 ||
-      !/^[A-Za-z0-9._~+/=-]+$/.test(wecomAppSecret))
-  ) {
-    throw settingsValidationError(
-      "企业微信应用的 Secret 格式不正确。",
-      wecomAppChannel.secret,
-    );
-  }
-  const wecomAppAgentIdNumber = Number(wecomAppAgentId);
-  if (
-    wecomAppAgentId &&
-    (!/^\d+$/.test(wecomAppAgentId) ||
-      !Number.isInteger(wecomAppAgentIdNumber) ||
-      wecomAppAgentIdNumber < 1 ||
-      wecomAppAgentIdNumber > 2_147_483_647)
-  ) {
-    throw settingsValidationError(
-      "企业微信应用的 AgentId 必须是正整数。",
-      wecomAppChannel.agentId,
-    );
-  }
-  if (
-    wecomAppToUserRaw &&
-    (!wecomAppMembers.length ||
-      wecomAppMembers.length > 100 ||
-      (wecomAppMembers.includes("@all") && wecomAppMembers.length !== 1) ||
-      wecomAppMembers.some(
-        (member) =>
-          member.length > 64 ||
-          (member !== "@all" && !wecomAppMemberPattern.test(member)),
-      ) ||
-      wecomAppToUser.length > 1024)
-  ) {
-    throw settingsValidationError(
-      "企业微信应用接收成员仅支持 @all，或使用 | 分隔的 UserID。",
-      wecomAppChannel.toUser,
-    );
-  }
-  if (
-    wecomAppEnabled &&
-    !wecomAppCorpId &&
-    !(wecomAppChannel.corpIdConfigured && !wecomAppClear)
-  ) {
-    throw settingsValidationError(
-      "启用企业微信应用前请填写企业 ID。",
-      wecomAppChannel.corpId,
-    );
-  }
-  if (
-    wecomAppEnabled &&
-    !wecomAppSecret &&
-    !(wecomAppChannel.secretConfigured && !wecomAppClear)
-  ) {
-    throw settingsValidationError(
-      "启用企业微信应用前请填写 Secret。",
-      wecomAppChannel.secret,
-    );
-  }
-  if (
-    wecomAppEnabled &&
-    !wecomAppAgentId &&
-    !(wecomAppChannel.agentIdConfigured && !wecomAppClear)
-  ) {
-    throw settingsValidationError(
-      "启用企业微信应用前请填写 AgentId。",
-      wecomAppChannel.agentId,
-    );
-  }
-  if (
-    wecomAppEnabled &&
-    !wecomAppToUser &&
-    !(wecomAppChannel.toUserConfigured && !wecomAppClear)
-  ) {
-    throw settingsValidationError(
-      "启用企业微信应用前请填写接收成员。",
-      wecomAppChannel.toUser,
-    );
-  }
-
-  const dingtalkChannel = elements.notificationChannels.dingtalk;
-  const dingtalkAccessToken = dingtalkChannel.accessToken.value.trim();
-  const dingtalkSecret = dingtalkChannel.secret.value.trim();
-  const dingtalkClear = dingtalkChannel.clear.checked;
-  const dingtalkEnabled = dingtalkChannel.enabled.checked && !dingtalkClear;
-  if (
-    dingtalkEnabled &&
-    !dingtalkAccessToken &&
-    !(dingtalkChannel.accessTokenConfigured && !dingtalkClear)
-  ) {
-    throw settingsValidationError(
-      "启用钉钉前请填写机器人 access token。",
-      dingtalkChannel.accessToken,
-    );
-  }
-
   return {
     notifications: {
+      items: notificationItemsPayload(),
       proxy: proxyClear
         ? { clear: true }
         : {
@@ -8405,45 +9562,8 @@ function notificationSettingsPayload() {
             ...(proxyUrl ? { url: proxyUrl } : {}),
             channels: proxyChannels,
           },
-      bark: {
-        enabled: barkEnabled,
-        clear: barkClear,
-        ...(barkKey ? { key: barkKey } : {}),
-      },
-      ntfy: {
-        enabled: ntfyEnabled,
-        clear: ntfyClear,
-        ...(ntfyTopic ? { topic: ntfyTopic } : {}),
-        ...(ntfyToken ? { token: ntfyToken } : {}),
-      },
-      telegram: {
-        enabled: telegramEnabled,
-        clear: telegramClear,
-        ...(telegramBotToken ? { botToken: telegramBotToken } : {}),
-        ...(telegramChatId ? { chatId: telegramChatId } : {}),
-      },
-      wecom: {
-        enabled: wecomEnabled,
-        clear: wecomClear,
-        ...(wecomKey ? { key: wecomKey } : {}),
-      },
-      wecomApp: {
-        enabled: wecomAppEnabled,
-        clear: wecomAppClear,
-        ...(wecomAppCorpId ? { corpId: wecomAppCorpId } : {}),
-        ...(wecomAppSecret ? { secret: wecomAppSecret } : {}),
-        ...(wecomAppAgentId ? { agentId: wecomAppAgentId } : {}),
-        ...(wecomAppToUser ? { toUser: wecomAppToUser } : {}),
-      },
-      dingtalk: {
-        enabled: dingtalkEnabled,
-        clear: dingtalkClear,
-        ...(dingtalkAccessToken
-          ? { accessToken: dingtalkAccessToken }
-          : {}),
-        ...(dingtalkSecret ? { secret: dingtalkSecret } : {}),
-      },
     },
+    notificationTemplates: notificationTemplatesPayload(),
   };
 }
 
@@ -8467,8 +9587,6 @@ function settingsPayload() {
       return notificationSettingsPayload();
     case "account":
       return accountSettingsPayload();
-    case "templates":
-      return { notificationTemplates: notificationTemplatesPayload() };
     default:
       return generalSettingsPayload();
   }
@@ -8525,17 +9643,13 @@ async function saveSettings({ closeAfter = true } = {}) {
         savedSettings.notifications?.proxy,
         { resetValues: true },
       );
-      setNotificationChannelMetadata(
-        savedSettings.notifications,
-        { resetValues: true },
+      renderNotificationItems(savedSettings.notifications?.items);
+      setNotificationTemplateValues(
+        savedSettings.notificationTemplates,
       );
     } else if (savedTab === "account") {
       elements.accountSyncCron.value =
         savedSettings.accountSyncCron || DEFAULT_ACCOUNT_SYNC_CRON;
-    } else if (savedTab === "templates") {
-      setNotificationTemplateValues(
-        savedSettings.notificationTemplates,
-      );
     }
     if (appState.dashboard) {
       appState.dashboard.settings = {
