@@ -1,7 +1,7 @@
 # 熊猫 · 短剧助手
 
 <p align="center">
-  <b>简体中文</b> · <a href="#快速开始">快速开始</a> · <a href="#文档导航">文档导航</a> · <a href="https://github.com/Pandazznb/panda-drama-assistant/releases/latest">更新日志</a>
+  <b>简体中文</b> · <a href="#界面预览">界面预览</a> · <a href="#快速开始">快速开始</a> · <a href="#文档导航">文档导航</a> · <a href="https://github.com/Pandazznb/panda-drama-assistant/releases/latest">更新日志</a>
 </p>
 
 <p align="center">
@@ -29,6 +29,72 @@
   <a href="https://hub.docker.com/r/pandazzz/panda-drama-assistant"><img alt="Docker Hub" src="https://img.shields.io/badge/Docker%20Hub-pandazzz-2496ed?style=for-the-badge&amp;logo=docker&amp;logoColor=white&amp;labelColor=18181b"></a>&nbsp;
   <a href="https://github.com/Pandazznb/panda-drama-assistant/releases"><img alt="查看更新" src="https://img.shields.io/badge/GitHub-%E6%9F%A5%E7%9C%8B%E6%9B%B4%E6%96%B0-24292f?style=for-the-badge&amp;logo=github&amp;logoColor=white&amp;labelColor=18181b"></a>
 </p>
+
+## 界面预览
+
+<table>
+  <thead>
+    <tr>
+      <th width="12%">页面</th>
+      <th width="63%">PC 端</th>
+      <th width="25%">移动端</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>我的追更</strong></td>
+      <td>
+        <a href="docs/screenshots/watchlist-desktop.webp">
+          <img src="docs/screenshots/watchlist-desktop.webp" alt="我的追更页面 PC 端截图" width="100%">
+        </a>
+      </td>
+      <td align="center">
+        <a href="docs/screenshots/watchlist-mobile.webp">
+          <img src="docs/screenshots/watchlist-mobile.webp" alt="我的追更页面移动端截图" width="100%">
+        </a>
+      </td>
+    </tr>
+    <tr>
+      <td><strong>更新日历</strong></td>
+      <td>
+        <a href="docs/screenshots/calendar-desktop.webp">
+          <img src="docs/screenshots/calendar-desktop.webp" alt="更新日历页面 PC 端截图" width="100%">
+        </a>
+      </td>
+      <td align="center">
+        <a href="docs/screenshots/calendar-mobile.webp">
+          <img src="docs/screenshots/calendar-mobile.webp" alt="更新日历页面移动端截图" width="100%">
+        </a>
+      </td>
+    </tr>
+    <tr>
+      <td><strong>榜单</strong></td>
+      <td>
+        <a href="docs/screenshots/rankings-desktop.webp">
+          <img src="docs/screenshots/rankings-desktop.webp" alt="榜单页面 PC 端截图" width="100%">
+        </a>
+      </td>
+      <td align="center">
+        <a href="docs/screenshots/rankings-mobile.webp">
+          <img src="docs/screenshots/rankings-mobile.webp" alt="榜单页面移动端截图" width="100%">
+        </a>
+      </td>
+    </tr>
+    <tr>
+      <td><strong>找剧</strong></td>
+      <td>
+        <a href="docs/screenshots/filters-desktop.webp">
+          <img src="docs/screenshots/filters-desktop.webp" alt="找剧页面 PC 端截图" width="100%">
+        </a>
+      </td>
+      <td align="center">
+        <a href="docs/screenshots/filters-mobile.webp">
+          <img src="docs/screenshots/filters-mobile.webp" alt="找剧页面移动端截图" width="100%">
+        </a>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
 ## 核心能力
 
